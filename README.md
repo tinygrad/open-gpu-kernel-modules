@@ -52,7 +52,7 @@ Perfect, we now have the VRAM mapped. However, it's not that easy to get P2P. Wh
 [ 3742.865956] NVRM: Xid (PCI:0000:01:00): 31, pid=21804, name=simpleP2P, Ch 00000013, intr 00000000. MMU Fault: ENGINE CE3 HUBCLIENT_CE1 faulted @ 0x7f97_94000000. Fault is of type FAULT_INFO_TYPE_UNSUPPORTED_KIND ACCESS_TYPE_VIRT_WRITE
 ```
 
-Failing with an MMU fault. So you dive into this and find that it's using `GMMU_APERTURE_PEER` as the mapping type. That doesn't seem supported in the 4090. So let's see what types are supported, `GMMU_APERTURE_VIDEO`,`GMMU_APERTURE_SYS_NONCOH`, and `GMMU_APERTURE_SYS_COH`. We don't care about being coherent with the CPU's L2 CPU, but it does have to go out the PCIe bus, so we rewrite `GMMU_APERTURE_PEER` to `GMMU_APERTURE_SYS_NONCOH`. We also no longer set the peer id that was corrupting the page table.
+Failing with an MMU fault. So you dive into this and find that it's using `GMMU_APERTURE_PEER` as the mapping type. That doesn't seem supported in the 4090. So let's see what types are supported, `GMMU_APERTURE_VIDEO`,`GMMU_APERTURE_SYS_NONCOH`, and `GMMU_APERTURE_SYS_COH`. We don't care about being coherent with the CPU's L2 cache, but it does have to go out the PCIe bus, so we rewrite `GMMU_APERTURE_PEER` to `GMMU_APERTURE_SYS_NONCOH`. We also no longer set the peer id that was corrupting the page table.
 
 ```
 cudaMemcpyPeer / cudaMemcpy between GPU0 and GPU1: 24.21GB/s
