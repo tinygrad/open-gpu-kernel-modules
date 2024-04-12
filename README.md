@@ -4,7 +4,7 @@ This is a fork of NVIDIA's driver with P2P support added for 4090's.
 
 `./install.sh` to install if that's all you want.
 
-You may need to uninstall the driver from DKMS. Your system needs large BAR support.
+You may need to uninstall the driver from DKMS. Your system needs large BAR support and IOMMU off.
 
 Not sure all the cache flushes are right, please file issues on here if you find any issues.
 
