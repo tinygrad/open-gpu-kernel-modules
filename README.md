@@ -8,6 +8,8 @@ You may need to uninstall the driver from DKMS. Your system needs large BAR supp
 
 Not sure all the cache flushes are right, please file issues on here if you find any issues.
 
+NOTE: This is not a hack, this is using PCIe according to the spec. With cleanups, this could potentially be upstreamed.
+
 ## How it works
 
 Normally, P2P on NVIDIA cards uses MAILBOXP2P. This is some hardware interface designed to allow GPUs to transfer memory back in the days of small BAR. It is not present or disabled in hardware on the 4090s, and that's why P2P doesn't work. There [was a bug in early versions](https://forums.developer.nvidia.com/t/standard-nvidia-cuda-tests-fail-with-dual-rtx-4090-linux-box/233202) of the driver that reported that it did work, and it was actually sending stuff on the PCIe bus. However, because the mailbox hardware wasn't present, these copies wouldn't go to the right place. You could even crash the system by doing something like `torch.zeros(10000,10000).cuda().to("cuda:1")`
