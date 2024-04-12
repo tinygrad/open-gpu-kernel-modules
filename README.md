@@ -6,7 +6,7 @@ This is a fork of NVIDIA's driver with P2P support added for 4090's.
 
 You may need to uninstall the driver from DKMS. Your system needs large BAR support.
 
-Not 100% all the cache flushes are right, please file issues on here if you find them.
+Not sure all the cache flushes are right, please file issues on here if you find any issues.
 
 ## How it works
 
