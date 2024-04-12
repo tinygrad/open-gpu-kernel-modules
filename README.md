@@ -32,7 +32,7 @@ tiny@tiny14:~$ lspci -s 01:00.0 -v
 
 Notice how BAR1 is size 32G. In H100, they also added support for a PCIe mode that uses the BAR directly instead of the mailboxes, called BAR1P2P. So, what happens if we try to enable that on a 4090?
 
-We do this by bypassing the HAL and calling a bunch of the GH100 methods directly. Methods like `kbusEnableStaticBar1Mapping_GH100`, which maps the entire VRAM into BAR1. This mostly just works, but we had to disable the use of that BAR in the `MapAperture` function for some reason. Shouldn't matter.
+We do this by bypassing the HAL and calling a bunch of the GH100 methods directly. Methods like `kbusEnableStaticBar1Mapping_GH100`, which maps the entire VRAM into BAR1. This mostly just works, but we had to disable the use of that region in the `MapAperture` function for some reason. Shouldn't matter.
 
 ```
 [ 3491.654009] NVRM: kbusEnableStaticBar1Mapping_GH100: Static bar1 mapped offset 0x0 size 0x5e9200000
