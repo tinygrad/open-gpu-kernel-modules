@@ -177,11 +177,11 @@ static int nv_resize_pcie_bars(struct pci_dev *pci_dev) {
     struct pci_host_bridge *host;
 #endif
 
-    if (NVreg_EnableResizableBar == 0)
+    /*if (NVreg_EnableResizableBar == 0)
     {
         nv_printf(NV_DBG_INFO, "NVRM: resizable BAR disabled by regkey, skipping\n");
         return 0;
-    }
+    }*/
 
     // Check if BAR1 has PCIe rebar capabilities
     sizes = pci_rebar_get_possible_sizes(pci_dev, NV_GPU_BAR1);
@@ -397,7 +397,7 @@ nv_init_coherent_link_info
             /* Fail for the baremetal case */
             goto failed;
         }
-        
+
         /*
          * For the virtualization usecase on SHH, the coherent GPU memory
          * PA is exposed as BAR2 to the VM and the "nvidia,gpu-mem-base-pa"
@@ -540,7 +540,7 @@ nv_pci_probe
             goto failed;
         }
 
-        if (pci_dev->dev.bus->iommu_ops == NULL) 
+        if (pci_dev->dev.bus->iommu_ops == NULL)
         {
             nv = NV_STATE_PTR(nvl);
             if (rm_is_iommu_needed_for_sriov(sp, nv))
@@ -1021,7 +1021,7 @@ nv_pci_remove(struct pci_dev *pci_dev)
                 nv_printf(NV_DBG_ERRORS,
                           "NVRM: Failed removal of device %04x:%02x:%02x.%x!\n",
                           NV_PCI_DOMAIN_NUMBER(pci_dev), NV_PCI_BUS_NUMBER(pci_dev),
-                          NV_PCI_SLOT_NUMBER(pci_dev), PCI_FUNC(pci_dev->devfn));  
+                          NV_PCI_SLOT_NUMBER(pci_dev), PCI_FUNC(pci_dev->devfn));
                 WARN_ON(1);
                 goto done;
             }
