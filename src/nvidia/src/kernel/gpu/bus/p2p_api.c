@@ -576,13 +576,13 @@ p2papiConstruct_IMPL
 
         // setup the p2p resources
         NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
-                              kbusCreateP2PMapping_HAL(pLocalGpu, pLocalKernelBus, pRemoteGpu,
+                              kbusCreateP2PMapping_GH100(pLocalGpu, pLocalKernelBus, pRemoteGpu,
                                                        pRemoteKernelBus, &peer1, &peer2,
                                                        pP2PApi->attributes));
         if (bEgmPeer)
         {
             NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
-                                  kbusCreateP2PMapping_HAL(pLocalGpu, pLocalKernelBus, pRemoteGpu,
+                                  kbusCreateP2PMapping_GH100(pLocalGpu, pLocalKernelBus, pRemoteGpu,
                                                            pRemoteKernelBus, &egmPeer1, &egmPeer2,
                                                            pP2PApi->attributes |
                                                            DRF_DEF(_P2PAPI, _ATTRIBUTES, _REMOTE_EGM, _YES)));
@@ -592,13 +592,13 @@ p2papiConstruct_IMPL
             (pCallContext->secInfo.privLevel >= RS_PRIV_LEVEL_KERNEL))
         {
             NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
-                                  kbusGetBar1P2PDmaInfo_HAL(pLocalGpu, pRemoteGpu,
+                                  kbusGetBar1P2PDmaInfo_GH100(pLocalGpu, pRemoteGpu,
                                       pRemoteKernelBus,
                                       &pNv503bAllocParams->l2pBar1P2PDmaInfo.dma_address,
                                       &pNv503bAllocParams->l2pBar1P2PDmaInfo.dma_size));
 
             NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
-                                  kbusGetBar1P2PDmaInfo_HAL(pRemoteGpu, pLocalGpu,
+                                  kbusGetBar1P2PDmaInfo_GH100(pRemoteGpu, pLocalGpu,
                                       pLocalKernelBus, 
                                       &pNv503bAllocParams->p2lBar1P2PDmaInfo.dma_address,
                                       &pNv503bAllocParams->p2lBar1P2PDmaInfo.dma_size));
@@ -734,7 +734,7 @@ p2papiDestruct_IMPL
     {
         // remove any resources associated with this mapping
         NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR,
-                            kbusRemoveP2PMapping_HAL(pLocalGpu, pLocalKernelBus,
+                            kbusRemoveP2PMapping_GH100(pLocalGpu, pLocalKernelBus,
                                                      pRemoteGpu, pRemoteKernelBus,
                                                      pP2PApi->peerId1, pP2PApi->peerId2,
                                                      pP2PApi->attributes), end);
@@ -743,7 +743,7 @@ p2papiDestruct_IMPL
             memmgrIsLocalEgmEnabled(GPU_GET_MEMORY_MANAGER(pLocalGpu)) &&
             memmgrIsLocalEgmEnabled(GPU_GET_MEMORY_MANAGER(pRemoteGpu)))
         {
-            status = kbusRemoveP2PMapping_HAL(pLocalGpu, pLocalKernelBus,
+            status = kbusRemoveP2PMapping_GH100(pLocalGpu, pLocalKernelBus,
                                               pRemoteGpu, pRemoteKernelBus,
                                               pP2PApi->egmPeerId1, pP2PApi->egmPeerId2,
                                               pP2PApi->attributes |
