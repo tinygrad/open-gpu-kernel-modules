@@ -1,4 +1,4 @@
-# NVIDIA Linux Open GPU Kernel Module Source with P2P support
+# NVIDIA Linux Open GPU with P2P support
 
 This is a fork of NVIDIA's driver with P2P support added for 4090's.
 
