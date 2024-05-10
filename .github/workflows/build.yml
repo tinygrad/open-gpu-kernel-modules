@@ -34,4 +34,8 @@ jobs:
         with:
           name: nvidia-kernel-source-550-open-0ubuntu1_amd64.deb
           path: nvidia-kernel-source-550-open-0ubuntu1_amd64.deb
-
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: nvidia-kernel-source-550-open-0ubuntu1_amd64.deb
