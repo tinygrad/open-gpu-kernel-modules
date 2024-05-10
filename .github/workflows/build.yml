@@ -3,6 +3,9 @@ name: Build
 on:
   push:
 
+permissions:
+  contents: write
+
 jobs:
   build-deb:
     runs-on: ubuntu-latest
