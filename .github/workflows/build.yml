@@ -1,0 +1,30 @@
+name: Build
+
+on:
+  push:
+
+jobs:
+  build-deb:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get install -y build-essential dpkg-dev
+      - name: Download source deb
+        run: |
+          branch=$(echo $GITHUB_REF | cut -d'/' -f3)
+          branch=${branch/-p2p/}
+          # download source deb
+          curl -o source.deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/nvidia-kernel-source-550-open_${branch}-0ubuntu1_amd64.deb
+      - name: Extract source deb
+        run: dpkg-deb -x source.deb source-deb
+      - name: Build kernel module
+        run: |
+          make modules -j$(nproc)
+      - name: Replace kernel module
+        run: |
+          branch=$(echo $GITHUB_REF | cut -d'/' -f3)
+          branch=${branch/-p2p/}
+          cp open-gpu-kernel-modules/kernel-open/nvidia/nv-kernel.o_binary repackage/usr/src/nvidia-${branch}/nvidia/nv-kernel.o_binary
+          cp open-gpu-kernel-modules/kernel-open/nvidia-modeset/nv-modeset-kernel.o_binary repackage/usr/src/nvidia-${branch}/nvidia-modeset/nv-modeset-kernel.o_binary
+
