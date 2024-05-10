@@ -39,3 +39,5 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: nvidia-kernel-source-550-open-0ubuntu1_amd64.deb
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
