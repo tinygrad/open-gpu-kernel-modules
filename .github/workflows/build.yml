@@ -25,6 +25,6 @@ jobs:
         run: |
           branch=$(echo $GITHUB_REF | cut -d'/' -f3)
           branch=${branch/-p2p/}
-          cp open-gpu-kernel-modules/kernel-open/nvidia/nv-kernel.o_binary repackage/usr/src/nvidia-${branch}/nvidia/nv-kernel.o_binary
-          cp open-gpu-kernel-modules/kernel-open/nvidia-modeset/nv-modeset-kernel.o_binary repackage/usr/src/nvidia-${branch}/nvidia-modeset/nv-modeset-kernel.o_binary
+          cp kernel-open/nvidia/nv-kernel.o_binary repackage/usr/src/nvidia-${branch}/nvidia/nv-kernel.o_binary
+          cp kernel-open/nvidia-modeset/nv-modeset-kernel.o_binary repackage/usr/src/nvidia-${branch}/nvidia-modeset/nv-modeset-kernel.o_binary
 
