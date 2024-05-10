@@ -17,7 +17,7 @@ jobs:
           # download source deb
           curl -o source.deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/nvidia-kernel-source-550-open_${branch}-0ubuntu1_amd64.deb
       - name: Extract source deb
-        run: dpkg-deb -x source.deb source-deb
+        run: dpkg-deb -R source.deb source-deb
       - name: Build kernel module
         run: |
           make modules -j$(nproc)
