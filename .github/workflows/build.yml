@@ -24,12 +24,17 @@ jobs:
       - name: Build kernel module
         run: |
           make modules -j$(nproc)
+      - name: Replace kernel module source
+        run: |
+          branch=$(echo $GITHUB_REF | cut -d'/' -f3)
+          branch=${branch/-p2p/}
+          cp kernel-open/nvidia/nv-pci.c source-deb/usr/src/nvidia-${branch}/nvidia/nv-pci.c
       - name: Replace kernel module
         run: |
           branch=$(echo $GITHUB_REF | cut -d'/' -f3)
           branch=${branch/-p2p/}
-          cp kernel-open/nvidia/nv-kernel.o_binary source-deb/usr/src/nvidia-${branch}/nvidia/nv-kernel.o_binary
-          cp kernel-open/nvidia-modeset/nv-modeset-kernel.o_binary source-deb/usr/src/nvidia-${branch}/nvidia-modeset/nv-modeset-kernel.o_binary
+          cp src/nvidia/_out/Linux_x86_64/nv-kernel.o source-deb/usr/src/nvidia-${branch}/nvidia/nv-kernel.o_binary
+          cp src/nvidia-modeset/_out/Linux_x86_64/nv-modeset-kernel.o source-deb/usr/src/nvidia-${branch}/nvidia-modeset/nv-modeset-kernel.o_binary
       - name: Repack deb
         run: dpkg-deb -b source-deb nvidia-kernel-source-550-open-0ubuntu1_amd64.deb
       - name: Upload deb
