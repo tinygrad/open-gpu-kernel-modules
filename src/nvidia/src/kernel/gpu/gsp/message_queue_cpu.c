@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2019-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2019-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -256,7 +256,7 @@ GspMsgQueuesInit
 
     memdescSetFlag(pMQCollection->pSharedMemDesc, MEMDESC_FLAGS_KERNEL_MODE, NV_TRUE);
 
-    memdescTagAlloc(nvStatus, NV_FB_ALLOC_RM_INTERNAL_OWNER_UNNAMED_TAG_58, 
+    memdescTagAlloc(nvStatus, NV_FB_ALLOC_RM_INTERNAL_OWNER_UNNAMED_TAG_58,
                     pMQCollection->pSharedMemDesc);
     NV_ASSERT_OK_OR_GOTO(nvStatus, nvStatus, error_ret);
 
@@ -477,24 +477,6 @@ void GspMsgQueuesCleanup(MESSAGE_QUEUE_COLLECTION **ppMQCollection)
 }
 
 /*!
- * Calculate 32-bit checksum
- *
- * This routine assumes that the data is padded out with zeros to the next
- * 8-byte alignment, and it is OK to read past the end to the 8-byte alignment.
- */
-static NV_INLINE NvU32 _checkSum32(void *pData, NvU32 uLen)
-{
-    NvU64 *p        = (NvU64 *)pData;
-    NvU64 *pEnd     = (NvU64 *)((NvUPtr)pData + uLen);
-    NvU64  checkSum = 0;
-
-    while (p < pEnd)
-        checkSum ^= *p++;
-
-    return NvU64_HI32(checkSum) ^ NvU64_LO32(checkSum);
-}
-
-/*!
  * GspMsgQueueSendCommand
  *
  * Move a command record from our staging area to the command queue.
@@ -532,7 +514,7 @@ NV_STATUS GspMsgQueueSendCommand(MESSAGE_QUEUE_INFO *pMQI, OBJGPU *pGpu)
 
     pCQE->seqNum    = pMQI->txSeqNum;
     pCQE->elemCount = GSP_MSG_QUEUE_BYTES_TO_ELEMENTS(uElementSize);
-    pCQE->checkSum  = 0;
+    pCQE->checkSum  = 0; // The checkSum field is included in the checksum calculation, so zero it.
 
     if (gpuIsCCFeatureEnabled(pGpu))
     {
@@ -542,12 +524,12 @@ NV_STATUS GspMsgQueueSendCommand(MESSAGE_QUEUE_INFO *pMQI, OBJGPU *pGpu)
         portMemCopy((NvU8*)pCQE->aadBuffer, sizeof(pCQE->aadBuffer), (NvU8 *)&pCQE->seqNum, sizeof(pCQE->seqNum));
 
         // We need to encrypt the full queue elements to obscure the data.
-        nvStatus = ccslEncrypt(pCC->pRpcCcslCtx,
+        nvStatus = ccslEncryptWithRotationChecks(pCC->pRpcCcslCtx,
                                (pCQE->elemCount * GSP_MSG_QUEUE_ELEMENT_SIZE_MIN) - GSP_MSG_QUEUE_ELEMENT_HDR_SIZE,
-                               pSrc + GSP_MSG_QUEUE_ELEMENT_HDR_SIZE, 
+                               pSrc + GSP_MSG_QUEUE_ELEMENT_HDR_SIZE,
                                (NvU8*)pCQE->aadBuffer,
                                sizeof(pCQE->aadBuffer),
-                               pSrc + GSP_MSG_QUEUE_ELEMENT_HDR_SIZE, 
+                               pSrc + GSP_MSG_QUEUE_ELEMENT_HDR_SIZE,
                                pCQE->authTagBuffer);
 
         if (nvStatus != NV_OK)
@@ -666,7 +648,8 @@ NV_STATUS GspMsgQueueReceiveStatus(MESSAGE_QUEUE_INFO *pMQI, OBJGPU *pGpu)
     NvU32       nRetries;
     NvU32       nMaxRetries  = 3;
     NvU32       nElements    = 1;  // Assume record fits in one queue element for now.
-    NvU32       uElementSize = 0;
+    NvU32       uElementSize;
+    NvU32       checkSum;
     NvU32       seqMismatchDiff = NV_U32_MAX;
     NV_STATUS   nvStatus     = NV_OK;
 
@@ -717,15 +700,23 @@ NV_STATUS GspMsgQueueReceiveStatus(MESSAGE_QUEUE_INFO *pMQI, OBJGPU *pGpu)
         // Retry if checksum fails.
         if (gpuIsCCFeatureEnabled(pGpu))
         {
-            // In Confidential Compute scenario, checksum includes complete element range.
-            if (_checkSum32(pMQI->pCmdQueueElement, (nElements * GSP_MSG_QUEUE_ELEMENT_SIZE_MIN)) != 0)
-            {
-                NV_PRINTF(LEVEL_ERROR, "Bad checksum.\n");
-                nvStatus = NV_ERR_INVALID_DATA;
-                continue;
-            }
+            //
+            // In the Confidential Compute scenario, the actual message length
+            // is inside the encrypted payload, and we can't access it before
+            // decryption, therefore the checksum encompasses the whole element
+            // range. This makes checksum verification significantly slower
+            // because messages are typically much smaller than element size.
+            //
+            checkSum = _checkSum32(pMQI->pCmdQueueElement,
+                                   (nElements * GSP_MSG_QUEUE_ELEMENT_SIZE_MIN));
         } else
-        if (_checkSum32(pMQI->pCmdQueueElement, uElementSize) != 0)
+        {
+            checkSum = _checkSum32(pMQI->pCmdQueueElement,
+                                   (GSP_MSG_QUEUE_ELEMENT_HDR_SIZE +
+                                    pMQI->pCmdQueueElement->rpc.length));
+        }
+
+        if (checkSum != 0)
         {
             NV_PRINTF(LEVEL_ERROR, "Bad checksum.\n");
             nvStatus = NV_ERR_INVALID_DATA;
@@ -781,13 +772,13 @@ NV_STATUS GspMsgQueueReceiveStatus(MESSAGE_QUEUE_INFO *pMQI, OBJGPU *pGpu)
     if (gpuIsCCFeatureEnabled(pGpu))
     {
         ConfidentialCompute *pCC = GPU_GET_CONF_COMPUTE(pGpu);
-        nvStatus = ccslDecrypt(pCC->pRpcCcslCtx,
+        nvStatus = ccslDecryptWithRotationChecks(pCC->pRpcCcslCtx,
                                (nElements * GSP_MSG_QUEUE_ELEMENT_SIZE_MIN) - GSP_MSG_QUEUE_ELEMENT_HDR_SIZE,
-                               ((NvU8*)pMQI->pCmdQueueElement) + GSP_MSG_QUEUE_ELEMENT_HDR_SIZE, 
+                               ((NvU8*)pMQI->pCmdQueueElement) + GSP_MSG_QUEUE_ELEMENT_HDR_SIZE,
                                NULL,
                                (NvU8*)pMQI->pCmdQueueElement->aadBuffer,
                                sizeof(pMQI->pCmdQueueElement->aadBuffer),
-                               ((NvU8*)pMQI->pCmdQueueElement) + GSP_MSG_QUEUE_ELEMENT_HDR_SIZE, 
+                               ((NvU8*)pMQI->pCmdQueueElement) + GSP_MSG_QUEUE_ELEMENT_HDR_SIZE,
                                ((NvU8*)pMQI->pCmdQueueElement->authTagBuffer));
 
         if (nvStatus != NV_OK)

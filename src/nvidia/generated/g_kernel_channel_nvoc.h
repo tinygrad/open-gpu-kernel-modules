@@ -267,11 +267,13 @@ struct KernelChannel {
     NV_STATUS (*__kchannelCtrlCmdStopChannel__)(struct KernelChannel *, NVA06F_CTRL_STOP_CHANNEL_PARAMS *);
     NV_STATUS (*__kchannelCtrlCmdGetKmb__)(struct KernelChannel *, NVC56F_CTRL_CMD_GET_KMB_PARAMS *);
     NV_STATUS (*__kchannelCtrlRotateSecureChannelIv__)(struct KernelChannel *, NVC56F_CTRL_ROTATE_SECURE_CHANNEL_IV_PARAMS *);
+    NV_STATUS (*__kchannelSetEncryptionStatsBuffer__)(struct OBJGPU *, struct KernelChannel *, MEMORY_DESCRIPTOR *, NvBool);
     NV_STATUS (*__kchannelCtrlGetTpcPartitionMode__)(struct KernelChannel *, NV0090_CTRL_TPC_PARTITION_MODE_PARAMS *);
     NV_STATUS (*__kchannelCtrlSetTpcPartitionMode__)(struct KernelChannel *, NV0090_CTRL_TPC_PARTITION_MODE_PARAMS *);
     NV_STATUS (*__kchannelCtrlGetMMUDebugMode__)(struct KernelChannel *, NV0090_CTRL_GET_MMU_DEBUG_MODE_PARAMS *);
     NV_STATUS (*__kchannelCtrlProgramVidmemPromote__)(struct KernelChannel *, NV0090_CTRL_PROGRAM_VIDMEM_PROMOTE_PARAMS *);
     NV_STATUS (*__kchannelRetrieveKmb__)(struct OBJGPU *, struct KernelChannel *, ROTATE_IV_TYPE, NvBool, CC_KMB *);
+    NV_STATUS (*__kchannelSetKeyRotationNotifier__)(struct OBJGPU *, struct KernelChannel *, NvBool);
     NvBool (*__kchannelShareCallback__)(struct KernelChannel *, struct RsClient *, struct RsResourceRef *, RS_SHARE_POLICY *);
     NV_STATUS (*__kchannelGetOrAllocNotifShare__)(struct KernelChannel *, NvHandle, NvHandle, struct NotifShare **);
     NV_STATUS (*__kchannelMapTo__)(struct KernelChannel *, RS_RES_MAP_TO_PARAMS *);
@@ -339,7 +341,11 @@ struct KernelChannel {
     RM_ENGINE_TYPE engineType;
     CC_KMB clientKmb;
     MEMORY_DESCRIPTOR *pEncStatsBufMemDesc;
+    CC_CRYPTOBUNDLE_STATS *pEncStatsBuf;
+    MEMORY_DESCRIPTOR *pKeyRotationNotifierMemDesc;
+    NvNotification *pKeyRotationNotifier;
     NvBool bCCSecureChannel;
+    NvBool bUseScrubKey;
 };
 
 #ifndef __NVOC_CLASS_KernelChannel_TYPEDEF__
@@ -428,12 +434,16 @@ NV_STATUS __nvoc_objCreate_KernelChannel(KernelChannel**, Dynamic*, NvU32, CALL_
 #define kchannelCtrlCmdGetKmb_HAL(pKernelChannel, pGetKmbParams) kchannelCtrlCmdGetKmb_DISPATCH(pKernelChannel, pGetKmbParams)
 #define kchannelCtrlRotateSecureChannelIv(pKernelChannel, pRotateIvParams) kchannelCtrlRotateSecureChannelIv_DISPATCH(pKernelChannel, pRotateIvParams)
 #define kchannelCtrlRotateSecureChannelIv_HAL(pKernelChannel, pRotateIvParams) kchannelCtrlRotateSecureChannelIv_DISPATCH(pKernelChannel, pRotateIvParams)
+#define kchannelSetEncryptionStatsBuffer(pGpu, pKernelChannel, pMemDesc, bSet) kchannelSetEncryptionStatsBuffer_DISPATCH(pGpu, pKernelChannel, pMemDesc, bSet)
+#define kchannelSetEncryptionStatsBuffer_HAL(pGpu, pKernelChannel, pMemDesc, bSet) kchannelSetEncryptionStatsBuffer_DISPATCH(pGpu, pKernelChannel, pMemDesc, bSet)
 #define kchannelCtrlGetTpcPartitionMode(pKernelChannel, pParams) kchannelCtrlGetTpcPartitionMode_DISPATCH(pKernelChannel, pParams)
 #define kchannelCtrlSetTpcPartitionMode(pKernelChannel, pParams) kchannelCtrlSetTpcPartitionMode_DISPATCH(pKernelChannel, pParams)
 #define kchannelCtrlGetMMUDebugMode(pKernelChannel, pParams) kchannelCtrlGetMMUDebugMode_DISPATCH(pKernelChannel, pParams)
 #define kchannelCtrlProgramVidmemPromote(pKernelChannel, pParams) kchannelCtrlProgramVidmemPromote_DISPATCH(pKernelChannel, pParams)
 #define kchannelRetrieveKmb(pGpu, pKernelChannel, rotateOperation, includeSecrets, keyMaterialBundle) kchannelRetrieveKmb_DISPATCH(pGpu, pKernelChannel, rotateOperation, includeSecrets, keyMaterialBundle)
 #define kchannelRetrieveKmb_HAL(pGpu, pKernelChannel, rotateOperation, includeSecrets, keyMaterialBundle) kchannelRetrieveKmb_DISPATCH(pGpu, pKernelChannel, rotateOperation, includeSecrets, keyMaterialBundle)
+#define kchannelSetKeyRotationNotifier(pGpu, pKernelChannel, bSet) kchannelSetKeyRotationNotifier_DISPATCH(pGpu, pKernelChannel, bSet)
+#define kchannelSetKeyRotationNotifier_HAL(pGpu, pKernelChannel, bSet) kchannelSetKeyRotationNotifier_DISPATCH(pGpu, pKernelChannel, bSet)
 #define kchannelShareCallback(pGpuResource, pInvokingClient, pParentRef, pSharePolicy) kchannelShareCallback_DISPATCH(pGpuResource, pInvokingClient, pParentRef, pSharePolicy)
 #define kchannelGetOrAllocNotifShare(pNotifier, hNotifierClient, hNotifierResource, ppNotifShare) kchannelGetOrAllocNotifShare_DISPATCH(pNotifier, hNotifierClient, hNotifierResource, ppNotifShare)
 #define kchannelMapTo(pResource, pParams) kchannelMapTo_DISPATCH(pResource, pParams)
@@ -1128,6 +1138,16 @@ static inline NV_STATUS kchannelCtrlRotateSecureChannelIv_DISPATCH(struct Kernel
     return pKernelChannel->__kchannelCtrlRotateSecureChannelIv__(pKernelChannel, pRotateIvParams);
 }
 
+NV_STATUS kchannelSetEncryptionStatsBuffer_KERNEL(struct OBJGPU *pGpu, struct KernelChannel *pKernelChannel, MEMORY_DESCRIPTOR *pMemDesc, NvBool bSet);
+
+static inline NV_STATUS kchannelSetEncryptionStatsBuffer_56cd7a(struct OBJGPU *pGpu, struct KernelChannel *pKernelChannel, MEMORY_DESCRIPTOR *pMemDesc, NvBool bSet) {
+    return NV_OK;
+}
+
+static inline NV_STATUS kchannelSetEncryptionStatsBuffer_DISPATCH(struct OBJGPU *pGpu, struct KernelChannel *pKernelChannel, MEMORY_DESCRIPTOR *pMemDesc, NvBool bSet) {
+    return pKernelChannel->__kchannelSetEncryptionStatsBuffer__(pGpu, pKernelChannel, pMemDesc, bSet);
+}
+
 static inline NV_STATUS kchannelCtrlGetTpcPartitionMode_a094e1(struct KernelChannel *pKernelChannel, NV0090_CTRL_TPC_PARTITION_MODE_PARAMS *pParams) {
     return kgrctxCtrlHandle(resservGetTlsCallContext(), pKernelChannel->hKernelGraphicsContext);
 }
@@ -1168,6 +1188,16 @@ NV_STATUS kchannelRetrieveKmb_KERNEL(struct OBJGPU *pGpu, struct KernelChannel *
 
 static inline NV_STATUS kchannelRetrieveKmb_DISPATCH(struct OBJGPU *pGpu, struct KernelChannel *pKernelChannel, ROTATE_IV_TYPE rotateOperation, NvBool includeSecrets, CC_KMB *keyMaterialBundle) {
     return pKernelChannel->__kchannelRetrieveKmb__(pGpu, pKernelChannel, rotateOperation, includeSecrets, keyMaterialBundle);
+}
+
+NV_STATUS kchannelSetKeyRotationNotifier_KERNEL(struct OBJGPU *pGpu, struct KernelChannel *pKernelChannel, NvBool bSet);
+
+static inline NV_STATUS kchannelSetKeyRotationNotifier_56cd7a(struct OBJGPU *pGpu, struct KernelChannel *pKernelChannel, NvBool bSet) {
+    return NV_OK;
+}
+
+static inline NV_STATUS kchannelSetKeyRotationNotifier_DISPATCH(struct OBJGPU *pGpu, struct KernelChannel *pKernelChannel, NvBool bSet) {
+    return pKernelChannel->__kchannelSetKeyRotationNotifier__(pGpu, pKernelChannel, bSet);
 }
 
 static inline NvBool kchannelShareCallback_DISPATCH(struct KernelChannel *pGpuResource, struct RsClient *pInvokingClient, struct RsResourceRef *pParentRef, RS_SHARE_POLICY *pSharePolicy) {
@@ -1336,14 +1366,25 @@ static inline NV_STATUS kchannelDeregisterChild(struct KernelChannel *pKernelCha
 #define kchannelDeregisterChild(pKernelChannel, pObject) kchannelDeregisterChild_IMPL(pKernelChannel, pObject)
 #endif //__nvoc_kernel_channel_h_disabled
 
-void kchannelNotifyGeneric_IMPL(struct KernelChannel *pKernelChannel, NvU32 notifyIndex, void *pNotifyParams, NvU32 notifyParamsSize);
+void kchannelNotifyEvent_IMPL(struct KernelChannel *pKernelChannel, NvU32 notifyIndex, NvU32 info32, NvU16 info16, void *pNotifyParams, NvU32 notifyParamsSize);
 
 #ifdef __nvoc_kernel_channel_h_disabled
-static inline void kchannelNotifyGeneric(struct KernelChannel *pKernelChannel, NvU32 notifyIndex, void *pNotifyParams, NvU32 notifyParamsSize) {
+static inline void kchannelNotifyEvent(struct KernelChannel *pKernelChannel, NvU32 notifyIndex, NvU32 info32, NvU16 info16, void *pNotifyParams, NvU32 notifyParamsSize) {
     NV_ASSERT_FAILED_PRECOMP("KernelChannel was disabled!");
 }
 #else //__nvoc_kernel_channel_h_disabled
-#define kchannelNotifyGeneric(pKernelChannel, notifyIndex, pNotifyParams, notifyParamsSize) kchannelNotifyGeneric_IMPL(pKernelChannel, notifyIndex, pNotifyParams, notifyParamsSize)
+#define kchannelNotifyEvent(pKernelChannel, notifyIndex, info32, info16, pNotifyParams, notifyParamsSize) kchannelNotifyEvent_IMPL(pKernelChannel, notifyIndex, info32, info16, pNotifyParams, notifyParamsSize)
+#endif //__nvoc_kernel_channel_h_disabled
+
+NV_STATUS kchannelUpdateNotifierMem_IMPL(struct KernelChannel *pKernelChannel, NvU32 notifyIndex, NvU32 info32, NvU16 info16, NvU32 notifierStatus);
+
+#ifdef __nvoc_kernel_channel_h_disabled
+static inline NV_STATUS kchannelUpdateNotifierMem(struct KernelChannel *pKernelChannel, NvU32 notifyIndex, NvU32 info32, NvU16 info16, NvU32 notifierStatus) {
+    NV_ASSERT_FAILED_PRECOMP("KernelChannel was disabled!");
+    return NV_ERR_NOT_SUPPORTED;
+}
+#else //__nvoc_kernel_channel_h_disabled
+#define kchannelUpdateNotifierMem(pKernelChannel, notifyIndex, info32, info16, notifierStatus) kchannelUpdateNotifierMem_IMPL(pKernelChannel, notifyIndex, info32, info16, notifierStatus)
 #endif //__nvoc_kernel_channel_h_disabled
 
 NvBool kchannelCheckIsUserMode_IMPL(struct KernelChannel *pKernelChannel);
@@ -1522,6 +1563,12 @@ NV_STATUS NVOC_PRIVATE_FUNCTION(kchannelRetrieveKmb)(struct OBJGPU *pGpu, struct
 
 #undef kchannelRetrieveKmb_HAL
 NV_STATUS NVOC_PRIVATE_FUNCTION(kchannelRetrieveKmb_HAL)(struct OBJGPU *pGpu, struct KernelChannel *pKernelChannel, ROTATE_IV_TYPE rotateOperation, NvBool includeSecrets, CC_KMB *keyMaterialBundle);
+
+#undef kchannelSetKeyRotationNotifier
+NV_STATUS NVOC_PRIVATE_FUNCTION(kchannelSetKeyRotationNotifier)(struct OBJGPU *pGpu, struct KernelChannel *pKernelChannel, NvBool bSet);
+
+#undef kchannelSetKeyRotationNotifier_HAL
+NV_STATUS NVOC_PRIVATE_FUNCTION(kchannelSetKeyRotationNotifier_HAL)(struct OBJGPU *pGpu, struct KernelChannel *pKernelChannel, NvBool bSet);
 
 #ifndef __nvoc_kernel_channel_h_disabled
 #undef kchannelRotateSecureChannelIv

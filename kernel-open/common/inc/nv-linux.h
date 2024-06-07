@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2001-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2001-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -1614,6 +1614,10 @@ typedef struct nv_linux_state_s {
     nv_kthread_q_t open_q;
     NvBool is_accepting_opens;
     struct semaphore open_q_lock;
+#if defined(NV_VGPU_KVM_BUILD)
+    wait_queue_head_t wait;
+    NvS32 return_status;
+#endif
 } nv_linux_state_t;
 
 extern nv_linux_state_t *nv_linux_devices;
@@ -1987,31 +1991,6 @@ static inline int nv_set_numa_status(nv_linux_state_t *nvl, int status)
 static inline NvBool nv_platform_use_auto_online(nv_linux_state_t *nvl)
 {
     return nvl->numa_info.use_auto_online;
-}
-
-typedef struct {
-    NvU64 base;
-    NvU64 size;
-    NvU32 nodeId;
-    int ret;
-} remove_numa_memory_info_t;
-
-static void offline_numa_memory_callback
-(
-    void *args
-)
-{
-#ifdef NV_OFFLINE_AND_REMOVE_MEMORY_PRESENT
-    remove_numa_memory_info_t *pNumaInfo = (remove_numa_memory_info_t *)args;
-#ifdef NV_REMOVE_MEMORY_HAS_NID_ARG
-    pNumaInfo->ret = offline_and_remove_memory(pNumaInfo->nodeId,
-                                               pNumaInfo->base,
-                                               pNumaInfo->size);
-#else
-    pNumaInfo->ret = offline_and_remove_memory(pNumaInfo->base,
-                                               pNumaInfo->size);
-#endif
-#endif
 }
 
 typedef enum

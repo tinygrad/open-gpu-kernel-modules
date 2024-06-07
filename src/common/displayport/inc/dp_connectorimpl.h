@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -313,6 +313,7 @@ namespace DisplayPort
         bool        bDisableSSC;
         bool        bEnableFastLT;
         NvU32       maxLinkRateFromRegkey;
+        bool        bFlushTimeslotWhenDirty;
 
         //
         // Latency(ms) to apply between link-train and FEC enable for bug
@@ -348,6 +349,9 @@ namespace DisplayPort
         //
         bool        bPowerDownPhyBeforeD3;
 
+        // Force DSC on sink irrespective of LT status
+        bool        bForceDscOnSink;
+
         //
         // Reset the MSTM_CTRL registers on branch device irrespective of
         // IRQ VECTOR register having stale message. Certain branch devices
@@ -357,6 +361,7 @@ namespace DisplayPort
         // the stale messages from previous discovery.
         //
         bool        bForceClearPendingMsg;
+        bool        bSkipFakeDeviceDpcdAccess;
 
 
         Group *perHeadAttachedGroup[NV_MAX_HEADS];

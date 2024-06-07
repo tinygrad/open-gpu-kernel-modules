@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -166,14 +166,17 @@ void ConnectorImpl::applyRegkeyOverrides(const DP_REGKEY_DATABASE& dpRegkeyDatab
         this->bKeepLinkAliveMST = dpRegkeyDatabase.bOptLinkKeptAliveMst;
         this->bKeepLinkAliveSST = dpRegkeyDatabase.bOptLinkKeptAliveSst;
     }
-    this->bReportDeviceLostBeforeNew    = dpRegkeyDatabase.bReportDeviceLostBeforeNew;
-    this->maxLinkRateFromRegkey         = dpRegkeyDatabase.applyMaxLinkRateOverrides;
-    this->bEnableAudioBeyond48K         = dpRegkeyDatabase.bAudioBeyond48kEnabled;
-    this->bDisableSSC                   = dpRegkeyDatabase.bSscDisabled;
-    this->bEnableFastLT                 = dpRegkeyDatabase.bFastLinkTrainingEnabled;
-    this->bDscMstCapBug3143315          = dpRegkeyDatabase.bDscMstCapBug3143315;
-    this->bPowerDownPhyBeforeD3         = dpRegkeyDatabase.bPowerDownPhyBeforeD3;
-    this->bReassessMaxLink              = dpRegkeyDatabase.bReassessMaxLink;
+    this->bReportDeviceLostBeforeNew     = dpRegkeyDatabase.bReportDeviceLostBeforeNew;
+    this->maxLinkRateFromRegkey          = dpRegkeyDatabase.applyMaxLinkRateOverrides;
+    this->bEnableAudioBeyond48K          = dpRegkeyDatabase.bAudioBeyond48kEnabled;
+    this->bDisableSSC                    = dpRegkeyDatabase.bSscDisabled;
+    this->bEnableFastLT                  = dpRegkeyDatabase.bFastLinkTrainingEnabled;
+    this->bDscMstCapBug3143315           = dpRegkeyDatabase.bDscMstCapBug3143315;
+    this->bPowerDownPhyBeforeD3          = dpRegkeyDatabase.bPowerDownPhyBeforeD3;
+    this->bReassessMaxLink               = dpRegkeyDatabase.bReassessMaxLink;
+    this->bForceDscOnSink                = dpRegkeyDatabase.bForceDscOnSink;
+    this->bSkipFakeDeviceDpcdAccess      = dpRegkeyDatabase.bSkipFakeDeviceDpcdAccess;
+    this->bFlushTimeslotWhenDirty        = dpRegkeyDatabase.bFlushTimeslotWhenDirty;
 }
 
 void ConnectorImpl::setPolicyModesetOrderMitigation(bool enabled)
@@ -477,7 +480,7 @@ create:
     }
     else
     {
-        newDev = new DeviceImpl(hal, this, parent);
+        newDev = new DeviceImpl(hal, this, parent, this->bSkipFakeDeviceDpcdAccess);
     }
 
     if (parent)
@@ -3129,7 +3132,7 @@ bool ConnectorImpl::notifyAttachBegin(Group *                target,       // Gr
 
     // if LT is successful, see if panel supports DSC and if so, set DSC enabled/disabled
     // according to the mode requested.
-    if(bLinkTrainingStatus)
+    if(bLinkTrainingStatus || bForceDscOnSink)
     {
         for (Device * dev = target->enumDevices(0); dev; dev = target->enumDevices(dev))
         {
@@ -4648,16 +4651,37 @@ bool ConnectorImpl::trainLinkOptimized(LinkConfiguration lConfig)
             }
             if (!bLinkTrainingSuccessful)
             {
-                // Try fall back to max link config and if that fails try original assessed link configuration
+                // If optimized link config fails, try max link config with fallback. 
                 if (!train(getMaxLinkConfig(), false))
                 {
+                    //
+                    // Note here that if highest link config fails and a lower  
+                    // link config passes, link training will be returned as 
+                    // failure but activeLinkConfig will be set to that passing config.
+                    // 
                     if (!willLinkSupportModeSST(activeLinkConfig, groupAttached->lastModesetInfo))
                     {
+                        //
+                        // If none of the link configs pass LT or a fall back link config passed LT 
+                        // but cannot support the mode, then we will force the optimized link config
+                        // on the link and mark LT as fail.
+                        //
                         train(lowestSelected, true);
-
-                        // Mark link training as failed since we forced it
                         bLinkTrainingSuccessful = false;
                     }
+                    else
+                    {
+                        //
+                        // If a fallback link config pass LT and can support 
+                        // the mode, mark LT as pass.
+                        //
+                        bLinkTrainingSuccessful = true;
+                    }
+                }
+                else
+                {
+                    // If LT passes at max link config, mark LT as pass.
+                    bLinkTrainingSuccessful = true;
                 }
             }
         }
@@ -5588,7 +5612,8 @@ void ConnectorImpl::beforeDeleteStream(GroupImpl * group, bool forFlushMode)
         }
     }
 
-    if (linkUseMultistream() && group && group->isHeadAttached() && group->timeslot.count)
+    if (linkUseMultistream() && group && group->isHeadAttached() &&
+        (group->timeslot.count || (this->bFlushTimeslotWhenDirty && group->timeslot.hardwareDirty)))
     {
         // Detach all the panels from payload
         for (Device * d = group->enumDevices(0); d; d = group->enumDevices(d))
@@ -6995,7 +7020,7 @@ void ConnectorImpl::createFakeMuxDevice(const NvU8 *buffer, NvU32 bufferSize)
         return;
     }
 
-    DeviceImpl *newDev = new DeviceImpl(hal, this, NULL);
+    DeviceImpl *newDev = new DeviceImpl(hal, this, NULL, this->bSkipFakeDeviceDpcdAccess);
     if (!newDev)
     {
         return;

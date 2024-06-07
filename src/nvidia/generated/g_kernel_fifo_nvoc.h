@@ -41,6 +41,7 @@ extern "C" {
 \***************************************************************************/
 
 #include "kernel/gpu/eng_state.h"
+#include "kernel/gpu/gpu_timeout.h"
 #include "kernel/gpu/gpu_halspec.h"
 #include "kernel/gpu/fifo/channel_descendant.h"
 #include "kernel/gpu/fifo/engine_info.h"
@@ -415,6 +416,8 @@ struct KernelFifo {
     NV_STATUS (*__kfifoGetVChIdForSChId__)(struct OBJGPU *, struct KernelFifo *, NvU32, NvU32, NvU32, NvU32 *);
     NV_STATUS (*__kfifoProgramChIdTable__)(struct OBJGPU *, struct KernelFifo *, CHID_MGR *, NvU32, NvU32, NvU32, struct Device *, NvU32, FIFO_ENGINE_LIST *);
     NV_STATUS (*__kfifoRecoverAllChannels__)(struct OBJGPU *, struct KernelFifo *, NvU32);
+    void (*__kfifoStartChannelHalt__)(struct OBJGPU *, struct KernelFifo *, struct KernelChannel *);
+    void (*__kfifoCompleteChannelHalt__)(struct OBJGPU *, struct KernelFifo *, struct KernelChannel *, RMTIMEOUT *);
     NV_STATUS (*__kfifoGetEnginePbdmaFaultIds__)(struct OBJGPU *, struct KernelFifo *, ENGINE_INFO_TYPE, NvU32, NvU32 **, NvU32 *);
     NvU32 (*__kfifoGetNumPBDMAs__)(struct OBJGPU *, struct KernelFifo *);
     const char *(*__kfifoPrintPbdmaId__)(struct OBJGPU *, struct KernelFifo *, NvU32);
@@ -536,6 +539,10 @@ NV_STATUS __nvoc_objCreate_KernelFifo(KernelFifo**, Dynamic*, NvU32);
 #define kfifoProgramChIdTable_HAL(pGpu, pKernelFifo, pChidMgr, offset, numChannels, gfid, pMigDevice, engineFifoListNumEntries, pEngineFifoList) kfifoProgramChIdTable_DISPATCH(pGpu, pKernelFifo, pChidMgr, offset, numChannels, gfid, pMigDevice, engineFifoListNumEntries, pEngineFifoList)
 #define kfifoRecoverAllChannels(pGpu, pKernelFifo, gfid) kfifoRecoverAllChannels_DISPATCH(pGpu, pKernelFifo, gfid)
 #define kfifoRecoverAllChannels_HAL(pGpu, pKernelFifo, gfid) kfifoRecoverAllChannels_DISPATCH(pGpu, pKernelFifo, gfid)
+#define kfifoStartChannelHalt(pGpu, pKernelFifo, pKernelChannel) kfifoStartChannelHalt_DISPATCH(pGpu, pKernelFifo, pKernelChannel)
+#define kfifoStartChannelHalt_HAL(pGpu, pKernelFifo, pKernelChannel) kfifoStartChannelHalt_DISPATCH(pGpu, pKernelFifo, pKernelChannel)
+#define kfifoCompleteChannelHalt(pGpu, pKernelFifo, pKernelChannel, pTimeout) kfifoCompleteChannelHalt_DISPATCH(pGpu, pKernelFifo, pKernelChannel, pTimeout)
+#define kfifoCompleteChannelHalt_HAL(pGpu, pKernelFifo, pKernelChannel, pTimeout) kfifoCompleteChannelHalt_DISPATCH(pGpu, pKernelFifo, pKernelChannel, pTimeout)
 #define kfifoGetEnginePbdmaFaultIds(pGpu, pKernelFifo, arg0, arg1, arg2, arg3) kfifoGetEnginePbdmaFaultIds_DISPATCH(pGpu, pKernelFifo, arg0, arg1, arg2, arg3)
 #define kfifoGetEnginePbdmaFaultIds_HAL(pGpu, pKernelFifo, arg0, arg1, arg2, arg3) kfifoGetEnginePbdmaFaultIds_DISPATCH(pGpu, pKernelFifo, arg0, arg1, arg2, arg3)
 #define kfifoGetNumPBDMAs(pGpu, pKernelFifo) kfifoGetNumPBDMAs_DISPATCH(pGpu, pKernelFifo)
@@ -1462,6 +1469,26 @@ static inline NV_STATUS kfifoRecoverAllChannels_DISPATCH(struct OBJGPU *pGpu, st
     return pKernelFifo->__kfifoRecoverAllChannels__(pGpu, pKernelFifo, gfid);
 }
 
+void kfifoStartChannelHalt_GA100(struct OBJGPU *pGpu, struct KernelFifo *pKernelFifo, struct KernelChannel *pKernelChannel);
+
+static inline void kfifoStartChannelHalt_b3696a(struct OBJGPU *pGpu, struct KernelFifo *pKernelFifo, struct KernelChannel *pKernelChannel) {
+    return;
+}
+
+static inline void kfifoStartChannelHalt_DISPATCH(struct OBJGPU *pGpu, struct KernelFifo *pKernelFifo, struct KernelChannel *pKernelChannel) {
+    pKernelFifo->__kfifoStartChannelHalt__(pGpu, pKernelFifo, pKernelChannel);
+}
+
+void kfifoCompleteChannelHalt_GA100(struct OBJGPU *pGpu, struct KernelFifo *pKernelFifo, struct KernelChannel *pKernelChannel, RMTIMEOUT *pTimeout);
+
+static inline void kfifoCompleteChannelHalt_b3696a(struct OBJGPU *pGpu, struct KernelFifo *pKernelFifo, struct KernelChannel *pKernelChannel, RMTIMEOUT *pTimeout) {
+    return;
+}
+
+static inline void kfifoCompleteChannelHalt_DISPATCH(struct OBJGPU *pGpu, struct KernelFifo *pKernelFifo, struct KernelChannel *pKernelChannel, RMTIMEOUT *pTimeout) {
+    pKernelFifo->__kfifoCompleteChannelHalt__(pGpu, pKernelFifo, pKernelChannel, pTimeout);
+}
+
 NV_STATUS kfifoGetEnginePbdmaFaultIds_GA100(struct OBJGPU *pGpu, struct KernelFifo *pKernelFifo, ENGINE_INFO_TYPE arg0, NvU32 arg1, NvU32 **arg2, NvU32 *arg3);
 
 static inline NV_STATUS kfifoGetEnginePbdmaFaultIds_5baef9(struct OBJGPU *pGpu, struct KernelFifo *pKernelFifo, ENGINE_INFO_TYPE arg0, NvU32 arg1, NvU32 **arg2, NvU32 *arg3) {
@@ -1847,14 +1874,14 @@ static inline NvU32 kfifoGetRunlistChannelGroupsInUse(struct OBJGPU *pGpu, struc
 #define kfifoGetRunlistChannelGroupsInUse(pGpu, pKernelFifo, runlistId) kfifoGetRunlistChannelGroupsInUse_IMPL(pGpu, pKernelFifo, runlistId)
 #endif //__nvoc_kernel_fifo_h_disabled
 
-void kfifoGetChannelIterator_IMPL(struct OBJGPU *pGpu, struct KernelFifo *pKernelFifo, CHANNEL_ITERATOR *pIt);
+void kfifoGetChannelIterator_IMPL(struct OBJGPU *pGpu, struct KernelFifo *pKernelFifo, CHANNEL_ITERATOR *pIt, NvU32 runlistId);
 
 #ifdef __nvoc_kernel_fifo_h_disabled
-static inline void kfifoGetChannelIterator(struct OBJGPU *pGpu, struct KernelFifo *pKernelFifo, CHANNEL_ITERATOR *pIt) {
+static inline void kfifoGetChannelIterator(struct OBJGPU *pGpu, struct KernelFifo *pKernelFifo, CHANNEL_ITERATOR *pIt, NvU32 runlistId) {
     NV_ASSERT_FAILED_PRECOMP("KernelFifo was disabled!");
 }
 #else //__nvoc_kernel_fifo_h_disabled
-#define kfifoGetChannelIterator(pGpu, pKernelFifo, pIt) kfifoGetChannelIterator_IMPL(pGpu, pKernelFifo, pIt)
+#define kfifoGetChannelIterator(pGpu, pKernelFifo, pIt, runlistId) kfifoGetChannelIterator_IMPL(pGpu, pKernelFifo, pIt, runlistId)
 #endif //__nvoc_kernel_fifo_h_disabled
 
 NV_STATUS kfifoGetNextKernelChannel_IMPL(struct OBJGPU *pGpu, struct KernelFifo *pKernelFifo, CHANNEL_ITERATOR *pIt, struct KernelChannel **ppKernelChannel);

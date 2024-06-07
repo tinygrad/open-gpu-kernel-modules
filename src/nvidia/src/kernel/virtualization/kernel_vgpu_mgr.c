@@ -162,7 +162,7 @@ kvgpumgrIsHeterogeneousVgpuSupported(void)
 }
 
 NV_STATUS
-static _kvgpumgrSetVgpuType(OBJGPU *pGpu, KERNEL_PHYS_GPU_INFO *pPhysGpuInfo, NvU32 vgpuTypeId)
+kvgpumgrSetVgpuType(OBJGPU *pGpu, KERNEL_PHYS_GPU_INFO *pPhysGpuInfo, NvU32 vgpuTypeId)
 {
     NvU32 i;
 
@@ -595,7 +595,7 @@ kvgpumgrAttachGpu(NvU32 gpuPciId)
     pPhysGpuInfo = &(pKernelVgpuMgr->pgpuInfo[index]);
 
     /* Probe call, RmInit is not done yet, so send pGpu as NULL */
-    _kvgpumgrSetVgpuType(NULL, pPhysGpuInfo, NVA081_CTRL_VGPU_CONFIG_INVALID_TYPE);
+    kvgpumgrSetVgpuType(NULL, pPhysGpuInfo, NVA081_CTRL_VGPU_CONFIG_INVALID_TYPE);
     pPhysGpuInfo->numActiveVgpu    = 0;
     pPhysGpuInfo->isAttached       = NV_TRUE;
     pPhysGpuInfo->numCreatedVgpu   = 0;
@@ -621,6 +621,7 @@ kvgpumgrDetachGpu(NvU32 gpuPciId)
     OBJSYS *pSys = SYS_GET_INSTANCE();
     KernelVgpuMgr *pKernelVgpuMgr = SYS_GET_KERNEL_VGPUMGR(pSys);
     KERNEL_PHYS_GPU_INFO *pPhysGpuInfo;
+    REQUEST_VGPU_INFO_NODE *pRequestVgpu = NULL, *pRequestVgpuNext = NULL;
 
     NV_PRINTF(LEVEL_INFO, "Enter function\n");
 
@@ -634,6 +635,25 @@ kvgpumgrDetachGpu(NvU32 gpuPciId)
     pPhysGpuInfo->createdVfMask = 0;
     pPhysGpuInfo->assignedSwizzIdMask = 0;
     pPhysGpuInfo->isAttached = NV_FALSE;
+    pPhysGpuInfo->numCreatedVgpu = 0;
+
+    for (i = 0; i < MAX_VGPU_TYPES_PER_PGPU; i++)
+        pPhysGpuInfo->supportedTypeIds[i] = NVA081_CTRL_VGPU_CONFIG_INVALID_TYPE;
+
+    if (listCount(&(pKernelVgpuMgr->listRequestVgpuHead)) > 0)
+    {
+        for (pRequestVgpu = listHead(&(pKernelVgpuMgr->listRequestVgpuHead));
+             pRequestVgpu != NULL;
+             pRequestVgpu = pRequestVgpuNext)
+        {
+            pRequestVgpuNext = listNext(&(pKernelVgpuMgr->listRequestVgpuHead), pRequestVgpu);
+            if (pRequestVgpu->gpuPciId == gpuPciId)
+            {
+                pKernelVgpuMgr->pHeap->eheapFree(pKernelVgpuMgr->pHeap, pRequestVgpu->vgpuId);
+                listRemove(&(pKernelVgpuMgr->listRequestVgpuHead), pRequestVgpu);
+            }
+        }
+    }
 
     listDestroy(&(pPhysGpuInfo->listHostVgpuDeviceHead));
 
@@ -846,6 +866,7 @@ kvgpumgrGuestRegister(OBJGPU *pGpu,
                       NvU32 vgpuDeviceInstanceId,
                       NvBool bDisableDefaultSmcExecPartRestore,
                       NvU16 placementId,
+                      NvU8 *pVgpuDevName,
                       KERNEL_HOST_VGPU_DEVICE **ppKernelHostVgpuDevice)
 {
     NV_STATUS                rmStatus                   = NV_OK;
@@ -917,9 +938,10 @@ kvgpumgrGuestRegister(OBJGPU *pGpu,
              pRequestVgpu != NULL;
              pRequestVgpu = listNext(&pKernelVgpuMgr->listRequestVgpuHead, pRequestVgpu))
         {
-            if (pRequestVgpu->deviceState == NV_VGPU_DEV_OPENED)
+            if (portMemCmp(pRequestVgpu->mdevUuid, pVgpuDevName, VM_UUID_SIZE) == 0)
                 break;
         }
+
         if (pRequestVgpu == NULL)
         {
             return NV_ERR_OBJECT_NOT_FOUND;
@@ -939,7 +961,7 @@ kvgpumgrGuestRegister(OBJGPU *pGpu,
         if (rmStatus != NV_OK)
             return rmStatus;
 
-        rmStatus = _kvgpumgrSetVgpuType(pGpu, pPhysGpuInfo, vgpuType);
+        rmStatus = kvgpumgrSetVgpuType(pGpu, pPhysGpuInfo, vgpuType);
         if (rmStatus != NV_OK)
             return rmStatus;
     }
@@ -1285,7 +1307,7 @@ done:
 
     if (pPhysGpuInfo->numActiveVgpu == 0 && pPhysGpuInfo->numCreatedVgpu == 0)
     {
-        _kvgpumgrSetVgpuType(pGpu, pPhysGpuInfo, NVA081_CTRL_VGPU_CONFIG_INVALID_TYPE);
+        kvgpumgrSetVgpuType(pGpu, pPhysGpuInfo, NVA081_CTRL_VGPU_CONFIG_INVALID_TYPE);
     }
 
     if (pKernelHostVgpuDevice->pRequestVgpuInfoNode != NULL)
@@ -1396,15 +1418,9 @@ NvU32 kvgpumgrGetPgpuSubdevIdEncoding(OBJGPU *pGpu, NvU8 *pgpuString,
         return NV_U32_MAX;
     }
 
-    switch (chipID)
-    {
-        default:
-            // The encoding of the subdevice ID is its value converted to string
-            bytes = NvU32ToAsciiStr(subID, SUBDEVID_ENCODED_VALUE_SIZE,
+    // The encoding of the subdevice ID is its value converted to string
+    bytes = NvU32ToAsciiStr(subID, SUBDEVID_ENCODED_VALUE_SIZE,
                                     pgpuString, NV_FALSE);
-            break;
-    }
-
     return bytes;
 }
 
@@ -2077,32 +2093,6 @@ kvgpumgrSetVgpuEncoderCapacity(OBJGPU *pGpu, NvU8 *vgpuUuid, NvU32 encoderCapaci
     return NV_OK;
 }
 
-NV_STATUS
-kvgpumgrStart(const NvU8 *pMdevUuid, void *waitQueue, NvS32 *returnStatus,
-              NvU8 *vmName, NvU32 qemuPid)
-{
-    OBJSYS *pSys = SYS_GET_INSTANCE();
-    KernelVgpuMgr *pKernelVgpuMgr = SYS_GET_KERNEL_VGPUMGR(pSys);
-    REQUEST_VGPU_INFO_NODE *pRequestVgpu = NULL;
-
-    for (pRequestVgpu = listHead(&(pKernelVgpuMgr->listRequestVgpuHead));
-         pRequestVgpu != NULL;
-         pRequestVgpu = listNext(&(pKernelVgpuMgr->listRequestVgpuHead), pRequestVgpu))
-    {
-        if (portMemCmp(pMdevUuid, pRequestVgpu->mdevUuid, VGPU_UUID_SIZE) == 0)
-        {
-            pRequestVgpu->waitQueue = waitQueue;
-            pRequestVgpu->returnStatus = returnStatus;
-            pRequestVgpu->vmName = vmName;
-            pRequestVgpu->qemuPid = qemuPid;
-
-            CliAddSystemEvent(NV0000_NOTIFIERS_VM_START, 0);
-            return NV_OK;
-        }
-    }
-    return NV_ERR_OBJECT_NOT_FOUND;
-}
-
 //
 // Add vGPU info received on mdev_create sysfs call to REQUEST_VGPU_INFO_NODE
 // list. REQUEST_VGPU_INFO_NODE is currently used only for vGPU on KVM.
@@ -2235,15 +2225,15 @@ kvgpumgrCreateRequestVgpu(NvU32 gpuPciId, const NvU8 *pMdevUuid,
 
     portMemCopy(pRequestVgpu->mdevUuid, VGPU_UUID_SIZE, pMdevUuid, VGPU_UUID_SIZE);
     pRequestVgpu->gpuPciId = gpuPciId; /* For SRIOV, this is PF's gpuPciId */
-    pRequestVgpu->vgpuId = *vgpuId;
     pRequestVgpu->gpuPciBdf = gpuPciBdf; /* For SRIOV, this is VF's gpuPciBdf */
+    pRequestVgpu->vgpuId = *vgpuId;
 
     if (IS_MIG_IN_USE(pGpu))
     {
         pRequestVgpu->swizzId = swizzId;
     }
 
-    _kvgpumgrSetVgpuType(pGpu, pPhysGpuInfo, vgpuTypeId);
+    kvgpumgrSetVgpuType(pGpu, pPhysGpuInfo, vgpuTypeId);
     pPhysGpuInfo->numCreatedVgpu++;
 
     if (gpuGetDevice(pGpu) != devfn)  /* SRIOV - VF */
@@ -2296,7 +2286,7 @@ kvgpumgrDeleteRequestVgpu(const NvU8 *pMdevUuid, NvU16 vgpuId)
             if (IS_MIG_ENABLED(pGpu))
                 _kvgpumgrClearAssignedSwizzIdMask(pGpu, pRequestVgpu->swizzId);
             else if (pKernelVgpuMgr->pgpuInfo[pgpuIndex].numCreatedVgpu == 0)
-                _kvgpumgrSetVgpuType(pGpu, &pKernelVgpuMgr->pgpuInfo[pgpuIndex], NVA081_CTRL_VGPU_CONFIG_INVALID_TYPE);
+                kvgpumgrSetVgpuType(pGpu, &pKernelVgpuMgr->pgpuInfo[pgpuIndex], NVA081_CTRL_VGPU_CONFIG_INVALID_TYPE);
 
             pKernelVgpuMgr->pHeap->eheapFree(pKernelVgpuMgr->pHeap, vgpuId);
 
@@ -2306,6 +2296,120 @@ kvgpumgrDeleteRequestVgpu(const NvU8 *pMdevUuid, NvU16 vgpuId)
         }
     }
     return NV_ERR_OBJECT_NOT_FOUND;
+}
+
+NV_STATUS kvgpumgrGetAvailableInstances(
+    NvU32     *availInstances,
+    OBJGPU    *pGpu,
+    VGPU_TYPE *vgpuTypeInfo,
+    NvU32      pgpuIndex,
+    NvU8       devfn
+)
+{
+    NV_STATUS rmStatus = NV_OK;
+    OBJSYS *pSys = SYS_GET_INSTANCE();
+    KernelVgpuMgr *pKernelVgpuMgr = SYS_GET_KERNEL_VGPUMGR(pSys);
+    OBJHYPERVISOR *pHypervisor = SYS_GET_HYPERVISOR(pSys);
+
+    *availInstances = 0;
+
+    /* TODO: Needs to have a proper fix this for DriverVM config */
+    if (gpuIsSriovEnabled(pGpu) &&
+        !pHypervisor->getProperty(pHypervisor, PDB_PROP_HYPERVISOR_DRIVERVM_ENABLED))
+    {
+        NvU8 fnId = devfn - pGpu->sriovState.firstVFOffset;
+
+        NV_ASSERT_OR_RETURN(fnId <= pGpu->sriovState.totalVFs, NV_ERR_INVALID_ARGUMENT);
+
+        if (IS_MIG_ENABLED(pGpu))
+        {
+            if (IS_MIG_IN_USE(pGpu))
+            {
+                NvU64 swizzIdInUseMask = 0;
+                NvU32 partitionFlag = PARTITIONID_INVALID;
+                KernelMIGManager *pKernelMIGManager = GPU_GET_KERNEL_MIG_MANAGER(pGpu);
+                NvU32 id;
+
+                swizzIdInUseMask = kmigmgrGetSwizzIdInUseMask(pGpu, pKernelMIGManager);
+
+                if (!vgpuTypeInfo->gpuInstanceSize)
+                {
+                    // Query for a non MIG vgpuType
+                    NV_PRINTF(LEVEL_INFO, "Query for a non MIG vGPU type \n");
+                    rmStatus = NV_OK;
+                    goto exit;
+                }
+
+                rmStatus = kvgpumgrGetPartitionFlag(vgpuTypeInfo->vgpuTypeId,
+                                                    &partitionFlag);
+                if (rmStatus != NV_OK)
+                {
+                    // Query for a non MIG vgpuType
+                    NV_PRINTF(LEVEL_ERROR, "Failed to get partition flags.\n");
+                    goto exit;
+                }
+
+                // Determine valid swizzids not assigned to any vGPU device.
+                FOR_EACH_INDEX_IN_MASK(64, id, swizzIdInUseMask)
+                {
+                    KERNEL_MIG_GPU_INSTANCE *pKernelMIGGpuInstance;
+                    NvU64 mask = 0;
+
+                    rmStatus = kmigmgrGetGPUInstanceInfo(pGpu, pKernelMIGManager,
+                                                         id, &pKernelMIGGpuInstance);
+                    if (rmStatus != NV_OK)
+                    {
+                        // Didn't find requested GPU instance
+                        NV_PRINTF(LEVEL_ERROR,
+                                  "No valid GPU instance with SwizzId - %d found\n", id);
+                        goto exit;
+                    }
+
+                    mask = NVBIT64(id);
+
+                    if (pKernelMIGGpuInstance->partitionFlag == partitionFlag)
+                    {
+                        // Validate that same ID is not already set and VF is available
+                        if (!(mask & pKernelVgpuMgr->pgpuInfo[pgpuIndex].assignedSwizzIdMask) &&
+                            !(pKernelVgpuMgr->pgpuInfo[pgpuIndex].createdVfMask & NVBIT64(fnId)))
+                        {
+                            *availInstances = 1;
+                            break;
+                        }
+                    }
+                }
+                FOR_EACH_INDEX_IN_MASK_END;
+            }
+        }
+        else
+        {
+            if (pKernelVgpuMgr->pgpuInfo[pgpuIndex].numCreatedVgpu < vgpuTypeInfo->maxInstance)
+            {
+                if (vgpuTypeInfo->gpuInstanceSize)
+                {
+                    // Query for a MIG vgpuType
+                    NV_PRINTF(LEVEL_INFO, "Query for a MIG vGPU type\n");
+                    rmStatus = NV_OK;
+                    goto exit;
+                }
+
+                if (!(pKernelVgpuMgr->pgpuInfo[pgpuIndex].createdVfMask & NVBIT64(fnId)))
+                {
+                    if (kvgpumgrCheckVgpuTypeCreatable(pGpu, &pKernelVgpuMgr->pgpuInfo[pgpuIndex],
+                                                       vgpuTypeInfo) == NV_OK)
+                        *availInstances = 1;
+                }
+            }
+        }
+    }
+    else
+    {
+        if (kvgpumgrCheckVgpuTypeCreatable(pGpu, &pKernelVgpuMgr->pgpuInfo[pgpuIndex], vgpuTypeInfo) == NV_OK)
+            *availInstances = vgpuTypeInfo->maxInstance - pKernelVgpuMgr->pgpuInfo[pgpuIndex].numCreatedVgpu;
+    }
+
+exit:
+    return rmStatus;
 }
 
 NV_STATUS
@@ -2604,34 +2708,40 @@ _kvgpumgrSetHeterogeneousResources(OBJGPU *pGpu, KERNEL_PHYS_GPU_INFO *pPgpuInfo
     }
 
     /*
-     * If the next recursive partition is for smaller partition which has GSP heap at
-     * of end of partition, then update vmmuSegMax to reserve one segment at the 
-     * end of smaller partition. Also, init gsp min/max value for the reserved vMMU segment
-     * at the end.
+     * If the next recursive partition is for a left smaller partition which has GSP heap at
+     * of start of partition, then update vmmuSegMin to reserve one segment at the 
+     * start of smaller partition. Also, init gsp min/max value for the reserved vMMU segment
+     * at the start.
      */
-    newVmmuSegMin = vmmuSegMin;
+    newVmmuSegMax = ((vmmuSegMin + vmmuSegMax) / 2);
     if ((isCarveOutGspHeap == NV_TRUE))
     {
         NV_ASSERT((gspHeapOffsetMin == 0));
 
-        newVmmuSegMax = ((vmmuSegMin + vmmuSegMax) / 2) - 1;
-        newGspHeapOffsetMin = newVmmuSegMax * vmmuSegSize;
+        newVmmuSegMin = vmmuSegMin + 1;
+        newGspHeapOffsetMin = vmmuSegMin * vmmuSegSize;
         newGspHeapOffsetMax = newGspHeapOffsetMin + vmmuSegSize;
     }
     else
     {
-        newVmmuSegMax = (vmmuSegMin + vmmuSegMax) / 2;
+        newVmmuSegMin = vmmuSegMin;
         newGspHeapOffsetMin = gspHeapOffsetMin;
         newGspHeapOffsetMax = (gspHeapOffsetMin + gspHeapOffsetMax) / 2;
     }
 
-    /* Recursively call to get placment ID in first half of this partition */
+    /* Recursively call to get placment ID in left half of this partition */
     _kvgpumgrSetHeterogeneousResources(pGpu, pPgpuInfo, placementIdMin,
                              (placementIdMin + placementIdMax) / 2,
                              chidMin, (chidMin + chidMax) / 2, newVmmuSegMin,
                              newVmmuSegMax, newGspHeapOffsetMin, newGspHeapOffsetMax, partitionCount * 2,
                              NV_TRUE);
 
+    /*
+     * If the next recursive partition is for a right smaller partition which has GSP heap at
+     * of end of partition, then update vmmuSegMax to reserve one segment at the 
+     * end of right partition. Also, init gsp min/max value for the reserved vMMU segment
+     * at the end.
+     */
     newVmmuSegMin = (vmmuSegMin + vmmuSegMax) / 2;
     if ((isCarveOutGspHeap == NV_TRUE))
     {
@@ -2646,7 +2756,7 @@ _kvgpumgrSetHeterogeneousResources(OBJGPU *pGpu, KERNEL_PHYS_GPU_INFO *pPgpuInfo
         newGspHeapOffsetMax = gspHeapOffsetMax;
     }
 
-    /* Recursively call to get placment ID in second half of this partition */
+    /* Recursively call to get placment ID in right half of this partition */
     _kvgpumgrSetHeterogeneousResources(pGpu, pPgpuInfo, (placementIdMin + placementIdMax) / 2,
                              placementIdMax, (chidMin + chidMax) / 2,
                              chidMax, newVmmuSegMin, newVmmuSegMax,

@@ -1416,6 +1416,42 @@ compile_test() {
             compile_check_conftest "$CODE" "NV_VFIO_REGISTER_EMULATED_IOMMU_DEV_PRESENT" "" "functions"
         ;;
 
+        bus_type_has_iommu_ops)
+            #
+            # Determine if 'bus_type' structure has a 'iommu_ops' field.
+            #
+            # This field was removed by commit 17de3f5fdd35 (iommu: Retire bus ops)
+            # in v6.8
+            #
+            CODE="
+            #include <linux/device.h>
+
+            int conftest_bus_type_has_iommu_ops(void) {
+                return offsetof(struct bus_type, iommu_ops);
+            }"
+
+            compile_check_conftest "$CODE" "NV_BUS_TYPE_HAS_IOMMU_OPS" "" "types"
+        ;;
+
+        eventfd_signal_has_counter_arg)
+            #
+            # Determine if eventfd_signal() function has an additional 'counter' argument.
+            #
+            # This argument was removed by commit 3652117f8548 (eventfd: simplify
+            # eventfd_signal()) in v6.8
+            #
+            CODE="
+            #include <linux/eventfd.h>
+
+            void conftest_eventfd_signal_has_counter_arg(void) {
+                struct eventfd_ctx *ctx;
+
+                eventfd_signal(ctx, 1);
+            }"
+
+            compile_check_conftest "$CODE" "NV_EVENTFD_SIGNAL_HAS_COUNTER_ARG" "" "types"
+        ;;
+
         drm_available)
             # Determine if the DRM subsystem is usable
             CODE="
@@ -3094,6 +3130,22 @@ compile_test() {
                 set_pin_user_pages_remote_defines "NV_PIN_USER_PAGES_REMOTE_PRESENT"
             fi
 
+        ;;
+
+        foll_longterm_present)
+            #
+            # Determine if FOLL_LONGTERM enum is present or not
+            #
+            # Added by commit 932f4a630a69 ("mm/gup: replace
+            # get_user_pages_longterm() with FOLL_LONGTERM") in
+            # v5.2
+            #
+            CODE="
+            #include <linux/mm.h>
+            int foll_longterm = FOLL_LONGTERM;
+            "
+
+            compile_check_conftest "$CODE" "NV_FOLL_LONGTERM_PRESENT" "" "types"
         ;;
 
         vfio_pin_pages_has_vfio_device_arg)
@@ -5152,11 +5204,15 @@ compile_test() {
             # commit 49a3f51dfeee ("drm/gem: Use struct dma_buf_map in GEM
             # vmap ops and convert GEM backends") in v5.11.
             #
+            # Note that the 'map' argument type is changed from 'struct dma_buf_map'
+            # to 'struct iosys_map' by commit 7938f4218168 ("dma-buf-map: Rename
+            # to iosys-map) in v5.18.
+            #
             CODE="
             #include <drm/drm_gem.h>
             int conftest_drm_gem_object_vmap_has_map_arg(
-                    struct drm_gem_object *obj, struct dma_buf_map *map) {
-                return obj->funcs->vmap(obj, map);
+                    struct drm_gem_object *obj) {
+                return obj->funcs->vmap(obj, NULL);
             }"
 
             compile_check_conftest "$CODE" "NV_DRM_GEM_OBJECT_VMAP_HAS_MAP_ARG" "" "types"
@@ -5196,25 +5252,23 @@ compile_test() {
             compile_check_conftest "$CODE" "NV_PCI_CLASS_MULTIMEDIA_HD_AUDIO_PRESENT" "" "generic"
         ;;
 
-        unsafe_follow_pfn)
+        follow_pfn)
             #
-            # Determine if unsafe_follow_pfn() is present.
+            # Determine if follow_pfn() is present.
             #
-            # unsafe_follow_pfn() was added by commit 69bacee7f9ad
-            # ("mm: Add unsafe_follow_pfn") in v5.13-rc1.
-            #
-            # Note: this commit never made it to the linux kernel, so
-            # unsafe_follow_pfn() never existed.
+            # follow_pfn() was added by commit 3b6748e2dd69
+            # ("mm: introduce follow_pfn()") in v2.6.31-rc1, and removed
+            # by commit 233eb0bf3b94 ("mm: remove follow_pfn")
+            # from linux-next 233eb0bf3b94.
             #
             CODE="
             #include <linux/mm.h>
-            void conftest_unsafe_follow_pfn(void) {
-                unsafe_follow_pfn();
+            void conftest_follow_pfn(void) {
+                follow_pfn();
             }"
 
-            compile_check_conftest "$CODE" "NV_UNSAFE_FOLLOW_PFN_PRESENT" "" "functions"
+            compile_check_conftest "$CODE" "NV_FOLLOW_PFN_PRESENT" "" "functions"
         ;;
-
         drm_plane_atomic_check_has_atomic_state_arg)
             #
             # Determine if drm_plane_helper_funcs::atomic_check takes 'state'

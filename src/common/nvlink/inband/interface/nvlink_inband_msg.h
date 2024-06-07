@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2022-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -80,6 +80,7 @@ typedef struct
 
 #define NVLINK_INBAND_GPU_PROBE_CAPS_SRIOV_ENABLED NVBIT(0)
 #define NVLINK_INBAND_GPU_PROBE_CAPS_PROBE_UPDATE  NVBIT(1)
+#define NVLINK_INBAND_GPU_PROBE_CAPS_EGM_SUPPORT   NVBIT(2)
 
 /* Add more caps as need in the future */
 
@@ -114,6 +115,7 @@ typedef struct
 #define NVLINK_INBAND_FM_CAPS_BW_MODE_HALF       NVBIT64(3)
 #define NVLINK_INBAND_FM_CAPS_BW_MODE_3QUARTER   NVBIT64(4)
 #define NVLINK_INBAND_FM_CAPS_MC_TEAM_SETUP_V2   NVBIT64(5)
+#define NVLINK_INBAND_FM_CAPS_EGM_ENABLED        NVBIT64(6)
 
 #define NVLINK_INBAND_FABRIC_HEALTH_MASK_DEGRADED_BW 1:0
 #define NVLINK_INBAND_FABRIC_HEALTH_MASK_DEGRADED_BW_NOT_SUPPORTED 0
@@ -134,7 +136,8 @@ typedef struct
     NvU32  linkMaskToBeReduced;   /* bit mask of unused NVLink ports for P2P */
     NvU32  cliqueId;              /* Fabric Clique Id */
     NvU32  fabricHealthMask;      /* Mask containing bits indicating various fabric health parameters */
-    NvU8   reserved[20];          /* For future use. Must be initialized to zero */
+    NvU32  gpaAddressEGMHi;       /* GPA Address for EGM. Don't use if EGM support is not present in GFM */
+    NvU8   reserved[16];          /* For future use. Must be initialized to zero */
 } nvlink_inband_gpu_probe_rsp_t;
 
 typedef struct

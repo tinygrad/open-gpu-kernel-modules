@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2023-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -27,12 +27,6 @@
 #include "common_nvswitch.h"
 #include "fsprpc_nvswitch.h"
 #include "ls10/ls10.h"
-
-#include "fsp/fsp_emem_channels.h"
-#include "fsp/nvdm_payload_cmd_response.h"
-#include "fsp/fsp_nvdm_format.h"
-#include "fsp/fsp_mctp_format.h"
-#include "fsp/fsp_tnvl_rpc.h"
 
 #include "nvswitch/ls10/dev_fsp_pri.h"
 
@@ -346,6 +340,7 @@ nvswitch_fsp_process_nvdm_msg_ls10
 
     switch (nvdmType)
     {
+        case NVDM_TYPE_TNVL:
         case NVDM_TYPE_FSP_RESPONSE:
             status = nvswitch_fsp_process_cmd_response(device, pBuffer, size);
             break;
@@ -590,13 +585,16 @@ nvswitch_fsprpc_get_caps_ls10
     TNVL_RPC_CAPS_PAYLOAD payload;
     TNVL_RPC_CAPS_RSP_PAYLOAD responsePayload;
     NvlStatus status;
+    NVSWITCH_TIMEOUT timeout;
 
     payload.subMessageId = TNVL_CAPS_SUBMESSAGE_ID;
     nvswitch_os_memset(&responsePayload, 0, sizeof(TNVL_RPC_CAPS_RSP_PAYLOAD));
 
+    nvswitch_timeout_create(5 * NVSWITCH_INTERVAL_1SEC_IN_NS, &timeout);
+
     status = nvswitch_fsp_send_and_read_message(device,
         (NvU8*) &payload, sizeof(TNVL_RPC_CAPS_PAYLOAD), NVDM_TYPE_CAPS_QUERY,
-        (NvU8*) &responsePayload, sizeof(TNVL_RPC_CAPS_RSP_PAYLOAD));
+        (NvU8*) &responsePayload, sizeof(TNVL_RPC_CAPS_RSP_PAYLOAD), &timeout);
     if (status != NVL_SUCCESS)
     {
         NVSWITCH_PRINT(device, ERROR, "RPC failed for FSP caps query\n");
@@ -606,7 +604,6 @@ nvswitch_fsprpc_get_caps_ls10
     params->responseNvdmType = responsePayload.nvdmType;
     params->commandNvdmType  = responsePayload.cmdResponse.commandNvdmType;
     params->errorCode        = responsePayload.cmdResponse.errorCode;
-    params->pRspPayload      = responsePayload.rspPayload;
 
     return NVL_SUCCESS;
 }

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2012-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2012-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -159,6 +159,7 @@ nvencsessionConstruct_IMPL
         (listCount(&(pGpu->nvencSessionList)) == 1))
     {
         // Register 1Hz timer callback for this GPU.
+        pGpu->bNvEncSessionDataProcessingWorkItemPending = NV_FALSE;
         status = osSchedule1HzCallback(pGpu,
                                        _gpuNvEncSessionDataProcessingCallback,
                                        NULL,
@@ -240,6 +241,7 @@ _gpuNvEncSessionProcessBuffer(POBJGPU pGpu, NvencSession *pNvencSession)
     NvU64 latestFrameEndTS;
     NvU64 processedFrameCount;
     NvU64 timeTakenToEncodeNs;
+    NvS64 timeDiffFrameTS;
     NVENC_SESSION_INFO_V1 *pSessionInfoBuffer;
     NVENC_SESSION_INFO_V1 *pLocalSessionInfoBuffer;
     NVENC_SESSION_INFO_ENTRY_V1 *pSubmissionTSEntry;
@@ -320,9 +322,6 @@ _gpuNvEncSessionProcessBuffer(POBJGPU pGpu, NvencSession *pNvencSession)
             break;
         }
 
-        // Update latest processed frame index.
-        latestFrameIndex = currIndex;
-
         // Validation : Check if submission-start-end frame ids match.
         if ((pSubmissionTSEntry->frameId != pStartTSEntry->frameId) || (pStartTSEntry->frameId != pEndTSEntry->frameId))
         {
@@ -333,6 +332,9 @@ _gpuNvEncSessionProcessBuffer(POBJGPU pGpu, NvencSession *pNvencSession)
         {
             continue;
         }
+
+        // Update latest processed frame index.
+        latestFrameIndex = currIndex;
 
         // Add the difference of end timestamp and submission timestamp to total time taken.
         timeTakenToEncodeNs += (pEndTSEntry->timestamp - pSubmissionTSEntry->timestamp);
@@ -354,11 +356,11 @@ _gpuNvEncSessionProcessBuffer(POBJGPU pGpu, NvencSession *pNvencSession)
         // Find time difference between latest processed frame end TS and last processed frame end TS in last callback.
         // Same is done for findng processed frame count.
         // This would provide a better average FPS value.
-        timeTakenToEncodeNs = latestFrameEndTS - pNvencSession->lastProcessedFrameTS;
-        if (timeTakenToEncodeNs > 0)
+        timeDiffFrameTS = latestFrameEndTS - pNvencSession->lastProcessedFrameTS;
+        if (timeDiffFrameTS > 0)
         {
             processedFrameCount = latestFrameId - pNvencSession->lastProcessedFrameId;
-            pNvencSession->nvencSessionEntry.averageEncodeFps = ((processedFrameCount * 1000 * 1000 * 1000) / timeTakenToEncodeNs);
+            pNvencSession->nvencSessionEntry.averageEncodeFps = ((processedFrameCount * 1000 * 1000 * 1000) / timeDiffFrameTS);
         }
         else
         {
@@ -379,8 +381,7 @@ _gpuNvEncSessionProcessBuffer(POBJGPU pGpu, NvencSession *pNvencSession)
     portMemFree(pLocalSessionInfoBuffer);
 }
 
-static void
-_gpuNvEncSessionDataProcessingCallback(POBJGPU pGpu, void *data)
+static void _gpuNvEncSessionDataProcessing(OBJGPU *pGpu)
 {
     PNVENC_SESSION_LIST_ITEM  pNvencSessionListItem;
     PNVENC_SESSION_LIST_ITEM  pNvencSessionListItemNext;
@@ -413,6 +414,49 @@ _gpuNvEncSessionDataProcessingCallback(POBJGPU pGpu, void *data)
                                   sizeof(NVA0BC_CTRL_NVENC_SW_SESSION_UPDATE_INFO_PARAMS),
                                   status);
             }
+        }
+    }
+}
+
+static void _gpuNvEncSessionDataProcessingWorkItem(NvU32 gpuInstance, void *pArgs)
+{
+    OBJGPU *pGpu;
+
+    pGpu = gpumgrGetGpu(gpuInstance);
+    if (pGpu == NULL)
+    {
+        NV_PRINTF(LEVEL_ERROR, "NVENC Sessions GPU instance is invalid\n");
+        return;
+    }
+
+    _gpuNvEncSessionDataProcessing(pGpu);
+    pGpu->bNvEncSessionDataProcessingWorkItemPending = NV_FALSE;
+}
+
+static void
+_gpuNvEncSessionDataProcessingCallback(POBJGPU pGpu, void *data)
+{
+    NV_STATUS   status;
+
+    if (!pGpu->bNvEncSessionDataProcessingWorkItemPending)
+    {
+        status = osQueueWorkItemWithFlags(pGpu,
+                                          _gpuNvEncSessionDataProcessingWorkItem,
+                                          NULL,
+                                          OS_QUEUE_WORKITEM_FLAGS_LOCK_SEMA
+                                          | OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_DEVICE_RW);
+        if (status != NV_OK)
+        {
+            NV_PRINTF(LEVEL_ERROR,
+                      "NVENC session queuing async callback failed, status=%x\n",
+                      status);
+
+            // Call directly to do NVENC session data processing
+            _gpuNvEncSessionDataProcessing(pGpu);
+        }
+        else
+        {
+            pGpu->bNvEncSessionDataProcessingWorkItemPending = NV_TRUE;
         }
     }
 }
