@@ -1027,7 +1027,7 @@ kbusInitBar1_GM107(OBJGPU *pGpu, KernelBus *pKernelBus, NvU32 gfid)
     //
     NV_ASSERT(pKernelBus->bar1[gfid].apertureLength <= kbusGetPciBarSize(pKernelBus, 1));
 
-    bBar1P2PCapable = kbusIsBar1P2PCapable(pGpu, pKernelBus, gfid);
+    bBar1P2PCapable = kbusIsBar1P2PCapable_GH100(pGpu, pKernelBus, gfid);
 
     //
     // If we need to preserve a console mapping at the start of BAR1, we
@@ -1113,7 +1113,7 @@ kbusInitBar1_GM107(OBJGPU *pGpu, KernelBus *pKernelBus, NvU32 gfid)
     {
         // Enable the static BAR1 mapping for the BAR1 P2P
         NV_ASSERT_OK_OR_GOTO(rmStatus,
-                             kbusEnableStaticBar1Mapping_HAL(pGpu, pKernelBus, gfid),
+                             kbusEnableStaticBar1Mapping_GH100(pGpu, pKernelBus, gfid),
                              kbusInitBar1_failed);
     }
     else
@@ -2926,7 +2926,7 @@ _kbusMapAperture_GM107
     NvU32               swizzId = KMIGMGR_SWIZZID_INVALID;
     NvU32               gfid;
 
-    if (kbusIsStaticBar1Enabled(pGpu, pKernelBus) &&
+    /*if (kbusIsStaticBar1Enabled(pGpu, pKernelBus) &&
         (memdescGetAddressSpace(pMemDesc) == ADDR_FBMEM))
     {
         NV_ASSERT_OK_OR_RETURN(vgpuGetCallingContextGfid(pGpu, &gfid));
@@ -2934,6 +2934,13 @@ _kbusMapAperture_GM107
         return kbusGetStaticFbAperture_HAL(pGpu, pKernelBus, pMemDesc,
                                            offset, pAperOffset,
                                            pLength, gfid);
+    }*/
+
+    // Ensure that the BAR1 VA space is the same across all subdevices
+    if (IsSLIEnabled(pGpu) && ((mapFlags & BUS_MAP_FB_FLAGS_MAP_UNICAST) == 0))
+    {
+        pGpu  = gpumgrGetParentGPU(pGpu);
+        gpumgrSetBcEnabledStatus(pGpu, NV_TRUE);
     }
 
     if (mapFlags & BUS_MAP_FB_FLAGS_MAP_OFFSET_FIXED)
@@ -3040,12 +3047,12 @@ _kbusUnmapAperture_GM107
     NV_STATUS           rmStatus = NV_OK;
     VirtMemAllocator   *pDma = GPU_GET_DMA(pGpu);
 
-    if (kbusIsStaticBar1Enabled(pGpu, pKernelBus) &&
+    /*if (kbusIsStaticBar1Enabled(pGpu, pKernelBus) &&
         (memdescGetAddressSpace(pMemDesc) == ADDR_FBMEM))
     {
         // No op for the static bar1 mode
         return NV_OK;
-    }
+    }*/
 
     rmStatus = dmaFreeMapping_HAL(pGpu, pDma, pVAS, aperOffset, pMemDesc, 0, NULL);
 

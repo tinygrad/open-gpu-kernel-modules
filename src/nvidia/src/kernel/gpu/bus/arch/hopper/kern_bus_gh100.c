@@ -826,7 +826,7 @@ kbusCreateP2PMapping_GH100
 
     if (FLD_TEST_DRF(_P2PAPI, _ATTRIBUTES, _CONNECTION_TYPE, _PCIE_BAR1, attributes))
     {
-        return kbusCreateP2PMappingForBar1P2P_HAL(pGpu0, pKernelBus0, pGpu1, pKernelBus1, attributes);
+        return kbusCreateP2PMappingForBar1P2P_GH100(pGpu0, pKernelBus0, pGpu1, pKernelBus1, attributes);
     }
 
     if (FLD_TEST_DRF(_P2PAPI, _ATTRIBUTES, _CONNECTION_TYPE, _PCIE, attributes))
@@ -877,7 +877,7 @@ kbusRemoveP2PMapping_GH100
 
     if (FLD_TEST_DRF(_P2PAPI, _ATTRIBUTES, _CONNECTION_TYPE, _PCIE_BAR1, attributes))
     {
-        return kbusRemoveP2PMappingForBar1P2P_HAL(pGpu0, pKernelBus0, pGpu1, pKernelBus1, attributes);
+        return kbusRemoveP2PMappingForBar1P2P_GH100(pGpu0, pKernelBus0, pGpu1, pKernelBus1, attributes);
     }
 
     if (FLD_TEST_DRF(_P2PAPI, _ATTRIBUTES, _CONNECTION_TYPE, _PCIE, attributes))
@@ -1670,7 +1670,7 @@ kbusCreateP2PMappingForBar1P2P_GH100
         return NV_ERR_NOT_SUPPORTED;
     }
 
-    if (!kbusIsPcieBar1P2PMappingSupported_HAL(pGpu0, pKernelBus0, pGpu1, pKernelBus1))
+    if (!kbusIsPcieBar1P2PMappingSupported_GH100(pGpu0, pKernelBus0, pGpu1, pKernelBus1))
     {
         return NV_ERR_NOT_SUPPORTED;
     }
@@ -2093,8 +2093,8 @@ kbusEnableStaticBar1Mapping_GH100
     pKernelBus->bar1[gfid].staticBar1.pDmaMemDesc = pDmaMemDesc;
     pKernelBus->bar1[gfid].staticBar1.size = bar1MapSize;
 
-    NV_PRINTF(LEVEL_INFO, "Static bar1 mapped offset 0x%llx size 0x%llx\n",
-                           bar1Offset, bar1MapSize);
+    NV_PRINTF(LEVEL_ERROR, "Static bar1 mapped offset 0x%llx size 0x%llx bar1BusAddr 0x%llx\n",
+                           bar1Offset, bar1MapSize, bar1BusAddr);
 
     return NV_OK;
 

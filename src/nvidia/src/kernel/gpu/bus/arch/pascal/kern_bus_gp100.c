@@ -70,6 +70,11 @@ kbusCreateP2PMapping_GP100
         return kbusCreateP2PMappingForMailbox_HAL(pGpu0, pKernelBus0, pGpu1, pKernelBus1, peer0, peer1, attributes);
     }
 
+    if (FLD_TEST_DRF(_P2PAPI, _ATTRIBUTES, _CONNECTION_TYPE, _PCIE_BAR1, attributes))
+    {
+        return kbusCreateP2PMappingForBar1P2P_GH100(pGpu0, pKernelBus0, pGpu1, pKernelBus1, attributes);
+    }
+
     NV_PRINTF(LEVEL_ERROR, "P2P type %d is not supported\n", DRF_VAL(_P2PAPI, _ATTRIBUTES, _CONNECTION_TYPE, attributes));
 
     return NV_ERR_NOT_SUPPORTED;
