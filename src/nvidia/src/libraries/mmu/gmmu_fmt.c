@@ -124,9 +124,8 @@ gmmuFmtPtePhysAddrFld
     {
         case GMMU_APERTURE_SYS_COH:
         case GMMU_APERTURE_SYS_NONCOH:
-            return &pPte->fldAddrSysmem;
         case GMMU_APERTURE_PEER:
-            return &pPte->fldAddrPeer;
+            return &pPte->fldAddrSysmem;
         case GMMU_APERTURE_VIDEO:
             return &pPte->fldAddrVidmem;
         default:
