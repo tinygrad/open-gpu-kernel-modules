@@ -38,6 +38,7 @@
 #include "nvkms-attributes.h"
 #include "nvkms-dpy-override.h"
 #include "nvkms-framelock.h"
+#include "nvkms-stereo.h"
 #include "nvkms-surface.h"
 #include "nvkms-3dvision.h"
 #include "nvkms-ioctl.h"
@@ -2693,7 +2694,7 @@ static NvBool RegisterSurface(struct NvKmsPerOpen *pOpen,
 
     nvEvoRegisterSurface(pOpenDev->pDevEvo, pOpenDev, pParams,
                          NvHsMapPermissionsReadOnly);
-    return TRUE;
+    return pParams->reply.surfaceHandle != 0;
 }
 
 
@@ -2737,9 +2738,9 @@ static NvBool GrantSurface(struct NvKmsPerOpen *pOpen, void *pParamsVoid)
     }
 
     pSurfaceEvo =
-        nvEvoGetSurfaceFromHandleNoDispHWAccessOk(pOpenDev->pDevEvo,
-                                                  &pOpenDev->surfaceHandles,
-                                                  pParams->request.surfaceHandle);
+        nvEvoGetSurfaceFromHandleNoHWAccess(pOpenDev->pDevEvo,
+                                            &pOpenDev->surfaceHandles,
+                                            pParams->request.surfaceHandle);
     if (pSurfaceEvo == NULL) {
         return FALSE;
     }
@@ -3567,6 +3568,28 @@ static NvBool IsHeadRevoked(const NVDispEvoRec *pDispEvo,
         pPermissions->modeset.disp[pDispEvo->displayOwner].head[apiHead].dpyIdList);
 }
 
+static void DisableStereoPin(struct NvKmsPerOpenDev *pOpenDev,
+                             const struct NvKmsModesetPermissions *pModeset)
+{
+    NVDispEvoPtr pDispEvo;
+    NvU32 dispIndex, apiHead;
+    NvBool stereoEnabled;
+
+    FOR_ALL_EVO_DISPLAYS(pDispEvo, dispIndex, pOpenDev->pDevEvo) {
+        for (apiHead = 0; apiHead < pOpenDev->pDevEvo->numApiHeads; apiHead++) {
+            const NVDpyIdList dpyIdList =
+                pModeset->disp[dispIndex].head[apiHead].dpyIdList;
+            if (!nvDpyIdListIsEmpty(dpyIdList)) {
+                stereoEnabled = nvGetStereo(pDispEvo, apiHead);
+
+                if (stereoEnabled) {
+                    nvSetStereo(pDispEvo, apiHead, FALSE);
+                }
+            }
+        }
+    }
+}
+
 static NvBool RevokePermissions(struct NvKmsPerOpen *pOpen, void *pParamsVoid)
 {
     struct NvKmsRevokePermissionsParams *pParams = pParamsVoid;
@@ -3637,6 +3660,9 @@ static NvBool RevokePermissions(struct NvKmsPerOpen *pOpen, void *pParamsVoid)
          * being able to be leased again.
          */
         if (pParams->request.permissions.type == NV_KMS_PERMISSIONS_TYPE_MODESET) {
+            // Also disable stereo pins if enabled.
+            DisableStereoPin(pOpenDev, &pParams->request.permissions.modeset);
+
             nvShutDownApiHeads(pOpenDev->pDevEvo, pOpenDev, IsHeadRevoked,
                                &pParams->request.permissions,
                                TRUE /* doRasterLock */);
@@ -3661,7 +3687,7 @@ static NvBool RegisterDeferredRequestFifo(struct NvKmsPerOpen *pOpen,
         return FALSE;
     }
 
-    pSurfaceEvo = nvEvoGetSurfaceFromHandleNoDispHWAccessOk(
+    pSurfaceEvo = nvEvoGetSurfaceFromHandleNoHWAccess(
         pOpenDev->pDevEvo,
         &pOpenDev->surfaceHandles,
         pParams->request.surfaceHandle);
@@ -3868,7 +3894,7 @@ static NvBool JoinSwapGroup(
     struct NvKmsJoinSwapGroupParams *pParams = pParamsVoid;
     const struct NvKmsJoinSwapGroupRequestOneMember *pMember =
         pParams->request.member;
-    NvU32 i;
+    NvU32 i, j;
     NvBool anySwapGroupsPending = FALSE;
     NVHsJoinSwapGroupWorkArea *pJoinSwapGroupWorkArea;
 
@@ -3983,6 +4009,28 @@ static NvBool JoinSwapGroup(
             }
 
             if (!PerOpenIsValidForUnicastEvent(pEventOpenFd)) {
+                goto fail;
+            }
+        }
+
+        /*
+         * We checked above that pDeferredRequestFifo is not currently a member
+         * of a SwapGroup, and that pEventOpenFd is currently valid to be used
+         * for a unicast event.  However, if either of those were also
+         * specified for an earlier member for this request, then that won't
+         * hold: by the time *this* member is processed, the
+         * pDeferredRequestFifo would already be a member of a swapgroup, or
+         * the pEventOpenFd would already be in use.
+         *
+         * Validate that that doesn't happen.
+         */
+        for (j = 0; j < i; j++) {
+            if (pJoinSwapGroupWorkArea[j].pDeferredRequestFifo ==
+                                          pDeferredRequestFifo) {
+                goto fail;
+            }
+            if (pJoinSwapGroupWorkArea[j].pEventOpenFd ==
+                                          pEventOpenFd) {
                 goto fail;
             }
         }
@@ -4726,7 +4774,6 @@ static NvBool EnableVblankSemControl(
     NVSurfaceEvoPtr pSurfaceEvo;
     NVVblankSemControl *pVblankSemControl;
     NvKmsVblankSemControlHandle vblankSemControlHandle;
-    NvU32 hwHead;
 
     if (!GetPerOpenDevAndDisp(pOpen,
                               pParams->request.deviceHandle,
@@ -4740,7 +4787,7 @@ static NvBool EnableVblankSemControl(
     pDispEvo = pOpenDisp->pDispEvo;
 
     pSurfaceEvo =
-        nvEvoGetSurfaceFromHandleNoDispHWAccessOk(
+        nvEvoGetSurfaceFromHandleNoHWAccess(
             pDevEvo,
             &pOpenDev->surfaceHandles,
             pParams->request.surfaceHandle);
@@ -4749,16 +4796,10 @@ static NvBool EnableVblankSemControl(
         return FALSE;
     }
 
-    hwHead = nvGetPrimaryHwHead(pDispEvo, pParams->request.head);
-
-    if (hwHead == NV_INVALID_HEAD) {
-        return FALSE;
-    }
-
     pVblankSemControl = nvEvoEnableVblankSemControl(
                             pDevEvo,
                             pDispEvo,
-                            hwHead,
+                            pParams->request.headMask,
                             pSurfaceEvo,
                             pParams->request.surfaceOffset);
 
@@ -4856,6 +4897,24 @@ static NvBool AccelVblankSemControls(
                 pDevEvo,
                 pDispEvo->displayOwner,
                 hwHeadMask);
+}
+
+static NvBool VrrSignalSemaphore(
+    struct NvKmsPerOpen *pOpen,
+    void *pParamsVoid)
+{
+    struct NvKmsPerOpenDev *pOpenDev;
+
+    const struct NvKmsVrrSignalSemaphoreParams *pParams = pParamsVoid;
+    NvS32 vrrSemaphoreIndex = pParams->request.vrrSemaphoreIndex;
+
+    pOpenDev = GetPerOpenDev(pOpen, pParams->request.deviceHandle);
+    if (pOpenDev == NULL) {
+        return FALSE;
+    }
+
+    nvVrrSignalSemaphore(pOpenDev->pDevEvo, vrrSemaphoreIndex);
+    return TRUE;
 }
 
 /*!
@@ -4983,6 +5042,7 @@ NvBool nvKmsIoctl(
         ENTRY(NVKMS_IOCTL_ENABLE_VBLANK_SEM_CONTROL, EnableVblankSemControl),
         ENTRY(NVKMS_IOCTL_DISABLE_VBLANK_SEM_CONTROL, DisableVblankSemControl),
         ENTRY(NVKMS_IOCTL_ACCEL_VBLANK_SEM_CONTROLS, AccelVblankSemControls),
+        ENTRY(NVKMS_IOCTL_VRR_SIGNAL_SEMAPHORE, VrrSignalSemaphore),
     };
 
     struct NvKmsPerOpen *pOpen = pOpenVoid;

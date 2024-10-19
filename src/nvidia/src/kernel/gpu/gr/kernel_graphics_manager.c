@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -46,6 +46,7 @@
 #include "class/clc7c0.h"
 #include "class/clc9c0.h"
 #include "class/clcbc0.h"
+#include "class/clcdc0.h"
 // GFX
 #include "class/clb097.h"
 #include "class/clb197.h"
@@ -57,11 +58,13 @@
 #include "class/clc797.h"
 #include "class/clc997.h"
 #include "class/clcb97.h"
+#include "class/clcd97.h"
 // TWOD
 #include "class/cl902d.h"
 
 // MEM2MEM
 #include "class/cla140.h"
+#include "class/clcd40.h"
 
 static NvBool
 _kgrmgrGPUInstanceHasComputeInstances
@@ -110,6 +113,7 @@ kgrmgrGetGrObjectType_IMPL
         case AMPERE_COMPUTE_B:
         case ADA_COMPUTE_A:
         case HOPPER_COMPUTE_A:
+        case BLACKWELL_COMPUTE_A:
             *pObjectType = GR_OBJECT_TYPE_COMPUTE;
             break;
         case MAXWELL_A:
@@ -122,12 +126,14 @@ kgrmgrGetGrObjectType_IMPL
         case AMPERE_B:
         case ADA_A:
         case HOPPER_A:
+        case BLACKWELL_A:
             *pObjectType = GR_OBJECT_TYPE_3D;
             break;
         case FERMI_TWOD_A:
             *pObjectType = GR_OBJECT_TYPE_2D;
             break;
         case KEPLER_INLINE_TO_MEMORY_B:
+        case BLACKWELL_INLINE_TO_MEMORY_A:
             *pObjectType = GR_OBJECT_TYPE_MEM;
             break;
         default:
@@ -336,6 +342,16 @@ kgrmgrDestruct_IMPL
     portMemFree(pKernelGraphicsManager->legacyKgraphicsStaticInfo.pGrInfo);
     pKernelGraphicsManager->legacyKgraphicsStaticInfo.pGrInfo = NULL;
     pKernelGraphicsManager->legacyKgraphicsStaticInfo.bInitialized = NV_FALSE;
+}
+
+void
+kgrmgrStateDestroy_IMPL
+(
+    OBJGPU *pGpu,
+    KernelGraphicsManager *pKernelGraphicsManager
+)
+{
+    fecsRemoveAllBindpointsForGpu(pGpu);
 }
 
 /*!
@@ -675,7 +691,7 @@ kgrmgrAllocVeidsForGrIdx_IMPL
     KERNEL_MIG_GPU_INSTANCE *pKernelMIGGPUInstance
 )
 {
-    NvU32 veidStepSize;
+    NvU32 veidSizePerSpan;
     NvU32 veidStart = 0;
     NvU32 veidEnd = 0;
     NvU32 GPUInstanceVeidEnd;
@@ -687,18 +703,18 @@ kgrmgrAllocVeidsForGrIdx_IMPL
     NV_ASSERT_OR_RETURN(pKernelGraphicsManager->grIdxVeidMask[grIdx] == 0, NV_ERR_INVALID_STATE);
 
     NV_ASSERT_OK_OR_RETURN(
-        kgrmgrGetVeidStepSize(pGpu, pKernelGraphicsManager, &veidStepSize));
+        kgrmgrGetVeidSizePerSpan(pGpu, pKernelGraphicsManager, &veidSizePerSpan));
 
     // We statically assign VEIDs to a GR based on the number of GPCs connected to it
-    if (veidCount % veidStepSize != 0)
+    if (veidCount % veidSizePerSpan != 0)
     {
-        NV_PRINTF(LEVEL_ERROR, "veidCount %d is not aligned to veidStepSize=%d\n", veidCount, veidStepSize);
+        NV_PRINTF(LEVEL_ERROR, "veidCount %d is not aligned to veidSizePerSpan=%d\n", veidCount, veidSizePerSpan);
         return NV_ERR_INVALID_ARGUMENT;
     }
 
     NV_ASSERT_OR_RETURN(veidSpanOffset != KMIGMGR_SPAN_OFFSET_INVALID, NV_ERR_INVALID_ARGUMENT);
 
-    veidStart = (veidSpanOffset * veidStepSize) + pKernelMIGGPUInstance->resourceAllocation.veidOffset;
+    veidStart = (veidSpanOffset * veidSizePerSpan) + pKernelMIGGPUInstance->resourceAllocation.veidOffset;
     veidEnd = veidStart + veidCount - 1;
 
     NV_ASSERT_OR_RETURN(veidStart < veidEnd, NV_ERR_INVALID_STATE);
@@ -770,6 +786,26 @@ kgrmgrGetVeidStepSize_IMPL
     NV_ASSERT_OR_RETURN(pKernelGraphicsManager->legacyKgraphicsStaticInfo.pGrInfo != NULL, NV_ERR_INVALID_STATE);
 
     *pVeidStepSize = pKernelGraphicsManager->legacyKgraphicsStaticInfo.pGrInfo->infoList[NV0080_CTRL_GR_INFO_INDEX_LITTER_MIN_SUBCTX_PER_SMC_ENG].data;
+
+    return NV_OK;
+}
+
+/*!
+ * @brief Get VEID size for each span
+ */
+NV_STATUS
+kgrmgrGetVeidSizePerSpan_IMPL
+(
+    OBJGPU *pGpu,
+    KernelGraphicsManager *pKernelGraphicsManager,
+    NvU32 *pVeidSizePerSpan
+)
+{
+    NV_ASSERT_OR_RETURN(pVeidSizePerSpan != NULL, NV_ERR_INVALID_ARGUMENT);
+
+    // VEIDs for each span should be the VEID size we assign to the smallest GPC count
+    NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
+        kgrmgrGetVeidsFromGpcCount_HAL(pGpu, pKernelGraphicsManager, 1, pVeidSizePerSpan));
 
     return NV_OK;
 }
@@ -1015,7 +1051,7 @@ kgrmgrCheckVeidsRequest_IMPL
     KERNEL_MIG_GPU_INSTANCE *pKernelMIGGPUInstance
 )
 {
-    NvU32 veidStepSize;
+    NvU32 veidSizePerSpan;
     NvU32 veidStart = 0;
     NvU32 veidEnd = 0;
     NvU32 GPUInstanceVeidEnd;
@@ -1024,15 +1060,15 @@ kgrmgrCheckVeidsRequest_IMPL
     NvU64 veidMask;
 
     NV_ASSERT_OK_OR_RETURN(
-        kgrmgrGetVeidStepSize(pGpu, pKernelGraphicsManager, &veidStepSize));
+        kgrmgrGetVeidSizePerSpan(pGpu, pKernelGraphicsManager, &veidSizePerSpan));
 
     NV_ASSERT_OR_RETURN(pSpanStart != NULL, NV_ERR_INVALID_ARGUMENT);
     NV_ASSERT_OR_RETURN(pInUseMask != NULL, NV_ERR_INVALID_ARGUMENT);
 
     // We statically assign VEIDs to a GR based on the number of GPCs connected to it
-    if (veidCount % veidStepSize != 0)
+    if (veidCount % veidSizePerSpan != 0)
     {
-        NV_PRINTF(LEVEL_ERROR, "veidCount %d is not aligned to veidStepSize=%d\n", veidCount, veidStepSize);
+        NV_PRINTF(LEVEL_ERROR, "veidCount %d is not aligned to veidSizePerSpan=%d\n", veidCount, veidSizePerSpan);
         return NV_ERR_INVALID_ARGUMENT;
     }
 
@@ -1046,7 +1082,7 @@ kgrmgrCheckVeidsRequest_IMPL
 
     if (*pSpanStart != KMIGMGR_SPAN_OFFSET_INVALID)
     {
-        veidStart = (*pSpanStart * veidStepSize) + pKernelMIGGPUInstance->resourceAllocation.veidOffset;
+        veidStart = (*pSpanStart * veidSizePerSpan) + pKernelMIGGPUInstance->resourceAllocation.veidOffset;
         veidEnd = veidStart + veidCount - 1;
 
         NV_ASSERT_OR_RETURN(veidStart < veidEnd, NV_ERR_INVALID_STATE);
@@ -1058,7 +1094,7 @@ kgrmgrCheckVeidsRequest_IMPL
         NvU64 reqVeidMask = DRF_SHIFTMASK64(veidCount - 1:0);
         NvU32 i;
 
-        for (i = pKernelMIGGPUInstance->resourceAllocation.veidOffset; i <= GPUInstanceVeidEnd; i += veidStepSize)
+        for (i = pKernelMIGGPUInstance->resourceAllocation.veidOffset; i <= GPUInstanceVeidEnd; i += veidSizePerSpan)
         {
             // See if requested slots are available within this range
             if (((GPUInstanceFreeVeidMask >> i) & reqVeidMask) == reqVeidMask)
@@ -1090,7 +1126,8 @@ kgrmgrCheckVeidsRequest_IMPL
 
     NV_ASSERT(veidStart >= pKernelMIGGPUInstance->resourceAllocation.veidOffset);
 
-    *pSpanStart = (veidStart - pKernelMIGGPUInstance->resourceAllocation.veidOffset) / veidStepSize;
+    *pSpanStart = (veidStart - pKernelMIGGPUInstance->resourceAllocation.veidOffset) / veidSizePerSpan;
     *pInUseMask |= veidMask;
     return NV_OK;
 }
+

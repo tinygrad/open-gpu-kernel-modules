@@ -1,6 +1,5 @@
 --undefined=rm_disable_adapter
 --undefined=rm_execute_work_item
---undefined=rm_free_os_event
 --undefined=rm_free_private_state
 --undefined=rm_cleanup_file_private
 --undefined=rm_unbind_lock
@@ -129,12 +128,12 @@
 --undefined=rm_gpu_ops_ccsl_encrypt_with_iv
 --undefined=rm_gpu_ops_ccsl_context_init
 --undefined=rm_gpu_ops_ccsl_context_clear
---undefined=rm_gpu_ops_ccsl_context_update
+--undefined=rm_gpu_ops_ccsl_rotate_key
 --undefined=rm_gpu_ops_ccsl_rotate_iv
 --undefined=rm_gpu_ops_ccsl_decrypt
 --undefined=rm_gpu_ops_ccsl_query_message_pool
 --undefined=rm_gpu_ops_ccsl_increment_iv
---undefined=rm_gpu_ops_ccsl_log_device_encryption
+--undefined=rm_gpu_ops_ccsl_log_encryption
 --undefined=rm_log_gpu_crash
 --undefined=rm_kernel_rmapi_op
 --undefined=nv_get_hypervisor_type
@@ -170,6 +169,7 @@
 --undefined=nvswitch_lib_get_valid_ports_mask
 --undefined=nvswitch_lib_is_i2c_supported
 --undefined=nvswitch_lib_i2c_transfer
+--undefined=nvswitch_lib_is_tnvl_enabled
 --undefined=rm_gpu_copy_mmu_faults
 --undefined=rm_gpu_handle_mmu_faults
 --undefined=rm_gpu_need_4k_page_isolation
@@ -185,13 +185,11 @@
 --undefined=nv_vgpu_delete
 --undefined=nv_vgpu_get_bar_info
 --undefined=nv_vgpu_get_hbm_info
---undefined=nv_vgpu_start
 --undefined=nv_vgpu_get_type_ids
 --undefined=nv_vgpu_get_type_info
---undefined=nv_vgpu_get_sparse_mmap
---undefined=nv_vgpu_update_request
 --undefined=nv_vgpu_process_vf_info
 --undefined=nv_gpu_bind_event
+--undefined=nv_gpu_unbind_event
 --undefined=rm_check_for_gpu_surprise_removal
 --undefined=rm_set_external_kernel_client_count
 --undefined=rm_schedule_gpu_wakeup
@@ -201,10 +199,8 @@
 --undefined=rm_ref_dynamic_power
 --undefined=rm_unref_dynamic_power
 --undefined=rm_transition_dynamic_power
---undefined=rm_get_vidmem_power_status
 --undefined=rm_acpi_notify
---undefined=rm_get_dynamic_power_management_status
---undefined=rm_get_gpu_gcx_support
+--undefined=rm_get_power_info
 --undefined=rm_is_iommu_needed_for_sriov
 --undefined=rm_disable_iomap_wc
 --undefined=rm_is_altstack_in_use

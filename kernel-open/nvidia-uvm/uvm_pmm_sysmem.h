@@ -1,5 +1,5 @@
 /*******************************************************************************
-    Copyright (c) 2017-2023 NVIDIA Corporation
+    Copyright (c) 2017-2024 NVIDIA Corporation
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"), to
@@ -49,13 +49,6 @@ struct uvm_pmm_sysmem_mappings_struct
     uvm_mutex_t                        reverse_map_lock;
 };
 
-// See comments in uvm_linux.h
-#ifdef NV_RADIX_TREE_REPLACE_SLOT_PRESENT
-#define uvm_pmm_sysmem_mappings_indirect_supported() true
-#else
-#define uvm_pmm_sysmem_mappings_indirect_supported() false
-#endif
-
 // Global initialization/exit functions, that need to be called during driver
 // initialization/tear-down. These are needed to allocate/free global internal
 // data structures.
@@ -78,34 +71,10 @@ NV_STATUS uvm_pmm_sysmem_mappings_add_gpu_mapping(uvm_pmm_sysmem_mappings_t *sys
                                                   uvm_va_block_t *va_block,
                                                   uvm_processor_id_t owner);
 
-static NV_STATUS uvm_pmm_sysmem_mappings_add_gpu_chunk_mapping(uvm_pmm_sysmem_mappings_t *sysmem_mappings,
-                                                               NvU64 dma_addr,
-                                                               NvU64 virt_addr,
-                                                               NvU64 region_size,
-                                                               uvm_va_block_t *va_block,
-                                                               uvm_gpu_id_t owner)
-{
-    if (!uvm_pmm_sysmem_mappings_indirect_supported())
-        return NV_OK;
-
-    return uvm_pmm_sysmem_mappings_add_gpu_mapping(sysmem_mappings,
-                                                   dma_addr,
-                                                   virt_addr,
-                                                   region_size,
-                                                   va_block,
-                                                   owner);
-}
-
 // If the GPU used to initialize sysmem_mappings supports access counters, the
 // entries for the physical region starting at dma_addr are removed from the
 // reverse map.
 void uvm_pmm_sysmem_mappings_remove_gpu_mapping(uvm_pmm_sysmem_mappings_t *sysmem_mappings, NvU64 dma_addr);
-
-static void uvm_pmm_sysmem_mappings_remove_gpu_chunk_mapping(uvm_pmm_sysmem_mappings_t *sysmem_mappings, NvU64 dma_addr)
-{
-    if (uvm_pmm_sysmem_mappings_indirect_supported())
-        uvm_pmm_sysmem_mappings_remove_gpu_mapping(sysmem_mappings, dma_addr);
-}
 
 // Like uvm_pmm_sysmem_mappings_remove_gpu_mapping but it doesn't assert if the
 // mapping doesn't exist. See uvm_va_block_evict_chunks for more information.
@@ -118,14 +87,6 @@ void uvm_pmm_sysmem_mappings_reparent_gpu_mapping(uvm_pmm_sysmem_mappings_t *sys
                                                   NvU64 dma_addr,
                                                   uvm_va_block_t *va_block);
 
-static void uvm_pmm_sysmem_mappings_reparent_gpu_chunk_mapping(uvm_pmm_sysmem_mappings_t *sysmem_mappings,
-                                                               NvU64 dma_addr,
-                                                               uvm_va_block_t *va_block)
-{
-    if (uvm_pmm_sysmem_mappings_indirect_supported())
-        uvm_pmm_sysmem_mappings_reparent_gpu_mapping(sysmem_mappings, dma_addr, va_block);
-}
-
 // If the GPU used to initialize sysmem_mappings supports access counters, the
 // mapping for the region starting at dma_addr is split into regions of
 // new_region_size. new_region_size must be a power of two and smaller than the
@@ -133,16 +94,6 @@ static void uvm_pmm_sysmem_mappings_reparent_gpu_chunk_mapping(uvm_pmm_sysmem_ma
 NV_STATUS uvm_pmm_sysmem_mappings_split_gpu_mappings(uvm_pmm_sysmem_mappings_t *sysmem_mappings,
                                                      NvU64 dma_addr,
                                                      NvU64 new_region_size);
-
-static NV_STATUS uvm_pmm_sysmem_mappings_split_gpu_chunk_mappings(uvm_pmm_sysmem_mappings_t *sysmem_mappings,
-                                                                  NvU64 dma_addr,
-                                                                  NvU64 new_region_size)
-{
-    if (!uvm_pmm_sysmem_mappings_indirect_supported())
-        return NV_OK;
-
-    return uvm_pmm_sysmem_mappings_split_gpu_mappings(sysmem_mappings, dma_addr, new_region_size);
-}
 
 // If the GPU used to initialize sysmem_mappings supports access counters, all
 // the mappings within the region [dma_addr, dma_addr + new_region_size) are
@@ -152,14 +103,6 @@ static NV_STATUS uvm_pmm_sysmem_mappings_split_gpu_chunk_mappings(uvm_pmm_sysmem
 void uvm_pmm_sysmem_mappings_merge_gpu_mappings(uvm_pmm_sysmem_mappings_t *sysmem_mappings,
                                                 NvU64 dma_addr,
                                                 NvU64 new_region_size);
-
-static void uvm_pmm_sysmem_mappings_merge_gpu_chunk_mappings(uvm_pmm_sysmem_mappings_t *sysmem_mappings,
-                                                             NvU64 dma_addr,
-                                                             NvU64 new_region_size)
-{
-    if (uvm_pmm_sysmem_mappings_indirect_supported())
-        uvm_pmm_sysmem_mappings_merge_gpu_mappings(sysmem_mappings, dma_addr, new_region_size);
-}
 
 // Obtain the {va_block, virt_addr} information for the mappings in the given
 // [dma_addr:dma_addr + region_size) range. dma_addr and region_size must be
@@ -246,8 +189,19 @@ struct uvm_cpu_chunk_struct
 
 typedef struct
 {
+    // Physical GPU DMA address of the CPU chunk.
     NvU64 dma_addr;
+
+    // Reference count of all sub_processors using this mapping across logical
+    // and physical chunks.
     NvU32 map_count;
+
+    // Mask of MIG instances or physical GPU.
+    // This is only valid for physical CPU chunks that have not been split into
+    // logical chunks. When the chunk is split, all the
+    // uvm_cpu_logical_chunk_t::mapped_gpus masks have a bit set for each
+    // count in map_count and sub_processors is set to zero.
+    uvm_sub_processor_mask_t sub_processors;
 } uvm_cpu_phys_mapping_t;
 
 typedef struct
@@ -304,7 +258,9 @@ typedef struct
 
     // Pointer to the parent chunk (which could also be a logical chunk).
     uvm_cpu_chunk_t *parent;
-    uvm_parent_processor_mask_t mapped_gpus;
+
+    // This is a reference per bit but also recorded in mapping->map_count.
+    uvm_processor_mask_t mapped_gpus;
 } uvm_cpu_logical_chunk_t;
 
 // Return the set of allowed CPU chunk allocation sizes.
@@ -417,15 +373,15 @@ void uvm_cpu_chunk_free(uvm_cpu_chunk_t *chunk);
 // For more details see uvm_mmu_sysmem_map().
 NV_STATUS uvm_cpu_chunk_map_gpu(uvm_cpu_chunk_t *chunk, uvm_gpu_t *gpu);
 
-// Destroy a CPU chunk's DMA mapping for the parent GPU.
+// Destroy a CPU chunk's DMA mapping for the given GPU.
 // If chunk is a logical chunk, this call may not necessarily destroy the DMA
-// mapping of the parent physical chunk since all logical chunks share the
-// parent's DMA mapping.
-void uvm_cpu_chunk_unmap_parent_gpu_phys(uvm_cpu_chunk_t *chunk, uvm_parent_gpu_t *parent_gpu);
+// mapping of the parent physical chunk since all logical chunks and MIG
+// partitions share the parent's DMA mapping.
+void uvm_cpu_chunk_unmap_gpu(uvm_cpu_chunk_t *chunk, uvm_gpu_t *gpu);
 
 // Get the CPU chunk's DMA mapping address for the specified GPU ID.
 // If there is no mapping for the GPU, 0 is returned.
-NvU64 uvm_cpu_chunk_get_parent_gpu_phys_addr(uvm_cpu_chunk_t *chunk, uvm_parent_gpu_t *parent_gpu);
+NvU64 uvm_cpu_chunk_get_gpu_phys_addr(uvm_cpu_chunk_t *chunk, uvm_gpu_t *gpu);
 
 // Split a CPU chunk into a set of CPU chunks of the next size down from the set
 // of enabled CPU chunk sizes.

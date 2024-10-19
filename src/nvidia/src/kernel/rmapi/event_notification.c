@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -40,6 +40,7 @@
 #include "mem_mgr/mem.h"
 #include "kernel/gpu/gpu_engine_type.h"
 #include "platform/sli/sli.h"
+#include "gpu/timer/objtmr.h"
 
 #include "kernel/gpu/mig_mgr/kernel_mig_manager.h"
 
@@ -452,6 +453,36 @@ eventGetEngineTypeFromSubNotifyIndex
         case NV2080_NOTIFIERS_CE9:
             *pRmEngineId = RM_ENGINE_TYPE_COPY9;
             break;
+        case NV2080_NOTIFIERS_CE10:
+            *pRmEngineId = RM_ENGINE_TYPE_COPY10;
+            break;
+        case NV2080_NOTIFIERS_CE11:
+            *pRmEngineId = RM_ENGINE_TYPE_COPY11;
+            break;
+        case NV2080_NOTIFIERS_CE12:
+            *pRmEngineId = RM_ENGINE_TYPE_COPY12;
+            break;
+        case NV2080_NOTIFIERS_CE13:
+            *pRmEngineId = RM_ENGINE_TYPE_COPY13;
+            break;
+        case NV2080_NOTIFIERS_CE14:
+            *pRmEngineId = RM_ENGINE_TYPE_COPY14;
+            break;
+        case NV2080_NOTIFIERS_CE15:
+            *pRmEngineId = RM_ENGINE_TYPE_COPY15;
+            break;
+        case NV2080_NOTIFIERS_CE16:
+            *pRmEngineId = RM_ENGINE_TYPE_COPY16;
+            break;
+        case NV2080_NOTIFIERS_CE17:
+            *pRmEngineId = RM_ENGINE_TYPE_COPY17;
+            break;
+        case NV2080_NOTIFIERS_CE18:
+            *pRmEngineId = RM_ENGINE_TYPE_COPY18;
+            break;
+        case NV2080_NOTIFIERS_CE19:
+            *pRmEngineId = RM_ENGINE_TYPE_COPY19;
+            break;
         case NV2080_NOTIFIERS_GR0:
             *pRmEngineId = RM_ENGINE_TYPE_GR0;
             break;
@@ -546,6 +577,9 @@ eventGetEngineTypeFromSubNotifyIndex
             break;
         case NV2080_NOTIFIERS_OFA0:
             *pRmEngineId = RM_ENGINE_TYPE_OFA0;
+            break;
+        case NV2080_NOTIFIERS_OFA1:
+            *pRmEngineId = RM_ENGINE_TYPE_OFA1;
             break;
         default:
             NV_PRINTF(LEVEL_WARNING,
@@ -743,6 +777,10 @@ static NV_STATUS _insertEventNotification
     EventNotify->NotifyTriggerCount = 0;
     EventNotify->bUserOsEventHandle = bUserOsEventHandle;
 
+    // These fields are set by NV0004_CTRL_CMD_TMR_SET_ALARM_NOTIFY for graceful TMR_EVENT teardown
+    EventNotify->pGpu = NULL;
+    EventNotify->pTmrEvent = NULL;
+
     //
     // Now insert the event into the event chain of this object.
     // Order doesn't really matter.
@@ -904,6 +942,15 @@ static NV_STATUS _removeEventNotification
     // delete the event if it was found
     if (found)
     {
+        if (nextEvent->pTmrEvent != NULL)
+        {
+            NV_ASSERT_OR_RETURN((nextEvent->pGpu != NULL), NV_ERR_INVALID_STATE);
+
+            tmrEventDestroy(GPU_GET_TIMER(nextEvent->pGpu), nextEvent->pTmrEvent);
+            nextEvent->pGpu = NULL;
+            nextEvent->pTmrEvent = NULL;
+        }
+
         if (nextEvent->bUserOsEventHandle)
             osDereferenceObjectCount(NvP64_VALUE(nextEvent->Data));
 

@@ -28,7 +28,7 @@
 \***************************************************************************/
 
 #include "gpu_mgr/gpu_mgr.h"
-#include "nvRmReg.h"
+#include "nvrm_registry.h"
 #include "nvBldVer.h"
 #include "nvVer.h"
 #include "os/os.h"
@@ -1272,6 +1272,98 @@ _rcdbGetTimeInfo
     return nvStatus;
 }
 
+static NV_STATUS
+_rcdbGetResourceServerData
+(
+    PRB_ENCODER          *pPrbEnc,
+    NVD_STATE            *pNvDumpState,
+    const PRB_FIELD_DESC *pFieldDesc
+)
+{
+    NV_STATUS nvStatus = NV_OK;
+    NvU8 startingDepth = prbEncNestingLevel(pPrbEnc);
+
+    NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
+        prbEncNestedStart(pPrbEnc, pFieldDesc));
+
+    prbEncAddUInt32(pPrbEnc,
+                    NVDEBUG_SYSTEMINFO_RESOURCESERVER_NUM_CLIENTS,
+                    serverGetClientCount(&g_resServ));
+    prbEncAddUInt64(pPrbEnc,
+                    NVDEBUG_SYSTEMINFO_RESOURCESERVER_NUM_RESOURCES,
+                    serverGetResourceCount(&g_resServ));
+
+    for (RmClient **ppClient = serverutilGetFirstClientUnderLock();
+         ppClient;
+         ppClient = serverutilGetNextClientUnderLock(ppClient))
+    {
+        if (*ppClient == NULL)
+            continue;
+
+        RmClient *pRmClient = *ppClient;
+        RsClient *pRsClient = staticCast(pRmClient, RsClient);
+
+        NV_CHECK_OK_OR_GOTO(nvStatus, LEVEL_ERROR,
+            prbEncNestedStart(pPrbEnc, NVDEBUG_SYSTEMINFO_RESOURCESERVER_CLIENT_INFO),
+            out);
+
+        prbEncAddUInt32(pPrbEnc,
+            NVDEBUG_SYSTEMINFO_RESOURCESERVER_CLIENTINFO_CLIENT_HANDLE,
+            pRsClient->hClient);
+        prbEncAddUInt32(pPrbEnc,
+            NVDEBUG_SYSTEMINFO_RESOURCESERVER_CLIENTINFO_PROCESS_ID,
+            pRmClient->ProcID);
+        prbEncAddString(pPrbEnc,
+            NVDEBUG_SYSTEMINFO_RESOURCESERVER_CLIENTINFO_PROCESS_NAME,
+            pRmClient->name);
+        prbEncAddUInt32(pPrbEnc,
+            NVDEBUG_SYSTEMINFO_RESOURCESERVER_CLIENTINFO_FLAGS,
+            pRmClient->Flags);
+        prbEncAddUInt32(pPrbEnc,
+            NVDEBUG_SYSTEMINFO_RESOURCESERVER_CLIENTINFO_PRIV_LEVEL,
+            (NvU32)pRmClient->cachedPrivilege);
+
+        RS_ITERATOR it = clientRefIter(pRsClient, 0, 0, RS_ITERATE_DESCENDANTS, NV_TRUE);
+        while (clientRefIterNext(it.pClient, &it))
+        {
+            if (it.pResourceRef == NULL || it.pResourceRef->pResource == NULL)
+                continue;
+
+            RsResource *pRes = it.pResourceRef->pResource;
+            RmResource *pRmRes = dynamicCast(pRes, RmResource);
+
+            NV_CHECK_OK_OR_GOTO(nvStatus, LEVEL_ERROR,
+                prbEncNestedStart(pPrbEnc, NVDEBUG_SYSTEMINFO_RESOURCESERVER_CLIENTINFO_ALLOCATIONS),
+                out);
+
+            prbEncAddUInt32(pPrbEnc,
+                NVDEBUG_SYSTEMINFO_RESOURCESERVER_CLIENTINFO_CLIENTALLOCATION_OBJECT_HANDLE,
+                it.pResourceRef->hResource);
+            prbEncAddUInt32(pPrbEnc,
+                NVDEBUG_SYSTEMINFO_RESOURCESERVER_CLIENTINFO_CLIENTALLOCATION_OBJECT_CLASS_ID,
+                it.pResourceRef->externalClassId);
+            prbEncAddUInt32(pPrbEnc,
+                NVDEBUG_SYSTEMINFO_RESOURCESERVER_CLIENTINFO_CLIENTALLOCATION_PARENT_HANDLE,
+                ((it.pResourceRef->pParentRef != NULL) ? it.pResourceRef->pParentRef->hResource : 0));
+            prbEncAddUInt32(pPrbEnc,
+                NVDEBUG_SYSTEMINFO_RESOURCESERVER_CLIENTINFO_CLIENTALLOCATION_GPU_INSTANCE,
+                ((pRmRes != NULL) ? pRmRes->rpcGpuInstance : 0xFFFFFFFF));
+
+            prbEncNestedEnd(pPrbEnc);
+        }
+        prbEncNestedEnd(pPrbEnc);
+    }
+
+    prbEncNestedEnd(pPrbEnc);
+
+out:
+    // Unwind the protobuf to the correct depth.
+    NV_CHECK_OK(nvStatus, LEVEL_ERROR,
+        prbEncUnwindNesting(pPrbEnc, startingDepth));
+
+    return nvStatus;
+}
+
 static const char * GPU_NA_UUID = "N/A";
 
 NV_STATUS
@@ -1316,6 +1408,10 @@ rcdbDumpSystemInfo_IMPL
 
     NV_CHECK_OK_OR_GOTO(nvStatus, LEVEL_ERROR,
         _rcdbGetTimeInfo(pPrbEnc, pNvDumpState, NVDEBUG_SYSTEMINFO_TIME_INFO),
+        External_Cleanup);
+
+    NV_CHECK_OK_OR_GOTO(nvStatus, LEVEL_ERROR,
+        _rcdbGetResourceServerData(pPrbEnc, pNvDumpState, NVDEBUG_SYSTEMINFO_RESSERV_INFO),
         External_Cleanup);
 
     prbEncAddUInt32(pPrbEnc,
@@ -3666,20 +3762,29 @@ _rcdbSendNocatJournalNotification
     OBJGPU *pGpu,
     Journal *pRcdb,
     NvU32    posted,
-    RmRCCommonJournal_RECORD *pCommon,      // todo: pass in timestamp instead of common.
+    NvU64    timeStamp,
     NvU32 type
 )
 {
-    if ((pCommon == NULL) || (pRcdb == NULL))
+    if (pRcdb == NULL)
     {
         return NV_ERR_INVALID_ARGUMENT;
     }
+    if (pRcdb->nvDumpState.bDumpInProcess)
+    {
+        // we can't reliably do an ETW when we are in the process of collecting data for a dump.
+        // (it can throw an exception)
+        // so bail w/o sending the notification.
+        pRcdb->nocatJournalDescriptor.nocatEventCounters[NV2080_NOCAT_JOURNAL_REPORT_ACTIVITY_NOTIFICATION_FAIL_IDX]++;
+        return NV_OK;
+    }
+
     RMTRACE_NOCAT(_REPORT_PENDING, (pGpu ? pGpu->gpuId : RMTRACE_UNKNOWN_GPUID),
         RmNocatReport,
         posted,
         type,
         rcdbGetNocatOutstandingCount(pRcdb),
-        pCommon->timeStamp);
+        timeStamp);
 
     // count the number of notifications.
     pRcdb->nocatJournalDescriptor.nocatEventCounters[NV2080_NOCAT_JOURNAL_REPORT_ACTIVITY_NOTIFICATIONS_IDX]++;
@@ -4017,7 +4122,7 @@ rcdbNocatInsertNocatError(
     }
 
     // no matter what happened, trigger the event to indicate a record was processed.
-    _rcdbSendNocatJournalNotification(pGpu, pRcdb, postRecord, pCommon, pNewEntry->recType);
+    _rcdbSendNocatJournalNotification(pGpu, pRcdb, postRecord, pNewEntry->timestamp, pNewEntry->recType);
 
     return id;
 }
@@ -4188,6 +4293,8 @@ _rcdbNocatReportAssert
     RM_NOCAT_JOURNAL_ENTRY *pNocatEntry = NULL;
     NvU32                   gpuCnt= 0;
     OBJGPU                  *pTmpGpu = gpumgrGetGpu(0);
+    NvBool                  recordPosted = NV_FALSE;
+
 
     // validate inputs.
     if ((pRcdb == NULL) || (pAssertRec == NULL))
@@ -4257,18 +4364,14 @@ _rcdbNocatReportAssert
                     // increment the count
                     pDiagData = (RM_NOCAT_ASSERT_DIAG_BUFFER*)&pNocatEntry->nocatJournalEntry.diagBuffer;
                     pDiagData->count++;
+                    recordPosted = NV_TRUE;
                 }
                 _rcdbReleaseNocatJournalRecord(pNocatEntry);
-
             }
-        }
-        else
-        {
-            pRcdb->nocatJournalDescriptor.nocatEventCounters[NV2080_NOCAT_JOURNAL_REPORT_ACTIVITY_BUSY_IDX]++;
         }
         portAtomicDecrementS32(&concurrentRingBufferAccess);
     }
-    else
+    if (!recordPosted)
     {
         // we are logging this assert, save off the stack so we can use it to
         // compare against future asserts.

@@ -1,7 +1,7 @@
 /*
  * ----------------------------------------------------------------------
  * Copyright (c) 2005-2014 Rich Felker, et al.
- * Copyright (c) 2019-2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2019-2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -324,6 +324,7 @@ static void flush_line_buffer(LIBOS_LOG_DECODE *logDecode)
         // FIXME (bug 3924763): by default, nv_printf prints messages at level >= NV_DBG_WARNINGS=3.
         // We want to show all prints >= LEVEL_NOTICE=2, so bump LEVEL_NOTICE=2 to LEVEL_WARNING=3 for now.
         // This will be fixed by remapping log levels correctly.
+        // NB: This is not needed for MODS, because LEVEL_NOTICE is still recorded in MODS logs.
         //
         if (logLevel == LEVEL_NOTICE)
             logLevel = LEVEL_WARNING;
@@ -361,7 +362,8 @@ static void emit_string(const char *s, int l, LIBOS_LOG_DECODE *logDecode)
     }
 }
 
-static NvBool s_getSymbolDataStr(LibosDebugResolver *resolver, char *decodedLine, NvLength decodedLineSize, NvUPtr addr)
+static NvBool s_getSymbolDataStr(LibosDebugResolver *resolver, char *decodedLine,
+    NvLength decodedLineSize, NvUPtr addr, NvBool bPrintDirectory)
 {
     const char *directory;
     const char *filename;
@@ -386,9 +388,14 @@ static NvBool s_getSymbolDataStr(LibosDebugResolver *resolver, char *decodedLine
     {
         if (name)
         {
+            bPrintDirectory &= (directory != NULL);
+
             snprintf(
-                decodedLine, decodedLineSize - 1, "%s+%lld (%s:%lld)", name, offset, filename,
-                outputLine);
+                decodedLine, decodedLineSize - 1, "%s+%lld (%s%s%s:%lld)",
+                name, offset,
+                (bPrintDirectory ? directory : ""),
+                (bPrintDirectory ? "/" : ""),
+                filename, outputLine);
         }
         else
         {
@@ -405,9 +412,10 @@ static NvBool s_getSymbolDataStr(LibosDebugResolver *resolver, char *decodedLine
     return bResolved;
 }
 
-NvBool libosLogSymbolicateAddress(LIBOS_LOG_DECODE *logDecode, char *decodedLine, NvLength decodedLineSize, NvUPtr addr)
+NvBool libosLogSymbolicateAddress(LIBOS_LOG_DECODE *logDecode, char *decodedLine,
+                                  NvLength decodedLineSize, NvUPtr addr, NvBool bPrintDirectory)
 {
-    return s_getSymbolDataStr(&logDecode->log[0].resolver, decodedLine, decodedLineSize, addr);
+    return s_getSymbolDataStr(&logDecode->log[0].resolver, decodedLine, decodedLineSize, addr, bPrintDirectory);
 }
 
 /**
@@ -941,7 +949,7 @@ static int libos_printf_a(
             {
                 static char symDecodedLine[SYM_DECODED_LINE_MAX_SIZE];
 
-                s_getSymbolDataStr(&pRec->logSymbolResolver->resolver, symDecodedLine, sizeof(symDecodedLine), (NvUPtr)arg.i);
+                s_getSymbolDataStr(&pRec->logSymbolResolver->resolver, symDecodedLine, sizeof(symDecodedLine), (NvUPtr)arg.i, NV_FALSE);
 
                 // Set common vars
                 a = &symDecodedLine[0];
@@ -993,7 +1001,7 @@ static int libos_printf_a(
             symDecodedLine[prefixLen++] = '<';
 #endif // NVWATCH
 
-            s_getSymbolDataStr(&pRec->log->resolver, symDecodedLine + prefixLen, sizeof(symDecodedLine) - prefixLen, (NvUPtr)arg.i);
+            s_getSymbolDataStr(&pRec->log->resolver, symDecodedLine + prefixLen, sizeof(symDecodedLine) - prefixLen, (NvUPtr)arg.i, NV_FALSE);
 
             symDecodedLineLen = portStringLength(symDecodedLine);
             symDecodedLineLen = MIN(symDecodedLineLen, sizeof(symDecodedLine) - 1); // just in case

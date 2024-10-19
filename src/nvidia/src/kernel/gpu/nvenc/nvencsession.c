@@ -34,7 +34,7 @@
 
 static NvU32 sessionCounter = 0x01;
 
-static void _gpuNvEncSessionDataProcessingCallback(POBJGPU pGpu, void *data);
+static void _gpuNvEncSessionDataProcessingCallback(OBJGPU *pGpu, void *data);
 
 NV_STATUS
 nvencsessionConstruct_IMPL
@@ -232,7 +232,7 @@ nvencsessionDestruct_IMPL
 }
 
 static void
-_gpuNvEncSessionProcessBuffer(POBJGPU pGpu, NvencSession *pNvencSession)
+_gpuNvEncSessionProcessBuffer(OBJGPU *pGpu, NvencSession *pNvencSession)
 {
     NvU32 frameCount;
     NvU32 currIndex;
@@ -433,7 +433,7 @@ static void _gpuNvEncSessionDataProcessingWorkItem(NvU32 gpuInstance, void *pArg
 }
 
 static void
-_gpuNvEncSessionDataProcessingCallback(POBJGPU pGpu, void *data)
+_gpuNvEncSessionDataProcessingCallback(OBJGPU *pGpu, void *data)
 {
     NV_STATUS   status;
 
@@ -443,7 +443,7 @@ _gpuNvEncSessionDataProcessingCallback(POBJGPU pGpu, void *data)
                                           _gpuNvEncSessionDataProcessingWorkItem,
                                           NULL,
                                           OS_QUEUE_WORKITEM_FLAGS_LOCK_SEMA
-                                          | OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_DEVICE_RW);
+                                          | OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_DEVICE);
         if (status != NV_OK)
         {
             NV_PRINTF(LEVEL_ERROR,

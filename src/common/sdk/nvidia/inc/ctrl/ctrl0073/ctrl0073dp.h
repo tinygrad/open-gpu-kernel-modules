@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2005-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2005-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -1102,61 +1102,6 @@ typedef struct NV0073_CTRL_DP_MAIN_LINK_CTRL_PARAMS {
 #define NV0073_CTRL_DP_MAIN_LINK_CTRL_POWER_STATE_POWERDOWN (0x00000000U)
 #define NV0073_CTRL_DP_MAIN_LINK_CTRL_POWER_STATE_POWERUP   (0x00000001U)
 
-
-
-/*
- * NV0073_CTRL_CMD_DP_GET_AUDIO_MUTESTREAM
- *
- * This command returns the current audio mute state on the main link of Display Port
- *
- * The command takes a NV0073_CTRL_DP_GET_AUDIO_MUTESTREAM_PARAMS structure as the
- * argument with the appropriate subDeviceInstance, displayId as inputs and returns the
- * current mute status in mute field of the structure.
- *
- *   subDeviceInstance
- *     This parameter specifies the subdevice instance within the
- *     NV04_DISPLAY_COMMON parent device to which the operation should be
- *     directed. This parameter must specify a value between zero and the
- *     total number of subdevices within the parent device.  This parameter
- *     should be set to zero for default behavior.
- *   displayId
- *     This parameter specifies the ID of the display for which the audio stream
- *     state should be returned.  The display ID must a DP display.
- *     If the display ID is invalid or if it is not a DP display,
- *     this call will return NV_ERR_INVALID_ARGUMENT.
- *   mute
- *     This parameter will return one of the following values:
- *       NV0073_CTRL_DP_AUDIO_MUTESTREAM_MUTE_DISABLE
- *         Audio mute is currently disabled.
- *       NV0073_CTRL_DP_AUDIO_MUTESTREAM_MUTE_ENABLE
- *         Audio mute is currently enabled.
- *       NV0073_CTRL_DP_AUDIO_MUTESTREAM_MUTE_AUTO
- *         Audio mute is automatically controlled by hardware.
- *       NV0073_CTRL_DP_AUDIO_MUTESTREAM_MUTE_UNKNOWN
- *         Audio mute is currently in an unknown state.
- *
- * Possible status values returned are:
- *   NV_OK
- *   NV_ERR_INVALID_PARAM_STRUCT
- *   NV_ERR_INVALID_ARGUMENT
- *
- *
- */
-#define NV0073_CTRL_CMD_DP_GET_AUDIO_MUTESTREAM                        (0x731358U) /* finn: Evaluated from "(FINN_NV04_DISPLAY_COMMON_DP_INTERFACE_ID << 8) | NV0073_CTRL_DP_GET_AUDIO_MUTESTREAM_PARAMS_MESSAGE_ID" */
-
-#define NV0073_CTRL_DP_GET_AUDIO_MUTESTREAM_PARAMS_MESSAGE_ID (0x58U)
-
-typedef struct NV0073_CTRL_DP_GET_AUDIO_MUTESTREAM_PARAMS {
-    NvU32 subDeviceInstance;
-    NvU32 displayId;
-    NvU32 mute;
-} NV0073_CTRL_DP_GET_AUDIO_MUTESTREAM_PARAMS;
-
-#define NV0073_CTRL_DP_AUDIO_MUTESTREAM_MUTE_DISABLE (0x00000000U)
-#define NV0073_CTRL_DP_AUDIO_MUTESTREAM_MUTE_ENABLE  (0x00000001U)
-#define NV0073_CTRL_DP_AUDIO_MUTESTREAM_MUTE_AUTO    (0x00000002U)
-#define NV0073_CTRL_DP_AUDIO_MUTESTREAM_MUTE_UNKNOWN (0x00000003U)
-
 /*
  * NV0073_CTRL_CMD_DP_SET_AUDIO_MUTESTREAM
  *
@@ -1197,7 +1142,7 @@ typedef struct NV0073_CTRL_DP_GET_AUDIO_MUTESTREAM_PARAMS {
  *
  *
  */
-#define NV0073_CTRL_CMD_DP_SET_AUDIO_MUTESTREAM      (0x731359U) /* finn: Evaluated from "(FINN_NV04_DISPLAY_COMMON_DP_INTERFACE_ID << 8) | NV0073_CTRL_DP_SET_AUDIO_MUTESTREAM_PARAMS_MESSAGE_ID" */
+#define NV0073_CTRL_CMD_DP_SET_AUDIO_MUTESTREAM             (0x731359U) /* finn: Evaluated from "(FINN_NV04_DISPLAY_COMMON_DP_INTERFACE_ID << 8) | NV0073_CTRL_DP_SET_AUDIO_MUTESTREAM_PARAMS_MESSAGE_ID" */
 
 #define NV0073_CTRL_DP_SET_AUDIO_MUTESTREAM_PARAMS_MESSAGE_ID (0x59U)
 
@@ -1206,6 +1151,10 @@ typedef struct NV0073_CTRL_DP_SET_AUDIO_MUTESTREAM_PARAMS {
     NvU32 displayId;
     NvU32 mute;
 } NV0073_CTRL_DP_SET_AUDIO_MUTESTREAM_PARAMS;
+
+#define NV0073_CTRL_DP_AUDIO_MUTESTREAM_MUTE_DISABLE (0x00000000U)
+#define NV0073_CTRL_DP_AUDIO_MUTESTREAM_MUTE_ENABLE  (0x00000001U)
+#define NV0073_CTRL_DP_AUDIO_MUTESTREAM_MUTE_AUTO    (0x00000002U)
 
 /*
  * NV0073_CTRL_CMD_DP_ASSR_CTRL
@@ -1271,7 +1220,7 @@ typedef struct NV0073_CTRL_DP_SET_AUDIO_MUTESTREAM_PARAMS {
  *   NV_ERR_INVALID_ARGUMENT
  *
  */
-#define NV0073_CTRL_CMD_DP_ASSR_CTRL (0x73135aU) /* finn: Evaluated from "(FINN_NV04_DISPLAY_COMMON_DP_INTERFACE_ID << 8) | NV0073_CTRL_DP_ASSR_CTRL_PARAMS_MESSAGE_ID" */
+#define NV0073_CTRL_CMD_DP_ASSR_CTRL                 (0x73135aU) /* finn: Evaluated from "(FINN_NV04_DISPLAY_COMMON_DP_INTERFACE_ID << 8) | NV0073_CTRL_DP_ASSR_CTRL_PARAMS_MESSAGE_ID" */
 
 #define NV0073_CTRL_DP_ASSR_CTRL_PARAMS_MESSAGE_ID (0x5AU)
 
@@ -1390,8 +1339,6 @@ typedef struct NV0073_CTRL_CMD_DP_TOPOLOGY_FREE_DISPLAYID_PARAMS {
     NvU32 displayId;
 } NV0073_CTRL_CMD_DP_TOPOLOGY_FREE_DISPLAYID_PARAMS;
 
-
-
 /*
  * NV0073_CTRL_CMD_DP_GET_LINK_CONFIG
  *
@@ -1459,9 +1406,7 @@ typedef struct NV0073_CTRL_DP_GET_LINK_CONFIG_PARAMS {
 #define NV0073_CTRL_CMD_DP_GET_LINK_CONFIG_DP2LINK_BW_3_24GBPS (0x00000114U)
 #define NV0073_CTRL_CMD_DP_GET_LINK_CONFIG_DP2LINK_BW_4_32GBPS (0x000001B0U)
 #define NV0073_CTRL_CMD_DP_GET_LINK_CONFIG_DP2LINK_BW_6_75GBPS (0x000002A3U)
-#define NV0073_CTRL_CMD_DP_GET_LINK_CONFIG_DP2LINK_BW_10_0GBPS (0x000003E8U)
-#define NV0073_CTRL_CMD_DP_GET_LINK_CONFIG_DP2LINK_BW_13_5GBPS (0x00000546U)
-#define NV0073_CTRL_CMD_DP_GET_LINK_CONFIG_DP2LINK_BW_20_0GBPS (0x000007D0U)
+
 
 /*
  * NV0073_CTRL_CMD_DP_GET_EDP_DATA
@@ -1562,15 +1507,6 @@ typedef struct NV0073_CTRL_DP_GET_EDP_DATA_PARAMS {
  *          Specifies TU size value
  *      watermark
  *          Specifies stream watermark.
- *      linkClkFreqHz -- moving to MvidWarParams. Use that instead.
- *          Specifies the link freq in Hz. Note that this is the byte clock.
- *          eg: = (5.4 Ghz / 10)
- *      actualPclkHz; -- moving to MvidWarParams. Use that instead.
- *          Specifies the actual pclk freq in Hz.
- *      mvidWarEnabled
- *          Specifies whether MVID WAR is enabled.
- *      MvidWarParams
- *          Is valid if mvidWarEnabled is true.
  *      bEnableTwoHeadOneOr
  *          Whether two head one OR is enabled. If this is set then RM will
  *          replicate SF settings of Master head on Slave head. Head index
@@ -1614,19 +1550,7 @@ typedef struct NV0073_CTRL_CMD_DP_CONFIG_STREAM_PARAMS {
         NvBool bEnhancedFraming;
         NvU32  tuSize;
         NvU32  waterMark;
-        NvU32  actualPclkHz;     // deprecated  -Use MvidWarParams
-        NvU32  linkClkFreqHz;    // deprecated  -Use MvidWarParams
         NvBool bEnableAudioOverRightPanel;
-        struct {
-            NvU32  activeCnt;
-            NvU32  activeFrac;
-            NvU32  activePolarity;
-            NvBool mvidWarEnabled;
-            struct {
-                NvU32 actualPclkHz;
-                NvU32 linkClkFreqHz;
-            } MvidWarParams;
-        } Legacy;
     } SST;
 } NV0073_CTRL_CMD_DP_CONFIG_STREAM_PARAMS;
 
@@ -1817,6 +1741,10 @@ typedef struct NV0073_CTRL_CMD_DP_SEND_ACT_PARAMS {
  *     Returns NV_TRUE if LTTPR Link Training feature is set
  *   bOverrideLinkBw
  *     Returns NV_TRUE if DFP limits defined in DCB have to be honored, else NV_FALSE
+ *   bUseRgFlushSequence
+ *     Returns NV_TRUE if GPU uses the new RG flush design
+ *   bSupportDPDownSpread
+ *     Returns NV_TRUE if GPU support downspread.
  *
  *  DSC caps
  *
@@ -1845,6 +1773,8 @@ typedef struct NV0073_CTRL_CMD_DP_GET_CAPS_PARAMS {
     NvBool                         bFECSupported;
     NvBool                         bIsTrainPhyRepeater;
     NvBool                         bOverrideLinkBw;
+    NvBool                         bUseRgFlushSequence;
+    NvBool                         bSupportDPDownSpread;
     NV0073_CTRL_CMD_DSC_CAP_PARAMS DSC;
 } NV0073_CTRL_CMD_DP_GET_CAPS_PARAMS;
 
@@ -2795,11 +2725,13 @@ typedef struct NV0073_CTRL_CMD_DP_SET_MSA_PROPERTIES_V2_PARAMS {
     NV0073_CTRL_DP_MSA_PROPERTIES_VALUES featureDebugValues;
 } NV0073_CTRL_CMD_DP_SET_MSA_PROPERTIES_V2_PARAMS;
 
+
+
 /*
- * NV0073_CTRL_CMD_DP_EXECUTE_OVERDRIVE_POLICY
+ * NV0073_CTRL_CMD_DP_AUXCH_VBL_CTRL
  *
- * This command is used to execute RM Over Drive policy and decide if TCON Overdrive needs to be enabled
- * or not based on the panel Overdrive grade determined using the panel manufId and prodId.
+ * This command is used to query VBL capability and status as well as
+ * control enable/disable of VBL feature of eDP LCD panels.
  *
  *   subDeviceInstance [in]
  *     This parameter specifies the subdevice instance within the
@@ -2808,33 +2740,51 @@ typedef struct NV0073_CTRL_CMD_DP_SET_MSA_PROPERTIES_V2_PARAMS {
  *     total number of subdevices within the parent device.  This parameter
  *     should be set to zero for default behavior.
  *   displayId [in]
- *     This parameter specifies the ID of the eDP display which owns
- *     the Main Link to be adjusted.  The display ID must a eDP display
+ *     This parameter specifies the ID of the DP display which owns
+ *     the Main Link to be adjusted.  The display ID must a DP display
  *     as determined with the NV0073_CTRL_CMD_SPECIFIC_GET_TYPE command.
- *     If more than one displayId bit is set or the displayId is not an eDP,
+ *     If more than one displayId bit is set or the displayId is not a DP,
  *     this call will return NV_ERR_INVALID_ARGUMENT.
- *   manfId [in]
- *     This parameter is an input to this command which tells the
- *     Internal panel's manufacturer ID.
- *   prodId [in]
- *     This parameter is an input to this command which tells the
- *     Internal panel's product ID.
+ *   cmd [in]
+ *     This parameter is an input to this command.  The cmd parameter tells
+ *     whether we have to get the value of a specific field or set the
+ *     value in case of a writeable field.
+ *   control [in]
+ *     This parameter is input by the user. It is used by the user to decide the control
+ *     value to be written to the VBL control field. The command to write is
+ *     the NV0073_CTRL_CMD_DP_AUXCH_VBL_CTL_SET command.
+ *   bVblControlCapable [out]
+ *     This parameter reflects the VBL control capability of the Sink which can be
+ *     fetched by using the NV0073_CTRL_CMD_DP_AUXCH_VBL_CTL_CAPABLE_QUERY command.
+ *   bVblStatus [out]
+ *     This parameter reflects the Sink VBL status which can be
+ *     fetched by using the NV0073_CTRL_CMD_DP_AUXCH_VBL_STATUS_QUERY command.
  *
  * Possible status values returned are:
  *   NV_OK
  *   NV_ERR_INVALID_ARGUMENT
  *   NV_ERR_NOT_SUPPORTED
  */
-#define NV0073_CTRL_CMD_DP_EXECUTE_OVERDRIVE_POLICY (0x731382U) /* finn: Evaluated from "(FINN_NV04_DISPLAY_COMMON_DP_INTERFACE_ID << 8) | NV0073_CTRL_DP_EXECUTE_OVERDRIVE_POLICY_PARAMS_MESSAGE_ID" */
 
-#define NV0073_CTRL_DP_EXECUTE_OVERDRIVE_POLICY_PARAMS_MESSAGE_ID (0x82U)
+#define NV0073_CTRL_CMD_DP_AUXCH_VBL_CTRL (0x731386U) /* finn: Evaluated from "(FINN_NV04_DISPLAY_COMMON_DP_INTERFACE_ID << 8) | NV0073_CTRL_CMD_DP_AUXCH_VBL_CTRL_PARAMS_MESSAGE_ID" */
 
-typedef struct NV0073_CTRL_DP_EXECUTE_OVERDRIVE_POLICY_PARAMS {
-    NvU32 subDeviceInstance;
-    NvU32 displayId;
-    NvU16 manfId;
-    NvU16 prodId;
-} NV0073_CTRL_DP_EXECUTE_OVERDRIVE_POLICY_PARAMS;
+/* valid commands */
+#define NV0073_CTRL_CMD_DP_AUXCH_QUERY_VBL_CTL_CAPABLE   0x00000000
+#define NV0073_CTRL_CMD_DP_AUXCH_QUERY_VBL_STATUS        0x00000001
+#define NV0073_CTRL_CMD_DP_AUXCH_SET_VBL_CTL             0x00000002
 
+/* valid state values */
+#define NV0073_CTRL_CMD_DP_AUXCH_SET_VBL_CTL_DISABLE     0x00000000
+#define NV0073_CTRL_CMD_DP_AUXCH_SET_VBL_CTL_ENABLE      0x00000001
 
+#define NV0073_CTRL_CMD_DP_AUXCH_VBL_CTRL_PARAMS_MESSAGE_ID (0x86U)
+
+typedef struct NV0073_CTRL_CMD_DP_AUXCH_VBL_CTRL_PARAMS {
+    NvU32  subDeviceInstance;
+    NvU32  displayId;
+    NvU8   cmd;
+    NvU8   control;
+    NvBool bVblControlCapable;
+    NvBool bVblStatus;
+} NV0073_CTRL_CMD_DP_AUXCH_VBL_CTRL_PARAMS;
 /* _ctrl0073dp_h_ */

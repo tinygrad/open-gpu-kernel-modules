@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2022-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -1100,12 +1100,8 @@ _memMulticastFabricDescriptorFree
 
         _memorymulticastfabricBatchDetachMem(pMulticastFabricDesc);
 
-        if (_memMulticastFabricIsPrime(allocFlags))
-        {
-            _memMulticastFabricSendInbandRequest(pNode->pGpu,
-                                pMulticastFabricDesc,
-                                MEM_MULTICAST_FABRIC_TEAM_RELEASE_REQUEST);
-        }
+        _memMulticastFabricSendInbandRequest(pNode->pGpu, pMulticastFabricDesc,
+                                    MEM_MULTICAST_FABRIC_TEAM_RELEASE_REQUEST);
     }
 
     if (pMulticastFabricDesc->bInbandReqInProgress)
@@ -1768,12 +1764,12 @@ _memorymulticastfabricCtrlAttachGpu
         return NV_ERR_STATE_IN_USE;
     }
 
-    if (RMCFG_FEATURE_PLATFORM_WINDOWS ||
-        gpuIsCCFeatureEnabled(pGpu) ||
-        IS_VIRTUAL(pGpu))
+    if (RMCFG_FEATURE_PLATFORM_WINDOWS
+        || gpuIsCCFeatureEnabled(pGpu)
+        )
     {
         NV_PRINTF(LEVEL_ERROR,
-                  "Multicast attach not supported on Windows/CC/vGPU modes\n");
+                  "Multicast attach not supported on Windows/CC modes\n");
         return NV_ERR_NOT_SUPPORTED;
     }
 

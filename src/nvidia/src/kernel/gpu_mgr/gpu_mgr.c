@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -49,6 +49,7 @@
 #include "gpu/conf_compute/conf_compute.h"
 #include "gpu/gpu_fabric_probe.h"
 #include "gpu/mig_mgr/gpu_instance_subscription.h"
+#include "ctrl/ctrlc56f.h"
 
 // local static funcs
 static void   gpumgrSetAttachInfo(OBJGPU *, GPUATTACHARG *);
@@ -188,6 +189,36 @@ _gpumgrDetermineConfComputeCapabilities
     return NV_OK;
 }
 
+static NV_STATUS
+_gpumgrDetermineNvlinkEncryptionCapabilities
+(
+    OBJGPUMGR *pGpuMgr,
+    OBJGPU    *pGpu
+)
+{
+    NvBool bNvlEncryptionEnabled = NV_FALSE;
+    KernelNvlink *pKernelNvlink = GPU_GET_KERNEL_NVLINK(pGpu);
+    bNvlEncryptionEnabled = (pKernelNvlink != NULL) &&
+                             pKernelNvlink->getProperty(pKernelNvlink, PDB_PROP_KNVLINK_ENCRYPTION_ENABLED);
+
+    // First GPU
+    if (ONEBITSET(pGpuMgr->gpuAttachMask))
+    {
+        pGpuMgr->ccCaps.bNvlEncryptionEnabled = bNvlEncryptionEnabled;
+    }
+    else
+    {
+        //
+        // If one of the GPUs is not NVLE capable, the system as a whole
+        // is not NVLE capable
+        //
+        NV_ASSERT_OR_RETURN(pGpuMgr->ccCaps.bNvlEncryptionEnabled ==
+            bNvlEncryptionEnabled, NV_ERR_INVALID_STATE);
+    }
+
+    return NV_OK;
+}
+
 static void
 _gpumgrCacheClearMIGGpuIdInfo(NvU32 gpuId)
 {
@@ -254,6 +285,8 @@ gpumgrConstruct_IMPL(OBJGPUMGR *pGpuMgr)
                         NV_ERR_INSUFFICIENT_RESOURCES);
 
     portMemSet(pGpuMgr->cachedMIGInfo, 0, sizeof(pGpuMgr->cachedMIGInfo));
+
+    pGpuMgr->ccAttackerAdvantage = SECURITY_POLICY_ATTACKER_ADVANTAGE_DEFAULT;
 
     return NV_OK;
 }
@@ -959,12 +992,12 @@ NvBool gpumgrGetRmFirmwareLogsEnabled
 
 void gpumgrGetRmFirmwarePolicy
 (
-    NvU32   chipId,
     NvU32   pmcBoot42,
     NvBool  bIsSoc,
     NvU32   enableFirmwareRegVal,
     NvBool *pbRequestFirmware,
-    NvBool *pbAllowFallbackToMonolithicRm
+    NvBool *pbAllowFallbackToMonolithicRm,
+    NvBool  bIsTccOrMcdm
 )
 {
     NvBool bFirmwareCapable = NV_FALSE;
@@ -976,9 +1009,10 @@ void gpumgrGetRmFirmwarePolicy
     *pbAllowFallbackToMonolithicRm =
         !!(enableFirmwareRegVal & NV_REG_ENABLE_GPU_FIRMWARE_POLICY_ALLOW_FALLBACK);
 
-    bFirmwareCapable = gpumgrIsDeviceRmFirmwareCapable(chipId, pmcBoot42,
+    bFirmwareCapable = gpumgrIsDeviceRmFirmwareCapable(pmcBoot42,
                                                        bIsSoc,
-                                                       &bEnableByDefault);
+                                                       &bEnableByDefault,
+                                                       bIsTccOrMcdm);
 
     *pbRequestFirmware =
         (bFirmwareCapable &&
@@ -988,23 +1022,18 @@ void gpumgrGetRmFirmwarePolicy
 
 static NvBool _gpumgrIsRmFirmwareCapableChip(NvU32 pmcBoot42)
 {
-    return (DRF_VAL(_PMC, _BOOT_42, _ARCHITECTURE, pmcBoot42) >= NV_PMC_BOOT_42_ARCHITECTURE_TU100);
+    return (gpuGetArchitectureFromPmcBoot42(pmcBoot42) >= NV_PMC_BOOT_42_ARCHITECTURE_TU100);
 }
 
 NvBool gpumgrIsVgxRmFirmwareCapableChip(NvU32 pmcBoot42)
 {
-    if (FLD_TEST_DRF(_PMC, _BOOT_42, _ARCHITECTURE, _GH100, pmcBoot42))
+    if (gpuGetArchitectureFromPmcBoot42(pmcBoot42) == NV_PMC_BOOT_42_ARCHITECTURE_GH100)
         return NV_TRUE;
 
-    if (FLD_TEST_DRF(_PMC, _BOOT_42, _ARCHITECTURE, _AD100, pmcBoot42))
+    if (gpuGetArchitectureFromPmcBoot42(pmcBoot42) == NV_PMC_BOOT_42_ARCHITECTURE_AD100)
         return NV_TRUE;
 
     return NV_FALSE;
-}
-
-static NvBool _gpumgrIsRmFirmwareDefaultChip(NvU32 pmcBoot42)
-{
-    return FLD_TEST_DRF(_PMC, _BOOT_42, _ARCHITECTURE, _GH100, pmcBoot42);
 }
 
 static NvBool _gpumgrIsVgxRmFirmwareDefaultChip(NvU32 pmcBoot42)
@@ -1014,10 +1043,10 @@ static NvBool _gpumgrIsVgxRmFirmwareDefaultChip(NvU32 pmcBoot42)
 
 NvBool gpumgrIsDeviceRmFirmwareCapable
 (
-    NvU16 devId,
     NvU32 pmcBoot42,
     NvBool bIsSoc,
-    NvBool *pbEnabledByDefault
+    NvBool *pbEnabledByDefault,
+    NvBool bIsTccOrMcdm
 )
 {
     NvBool bEnabledByDefault = NV_FALSE;
@@ -1042,75 +1071,24 @@ NvBool gpumgrIsDeviceRmFirmwareCapable
     // Disable default enablement for GSP on PowerPC until it is fully tested
     bEnabledByDefault = NV_FALSE;
     goto finish;
-#else
+#endif
+
+    if (hypervisorIsVgxHyper())
     {
-        static const NvU16 defaultGspRmGpus[] = {
-            0x1E37, // GFN
-            0x1E38, // TU102
-            0x1EB4, // T4G
-            0x1EB8, // T4
-            0x1EB9, // T4
-
-            0x20B0, // A100
-            0x20B1, // A100
-            0x20B2, // A100
-            0x20B3, // A200
-            0x20B5, // A100 80GB
-            0x20B6, // A100
-            0x20B7, // A30
-            0x20B8, // A100X SKU230/231 Roy-100
-            0x20B9, // A30X  SKU205/206 Roy-30
-            0x20F0, // A100
-            0x20F1, // A100
-            0x20F2, // A100
-            0x2235, // A40
-            0x2236, // A10   SKU215     Pris-24
-            0x2237, // A10G  SKU215     Pris-24
-            0x25B6, // A16
-            0x20F5, // A800-80
-            0x20F6, // A800-40
-            0x20FD, // A100T RoyB
-
-            0x26B5, // L40
-            0x26B8, // L40G
-            0x26F5, // L40-CNX
-            0x27B7, // L16
-            0x27B8, // L4 (both SKUs)
-        };
-
-        if (hypervisorIsVgxHyper() && _gpumgrIsVgxRmFirmwareDefaultChip(pmcBoot42))
+        if (_gpumgrIsVgxRmFirmwareDefaultChip(pmcBoot42))
         {
             bEnabledByDefault = NV_TRUE;
-        }
-        else if (!hypervisorIsVgxHyper() && _gpumgrIsRmFirmwareDefaultChip(pmcBoot42))
-        {
-            bEnabledByDefault = NV_TRUE;
-        }
-        else if (!hypervisorIsVgxHyper() || RMCFG_FEATURE_PLATFORM_GSP)
-        {
-            for (NvU32 i = 0; i < NV_ARRAY_ELEMENTS(defaultGspRmGpus); i++)
-            {
-                if (defaultGspRmGpus[i] == devId)
-                {
-                    bEnabledByDefault = NV_TRUE;
-                    break;
-                }
-            }
         }
     }
-#endif
+    else
+    {
+        bEnabledByDefault = NV_TRUE;
+    }
 
 finish:
     if (pbEnabledByDefault != NULL)
     {
         *pbEnabledByDefault = bEnabledByDefault;
-
-        if (bEnabledByDefault)
-        {
-            NV_PRINTF(LEVEL_INFO,
-                      "DevId 0x%x is GSP-RM enabled by default\n",
-                      devId);
-        }
     }
 
     return bFirmwareCapable;
@@ -1280,7 +1258,7 @@ _gpumgrCreateGpu(NvU32 gpuInstance, GPUATTACHARG *pAttachArg)
 
     // create OBJGPU with halspec factor initialization value
     status = objCreate(&pGpu, pSys, OBJGPU,
-                    /* ChipHal_arch = */ DRF_VAL(_PMC, _BOOT_42, _ARCHITECTURE, chipId1),
+                    /* ChipHal_arch = */ gpuGetArchitectureFromPmcBoot42(chipId1),
                     /* ChipHal_impl = */ DRF_VAL(_PMC, _BOOT_42, _IMPLEMENTATION, chipId1),
                   /* ChipHal_hidrev = */ hidrev,
           /* RmVariantHal_rmVariant = */ rmVariant,
@@ -1468,6 +1446,9 @@ gpumgrAttachGpu(NvU32 gpuInstance, GPUATTACHARG *pAttachArg)
 
     // Determine conf compute params
     NV_ASSERT_OK_OR_RETURN(_gpumgrDetermineConfComputeCapabilities(pGpuMgr, pGpu));
+
+    // Determine nvlink encryption params
+    NV_ASSERT_OK_OR_RETURN(_gpumgrDetermineNvlinkEncryptionCapabilities(pGpuMgr, pGpu));
 
     if (!IS_GSP_CLIENT(pGpu))
         pGpuMgr->gpuMonolithicRmMask |= NVBIT(gpuInstance);
@@ -2345,7 +2326,14 @@ gpumgrGetGpuIdInfoV2(NV0000_CTRL_GPU_GET_ID_INFO_V2_PARAMS *pGpuInfo)
         return NV_ERR_INVALID_ARGUMENT;
     }
 
-    subDeviceInstance = gpumgrGetSubDeviceInstanceFromGpu(pGpu);
+    if (pGpu->subdeviceInstanceOverrideMask != 0)
+    {
+        subDeviceInstance = BIT_IDX_32(pGpu->subdeviceInstanceOverrideMask);
+    }
+    else
+    {
+        subDeviceInstance = gpumgrGetSubDeviceInstanceFromGpu(pGpu);
+    }
 
     pGpuInfo->gpuInstance = pGpu->gpuInstance;
     pGpuInfo->deviceInstance = deviceInstance;
@@ -3329,7 +3317,8 @@ gpumgrGetSystemNvlinkTopo_IMPL
                 pTopoParams->maxTopoIdx = pGpuMgr->nvlinkTopologyInfo[i].params.maxTopoIdx;
                 for (idx = 0; idx < NV2080_CTRL_CE_MAX_HSHUBS; idx++)
                 {
-                    pTopoParams->pceAvailableMaskPerHshub[idx] = pGpuMgr->nvlinkTopologyInfo[i].params.pceAvailableMaskPerHshub[idx];
+                    pTopoParams->pceAvailableMaskPerConnectingHub[idx] =
+                        pGpuMgr->nvlinkTopologyInfo[i].params.pceAvailableMaskPerConnectingHub[idx];
                 }
             }
             return NV_TRUE;
@@ -3384,7 +3373,8 @@ gpumgrUpdateSystemNvlinkTopo_IMPL
             pGpuMgr->nvlinkTopologyInfo[i].params.maxTopoIdx = pTopoParams->maxTopoIdx;
             for (idx = 0; idx < NV2080_CTRL_CE_MAX_HSHUBS; idx++)
             {
-                pGpuMgr->nvlinkTopologyInfo[i].params.pceAvailableMaskPerHshub[idx] = pTopoParams->pceAvailableMaskPerHshub[idx];
+                pGpuMgr->nvlinkTopologyInfo[i].params.pceAvailableMaskPerConnectingHub[idx] =
+                    pTopoParams->pceAvailableMaskPerConnectingHub[idx];
             }
             return;
         }
@@ -4508,7 +4498,7 @@ NvBool gpumgrIsDeviceMsixAllowed
         return NV_TRUE;
     }
 
-    chipArch = DRF_VAL(_PMC, _BOOT_42, _ARCHITECTURE, pmcBoot42);
+    chipArch = gpuGetArchitectureFromPmcBoot42(pmcBoot42);
     if ((chipArch != NV_PMC_BOOT_42_ARCHITECTURE_AD100) &&
         (chipArch != NV_PMC_BOOT_42_ARCHITECTURE_GA100))
     {

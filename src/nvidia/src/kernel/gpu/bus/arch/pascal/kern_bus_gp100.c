@@ -70,6 +70,11 @@ kbusCreateP2PMapping_GP100
         return kbusCreateP2PMappingForMailbox_HAL(pGpu0, pKernelBus0, pGpu1, pKernelBus1, peer0, peer1, attributes);
     }
 
+    if (FLD_TEST_DRF(_P2PAPI, _ATTRIBUTES, _CONNECTION_TYPE, _PCIE_BAR1, attributes))
+    {
+        return kbusCreateP2PMappingForBar1P2P_GH100(pGpu0, pKernelBus0, pGpu1, pKernelBus1, attributes);
+    }
+
     NV_PRINTF(LEVEL_ERROR, "P2P type %d is not supported\n", DRF_VAL(_P2PAPI, _ATTRIBUTES, _CONNECTION_TYPE, attributes));
 
     return NV_ERR_NOT_SUPPORTED;
@@ -270,11 +275,11 @@ kbusCreateP2PMappingForNvlink_GP100
         NV_PRINTF(LEVEL_INFO, "- P2P: Using Default RM mapping for P2P.\n");
     }
 
+    if (bEgmPeer)
+    {
+        NV_PRINTF(LEVEL_INFO, "EGM peer\n");
+    }
 
-        if (bEgmPeer)
-        {
-            NV_PRINTF(LEVEL_INFO, "EGM peer\n");
-        }
     //
     // Does the mapping already exist between the given pair of GPUs using the peerIDs
     // *peer0 and *peer1 respectively ?
@@ -482,6 +487,7 @@ _kbusRemoveNvlinkPeerMapping
     //    P2P between all the peers is destroyed.
     //    busNvlinkMappingRefcountPerGpu == 0 check is done in this case to remove
     //    the peer id from busNvlinkPeerNumberMask[peerGpuInst]
+    //
     //    Two peer ids are used to reach the same GPU, one for HBM and one for
     //    EGM. In that case busNvlinkMappingRefcountPerGpu isn't going to
     //    reach 0 until both the peer ids are removed. In this case,

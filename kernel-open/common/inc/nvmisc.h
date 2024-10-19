@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2020 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -66,6 +66,9 @@ extern "C" {
 #ifndef NVBIT64
 #define NVBIT64(b)                NVBIT_TYPE(b, NvU64)
 #endif
+
+//Concatenate 2 32bit values to a 64bit value
+#define NV_CONCAT_32_TO_64(hi, lo) ((((NvU64)hi) << 32) | ((NvU64)lo))
 
 // Helper macro's for 32 bit bitmasks
 #define NV_BITMASK32_ELEMENT_SIZE            (sizeof(NvU32) << 3)
@@ -494,6 +497,23 @@ do                                                      \
 //
 #define NV_TWO_N_MINUS_ONE(n) (((1ULL<<(n/2))<<((n+1)/2))-1)
 
+//
+// Create a 64b bitmask with n bits set
+// This is the same as ((1ULL<<n) - 1), but it doesn't overflow for n=64
+//
+// ...
+// n=-1, 0x0000000000000000
+// n=0,  0x0000000000000000
+// n=1,  0x0000000000000001
+// ...
+// n=63, 0x7FFFFFFFFFFFFFFF
+// n=64, 0xFFFFFFFFFFFFFFFF
+// n=65, 0xFFFFFFFFFFFFFFFF
+// n=66, 0xFFFFFFFFFFFFFFFF
+// ...
+//
+#define NV_BITMASK64(n) ((n<1) ? 0ULL : (NV_U64_MAX>>((n>64) ? 0 : (64-n))))
+
 #define DRF_READ_1WORD_BS(d,r,f,v) \
     ((DRF_EXTENT_MW(NV##d##r##f)<8)?DRF_READ_1BYTE_BS(NV##d##r##f,(v)): \
     ((DRF_EXTENT_MW(NV##d##r##f)<16)?DRF_READ_2BYTE_BS(NV##d##r##f,(v)): \
@@ -573,6 +593,13 @@ nvMaskPos32(const NvU32 mask, const NvU32 bitIdx)
 {                                    \
     n32 = BIT_IDX_32(LOWESTBIT(n32));\
 }
+
+// Destructive operation on n64
+#define LOWESTBITIDX_64(n64)         \
+{                                    \
+    n64 = BIT_IDX_64(LOWESTBIT(n64));\
+}
+
 
 // Destructive operation on n32
 #define HIGHESTBITIDX_32(n32)   \
@@ -918,6 +945,11 @@ static NV_FORCEINLINE void *NV_NVUPTR_TO_PTR(NvUPtr address)
 // Use (lo) if (b) is less than 64, and (hi) if >= 64.
 //
 #define NV_BIT_SET_128(b, lo, hi)              { nvAssert( (b) < 128 ); if ( (b) < 64 ) (lo) |= NVBIT64(b); else (hi) |= NVBIT64( b & 0x3F ); }
+//
+// Clear the bit at pos (b) for U64 which is < 128.
+// Use (lo) if (b) is less than 64, and (hi) if >= 64.
+//
+#define NV_BIT_CLEAR_128(b, lo, hi)            { nvAssert( (b) < 128 ); if ( (b) < 64 ) (lo) &= ~NVBIT64(b); else (hi) &= ~NVBIT64( b & 0x3F ); }
 
 // Get the number of elements the specified fixed-size array
 #define NV_ARRAY_ELEMENTS(x)                   ((sizeof(x)/sizeof((x)[0])))

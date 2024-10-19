@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2020-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2020-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -513,7 +513,7 @@ knvlinkCoreSetDlLinkModeCallback
     linkIndex     = pNvlinkLink->linkId;
     pKernelIoctrl = KNVLINK_LINK_GET_IOCTRL(pKernelNvlink, linkIndex);
 
-    if (pKernelIoctrl == NULL)
+    if ((pKernelNvlink->ipVerNvlink < NVLINK_VERSION_50) && (pKernelIoctrl == NULL))
         return 0;
 
     // If link training is disabled through regkey
@@ -556,7 +556,7 @@ knvlinkCoreSetDlLinkModeCallback
             pSetDlLinkModeParams->linkMode =
                 NV2080_NVLINK_CORE_LINK_STATE_INITPHASE1;
 
-            if (pKernelIoctrl->getProperty(pKernelIoctrl, PDB_PROP_KIOCTRL_MINION_CACHE_SEEDS))
+            if ((pKernelIoctrl != NULL) && pKernelIoctrl->getProperty(pKernelIoctrl, PDB_PROP_KIOCTRL_MINION_CACHE_SEEDS))
             {
                 NvU32 *seedDataSrc  = pKernelNvlink->nvlinkLinks[linkIndex].core_link->seedData;
                 NvU32 *seedDataDest =
@@ -689,7 +689,7 @@ knvlinkCoreSetDlLinkModeCallback
         }
         case NVLINK_LINKSTATE_OFF:
         {
-            if (pKernelIoctrl->getProperty(pKernelIoctrl, PDB_PROP_KIOCTRL_MINION_CACHE_SEEDS))
+            if ((pKernelIoctrl != NULL) && pKernelIoctrl->getProperty(pKernelIoctrl, PDB_PROP_KIOCTRL_MINION_CACHE_SEEDS))
             {
                 NvU32 *seedDataSrc  = pSetDlLinkModeParams->linkModeParams.linkModeOffParams.seedData;
                 NvU32 *seedDataDest = pKernelNvlink->nvlinkLinks[linkIndex].core_link->seedData;
@@ -1524,6 +1524,9 @@ knvlinkCoreAliTrainingCallback
     }
 
     pKernelNvlink = GPU_GET_KERNEL_NVLINK(pGpu);
+
+    if (pKernelNvlink->ipVerNvlink >= NVLINK_VERSION_50)
+        return 0;
 
     status = knvlinkPreTrainLinksToActiveAli(pGpu, pKernelNvlink,
                                                  BIT(pNvlinkLink->linkId), NV_TRUE);

@@ -1,13 +1,20 @@
+
 #ifndef _G_RESOURCE_FWD_DECLS_NVOC_H_
 #define _G_RESOURCE_FWD_DECLS_NVOC_H_
 #include "nvoc/runtime.h"
+
+// Version of generated metadata structures
+#ifdef NVOC_METADATA_VERSION
+#undef NVOC_METADATA_VERSION
+#endif
+#define NVOC_METADATA_VERSION 0
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -29,6 +36,7 @@ extern "C" {
  * DEALINGS IN THE SOFTWARE.
  */
 
+#pragma once
 #include "g_resource_fwd_decls_nvoc.h"
 
 #ifndef RESOURCE_FWD_DECLS_H
@@ -40,6 +48,7 @@ extern "C" {
 #include "rmconfig.h"
 
 // Base classes
+
 struct ChannelDescendant;
 
 #ifndef __NVOC_CLASS_ChannelDescendant_TYPEDEF__
@@ -50,6 +59,7 @@ typedef struct ChannelDescendant ChannelDescendant;
 #ifndef __nvoc_class_id_ChannelDescendant
 #define __nvoc_class_id_ChannelDescendant 0x43d7c4
 #endif /* __nvoc_class_id_ChannelDescendant */
+
 
 
 struct DispChannel;
@@ -64,6 +74,7 @@ typedef struct DispChannel DispChannel;
 #endif /* __nvoc_class_id_DispChannel */
 
 
+
 struct GpuResource;
 
 #ifndef __NVOC_CLASS_GpuResource_TYPEDEF__
@@ -74,6 +85,7 @@ typedef struct GpuResource GpuResource;
 #ifndef __nvoc_class_id_GpuResource
 #define __nvoc_class_id_GpuResource 0x5d5d9f
 #endif /* __nvoc_class_id_GpuResource */
+
 
 
 struct INotifier;
@@ -88,6 +100,7 @@ typedef struct INotifier INotifier;
 #endif /* __nvoc_class_id_INotifier */
 
 
+
 struct Memory;
 
 #ifndef __NVOC_CLASS_Memory_TYPEDEF__
@@ -98,6 +111,7 @@ typedef struct Memory Memory;
 #ifndef __nvoc_class_id_Memory
 #define __nvoc_class_id_Memory 0x4789f2
 #endif /* __nvoc_class_id_Memory */
+
 
 
 struct Notifier;
@@ -112,6 +126,7 @@ typedef struct Notifier Notifier;
 #endif /* __nvoc_class_id_Notifier */
 
 
+
 struct NotifShare;
 
 #ifndef __NVOC_CLASS_NotifShare_TYPEDEF__
@@ -122,6 +137,7 @@ typedef struct NotifShare NotifShare;
 #ifndef __nvoc_class_id_NotifShare
 #define __nvoc_class_id_NotifShare 0xd5f150
 #endif /* __nvoc_class_id_NotifShare */
+
 
 
 struct Resource;
@@ -136,6 +152,7 @@ typedef struct Resource Resource;
 #endif /* __nvoc_class_id_Resource */
 
 
+
 struct RmResource;
 
 #ifndef __NVOC_CLASS_RmResource_TYPEDEF__
@@ -146,6 +163,7 @@ typedef struct RmResource RmResource;
 #ifndef __nvoc_class_id_RmResource
 #define __nvoc_class_id_RmResource 0x03610d
 #endif /* __nvoc_class_id_RmResource */
+
 
 
 struct RmResourceCommon;
@@ -160,6 +178,7 @@ typedef struct RmResourceCommon RmResourceCommon;
 #endif /* __nvoc_class_id_RmResourceCommon */
 
 
+
 struct RsResource;
 
 #ifndef __NVOC_CLASS_RsResource_TYPEDEF__
@@ -170,6 +189,7 @@ typedef struct RsResource RsResource;
 #ifndef __nvoc_class_id_RsResource
 #define __nvoc_class_id_RsResource 0xd551cb
 #endif /* __nvoc_class_id_RsResource */
+
 
 
 struct RsShared;
@@ -186,6 +206,7 @@ typedef struct RsShared RsShared;
 
 
 // Classes disabled in orin but required forward declarations to build.
+
 struct HostVgpuDeviceApi;
 
 #ifndef __NVOC_CLASS_HostVgpuDeviceApi_TYPEDEF__
@@ -198,6 +219,7 @@ typedef struct HostVgpuDeviceApi HostVgpuDeviceApi;
 #endif /* __nvoc_class_id_HostVgpuDeviceApi */
 
  // also used by open rm
+
 struct MpsApi;
 
 #ifndef __NVOC_CLASS_MpsApi_TYPEDEF__
@@ -208,6 +230,7 @@ typedef struct MpsApi MpsApi;
 #ifndef __nvoc_class_id_MpsApi
 #define __nvoc_class_id_MpsApi 0x22ce42
 #endif /* __nvoc_class_id_MpsApi */
+
 
 
 struct MIGConfigSession;
@@ -222,6 +245,7 @@ typedef struct MIGConfigSession MIGConfigSession;
 #endif /* __nvoc_class_id_MIGConfigSession */
 
 
+
 struct FmSessionApi;
 
 #ifndef __NVOC_CLASS_FmSessionApi_TYPEDEF__
@@ -232,6 +256,7 @@ typedef struct FmSessionApi FmSessionApi;
 #ifndef __nvoc_class_id_FmSessionApi
 #define __nvoc_class_id_FmSessionApi 0xdfbd08
 #endif /* __nvoc_class_id_FmSessionApi */
+
 
 
 struct MIGMonitorSession;
@@ -246,6 +271,7 @@ typedef struct MIGMonitorSession MIGMonitorSession;
 #endif /* __nvoc_class_id_MIGMonitorSession */
 
 
+
 struct TimerApi;
 
 #ifndef __NVOC_CLASS_TimerApi_TYPEDEF__
@@ -256,6 +282,7 @@ typedef struct TimerApi TimerApi;
 #ifndef __nvoc_class_id_TimerApi
 #define __nvoc_class_id_TimerApi 0xb13ac4
 #endif /* __nvoc_class_id_TimerApi */
+
 
 
 struct KernelSMDebuggerSession;
@@ -1206,10 +1233,39 @@ typedef struct KernelCcuApi KernelCcuApi;
 #define __nvoc_class_id_KernelCcuApi 0x3abed3
 #endif /* __nvoc_class_id_KernelCcuApi */
 
+struct CeUtilsApi;
+
+#ifndef __NVOC_CLASS_CeUtilsApi_TYPEDEF__
+#define __NVOC_CLASS_CeUtilsApi_TYPEDEF__
+typedef struct CeUtilsApi CeUtilsApi;
+#endif /* __NVOC_CLASS_CeUtilsApi_TYPEDEF__ */
+
+#ifndef __nvoc_class_id_CeUtilsApi
+#define __nvoc_class_id_CeUtilsApi 0x2eb528
+#endif /* __nvoc_class_id_CeUtilsApi */
+
+struct LockStressObject;
+
+#ifndef __NVOC_CLASS_LockStressObject_TYPEDEF__
+#define __NVOC_CLASS_LockStressObject_TYPEDEF__
+typedef struct LockStressObject LockStressObject;
+#endif /* __NVOC_CLASS_LockStressObject_TYPEDEF__ */
+
+#ifndef __nvoc_class_id_LockStressObject
+#define __nvoc_class_id_LockStressObject 0xecce10
+#endif /* __nvoc_class_id_LockStressObject */
+
+
 
 struct NVOCFwdDeclHack {
+
+    // Metadata
     const struct NVOC_RTTI *__nvoc_rtti;
-    struct NVOCFwdDeclHack *__nvoc_pbase_NVOCFwdDeclHack;
+
+    // Ancestor object pointers for `staticCast` feature
+    struct NVOCFwdDeclHack *__nvoc_pbase_NVOCFwdDeclHack;    // nvocfwddeclhack
+
+    // Data members
     struct RmClientResource *PRIVATE_FIELD(RmClientResource_NV01_ROOT);
     struct RmClientResource *PRIVATE_FIELD(RmClientResource_NV01_ROOT_NON_PRIV);
     struct RmClientResource *PRIVATE_FIELD(RmClientResource_NV01_ROOT_CLIENT);
@@ -1238,6 +1294,7 @@ struct NVOCFwdDeclHack {
     struct KernelChannel *PRIVATE_FIELD(KernelChannel_TURING_CHANNEL_GPFIFO_A);
     struct KernelChannel *PRIVATE_FIELD(KernelChannel_AMPERE_CHANNEL_GPFIFO_A);
     struct KernelChannel *PRIVATE_FIELD(KernelChannel_HOPPER_CHANNEL_GPFIFO_A);
+    struct KernelChannel *PRIVATE_FIELD(KernelChannel_BLACKWELL_CHANNEL_GPFIFO_A);
     struct UvmChannelRetainer *PRIVATE_FIELD(UvmChannelRetainer_UVM_CHANNEL_RETAINER);
     struct KernelCtxShareApi *PRIVATE_FIELD(KernelCtxShareApi_FERMI_CONTEXT_SHARE_A);
     struct KernelGraphicsContext *PRIVATE_FIELD(KernelGraphicsContext_KERNEL_GRAPHICS_CONTEXT);
@@ -1325,18 +1382,22 @@ struct NVOCFwdDeclHack {
     struct KernelCeContext *PRIVATE_FIELD(KernelCeContext_AMPERE_DMA_COPY_A);
     struct KernelCeContext *PRIVATE_FIELD(KernelCeContext_AMPERE_DMA_COPY_B);
     struct KernelCeContext *PRIVATE_FIELD(KernelCeContext_HOPPER_DMA_COPY_A);
+    struct KernelCeContext *PRIVATE_FIELD(KernelCeContext_BLACKWELL_DMA_COPY_A);
     struct NvdecContext *PRIVATE_FIELD(NvdecContext_NVB8B0_VIDEO_DECODER);
     struct NvdecContext *PRIVATE_FIELD(NvdecContext_NVC4B0_VIDEO_DECODER);
     struct NvdecContext *PRIVATE_FIELD(NvdecContext_NVC6B0_VIDEO_DECODER);
     struct NvdecContext *PRIVATE_FIELD(NvdecContext_NVC7B0_VIDEO_DECODER);
     struct NvdecContext *PRIVATE_FIELD(NvdecContext_NVC9B0_VIDEO_DECODER);
+    struct NvdecContext *PRIVATE_FIELD(NvdecContext_NVCDB0_VIDEO_DECODER);
     struct NvjpgContext *PRIVATE_FIELD(NvjpgContext_NVB8D1_VIDEO_NVJPG);
     struct NvjpgContext *PRIVATE_FIELD(NvjpgContext_NVC4D1_VIDEO_NVJPG);
     struct NvjpgContext *PRIVATE_FIELD(NvjpgContext_NVC9D1_VIDEO_NVJPG);
+    struct NvjpgContext *PRIVATE_FIELD(NvjpgContext_NVCDD1_VIDEO_NVJPG);
     struct OfaContext *PRIVATE_FIELD(OfaContext_NVB8FA_VIDEO_OFA);
     struct OfaContext *PRIVATE_FIELD(OfaContext_NVC6FA_VIDEO_OFA);
     struct OfaContext *PRIVATE_FIELD(OfaContext_NVC7FA_VIDEO_OFA);
     struct OfaContext *PRIVATE_FIELD(OfaContext_NVC9FA_VIDEO_OFA);
+    struct OfaContext *PRIVATE_FIELD(OfaContext_NVCDFA_VIDEO_OFA);
     struct MsencContext *PRIVATE_FIELD(MsencContext_NVC4B7_VIDEO_ENCODER);
     struct MsencContext *PRIVATE_FIELD(MsencContext_NVB4B7_VIDEO_ENCODER);
     struct MsencContext *PRIVATE_FIELD(MsencContext_NVC7B7_VIDEO_ENCODER);
@@ -1350,6 +1411,9 @@ struct NVOCFwdDeclHack {
     struct KernelGraphicsObject *PRIVATE_FIELD(KernelGraphicsObject_ADA_COMPUTE_A);
     struct KernelGraphicsObject *PRIVATE_FIELD(KernelGraphicsObject_HOPPER_A);
     struct KernelGraphicsObject *PRIVATE_FIELD(KernelGraphicsObject_HOPPER_COMPUTE_A);
+    struct KernelGraphicsObject *PRIVATE_FIELD(KernelGraphicsObject_BLACKWELL_A);
+    struct KernelGraphicsObject *PRIVATE_FIELD(KernelGraphicsObject_BLACKWELL_COMPUTE_A);
+    struct KernelGraphicsObject *PRIVATE_FIELD(KernelGraphicsObject_BLACKWELL_INLINE_TO_MEMORY_A);
     struct KernelGraphicsObject *PRIVATE_FIELD(KernelGraphicsObject_FERMI_TWOD_A);
     struct KernelGraphicsObject *PRIVATE_FIELD(KernelGraphicsObject_KEPLER_INLINE_TO_MEMORY_B);
     struct KernelGraphicsObject *PRIVATE_FIELD(KernelGraphicsObject_TURING_A);
@@ -1361,6 +1425,8 @@ struct NVOCFwdDeclHack {
     struct Event *PRIVATE_FIELD(Event_NV01_EVENT_KERNEL_CALLBACK_EX);
     struct ConfidentialComputeApi *PRIVATE_FIELD(ConfidentialComputeApi_NV_CONFIDENTIAL_COMPUTE);
     struct KernelCcuApi *PRIVATE_FIELD(KernelCcuApi_NV_COUNTER_COLLECTION_UNIT);
+    struct CeUtilsApi *PRIVATE_FIELD(CeUtilsApi_NV_CE_UTILS);
+    struct LockStressObject *PRIVATE_FIELD(LockStressObject_LOCK_STRESS_OBJECT);
 };
 
 #ifndef __NVOC_CLASS_NVOCFwdDeclHack_TYPEDEF__
@@ -1372,6 +1438,7 @@ typedef struct NVOCFwdDeclHack NVOCFwdDeclHack;
 #define __nvoc_class_id_NVOCFwdDeclHack 0x0d01f5
 #endif /* __nvoc_class_id_NVOCFwdDeclHack */
 
+// Casting support
 extern const struct NVOC_CLASS_DEF __nvoc_class_def_NVOCFwdDeclHack;
 
 #define __staticCast_NVOCFwdDeclHack(pThis) \
@@ -1383,7 +1450,6 @@ extern const struct NVOC_CLASS_DEF __nvoc_class_def_NVOCFwdDeclHack;
 #define __dynamicCast_NVOCFwdDeclHack(pThis) \
     ((NVOCFwdDeclHack*)__nvoc_dynamicCast(staticCast((pThis), Dynamic), classInfo(NVOCFwdDeclHack)))
 #endif //__nvoc_resource_fwd_decls_h_disabled
-
 
 NV_STATUS __nvoc_objCreateDynamic_NVOCFwdDeclHack(NVOCFwdDeclHack**, Dynamic*, NvU32, va_list);
 

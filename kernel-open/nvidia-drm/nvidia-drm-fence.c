@@ -293,14 +293,12 @@ __nv_drm_prime_fence_context_new(
      * to check a return value.
      */
 
-    *nv_prime_fence_context = (struct nv_drm_prime_fence_context) {
-        .base.ops = &nv_drm_prime_fence_context_ops,
-        .base.nv_dev = nv_dev,
-        .base.context = nv_dma_fence_context_alloc(1),
-        .base.fenceSemIndex = p->index,
-        .pSemSurface = pSemSurface,
-        .pLinearAddress = pLinearAddress,
-    };
+    nv_prime_fence_context->base.ops = &nv_drm_prime_fence_context_ops;
+    nv_prime_fence_context->base.nv_dev = nv_dev;
+    nv_prime_fence_context->base.context = nv_dma_fence_context_alloc(1);
+    nv_prime_fence_context->base.fenceSemIndex = p->index;
+    nv_prime_fence_context->pSemSurface = pSemSurface;
+    nv_prime_fence_context->pLinearAddress = pLinearAddress;
 
     INIT_LIST_HEAD(&nv_prime_fence_context->pending);
 
@@ -465,9 +463,14 @@ int nv_drm_prime_fence_context_create_ioctl(struct drm_device *dev,
 {
     struct nv_drm_device *nv_dev = to_nv_device(dev);
     struct drm_nvidia_prime_fence_context_create_params *p = data;
-    struct nv_drm_prime_fence_context *nv_prime_fence_context =
-        __nv_drm_prime_fence_context_new(nv_dev, p);
+    struct nv_drm_prime_fence_context *nv_prime_fence_context;
     int err;
+
+    if (nv_dev->pDevice == NULL) {
+        return -EOPNOTSUPP;
+    }
+
+    nv_prime_fence_context = __nv_drm_prime_fence_context_new(nv_dev, p);
 
     if (!nv_prime_fence_context) {
         goto done;
@@ -522,6 +525,11 @@ int nv_drm_gem_prime_fence_attach_ioctl(struct drm_device *dev,
     struct nv_drm_gem_object *nv_gem;
     struct nv_drm_fence_context *nv_fence_context;
     nv_dma_fence_t *fence;
+
+    if (nv_dev->pDevice == NULL) {
+        ret = -EOPNOTSUPP;
+        goto done;
+    }
 
     if (p->__pad != 0) {
         NV_DRM_DEV_LOG_ERR(nv_dev, "Padding fields must be zeroed");
@@ -1261,18 +1269,16 @@ __nv_drm_semsurf_fence_ctx_new(
      * to check a return value.
      */
 
-    *ctx = (struct nv_drm_semsurf_fence_ctx) {
-        .base.ops = &nv_drm_semsurf_fence_ctx_ops,
-        .base.nv_dev = nv_dev,
-        .base.context = nv_dma_fence_context_alloc(1),
-        .base.fenceSemIndex = p->index,
-        .pSemSurface = pSemSurface,
-        .pSemMapping.pVoid = semMapping,
-        .pMaxSubmittedMapping = (volatile NvU64 *)maxSubmittedMapping,
-        .callback.local = NULL,
-        .callback.nvKms = NULL,
-        .current_wait_value = 0,
-    };
+    ctx->base.ops = &nv_drm_semsurf_fence_ctx_ops;
+    ctx->base.nv_dev = nv_dev;
+    ctx->base.context = nv_dma_fence_context_alloc(1);
+    ctx->base.fenceSemIndex = p->index;
+    ctx->pSemSurface = pSemSurface;
+    ctx->pSemMapping.pVoid = semMapping;
+    ctx->pMaxSubmittedMapping = (volatile NvU64 *)maxSubmittedMapping;
+    ctx->callback.local = NULL;
+    ctx->callback.nvKms = NULL;
+    ctx->current_wait_value = 0;
 
     spin_lock_init(&ctx->lock);
     INIT_LIST_HEAD(&ctx->pending_fences);
@@ -1311,6 +1317,10 @@ int nv_drm_semsurf_fence_ctx_create_ioctl(struct drm_device *dev,
     struct drm_nvidia_semsurf_fence_ctx_create_params *p = data;
     struct nv_drm_semsurf_fence_ctx *ctx;
     int err;
+
+    if (nv_dev->pDevice == NULL) {
+        return -EOPNOTSUPP;
+    }
 
     if (p->__pad != 0) {
         NV_DRM_DEV_LOG_ERR(nv_dev, "Padding fields must be zeroed");
@@ -1472,6 +1482,11 @@ int nv_drm_semsurf_fence_create_ioctl(struct drm_device *dev,
     nv_dma_fence_t *fence;
     int ret = -EINVAL;
     int fd;
+
+    if (nv_dev->pDevice == NULL) {
+        ret = -EOPNOTSUPP;
+        goto done;
+    }
 
     if (p->__pad != 0) {
         NV_DRM_DEV_LOG_ERR(nv_dev, "Padding fields must be zeroed");
@@ -1635,6 +1650,10 @@ int nv_drm_semsurf_fence_wait_ioctl(struct drm_device *dev,
     unsigned long flags;
     int ret = -EINVAL;
 
+    if (nv_dev->pDevice == NULL) {
+        return -EOPNOTSUPP;
+    }
+
     if (p->pre_wait_value >= p->post_wait_value) {
         NV_DRM_DEV_LOG_ERR(
             nv_dev,
@@ -1742,6 +1761,11 @@ int nv_drm_semsurf_fence_attach_ioctl(struct drm_device *dev,
     struct nv_drm_fence_context *nv_fence_context = NULL;
     nv_dma_fence_t *fence;
     int ret = -EINVAL;
+
+    if (nv_dev->pDevice == NULL) {
+        ret = -EOPNOTSUPP;
+        goto done;
+    }
 
     nv_gem = nv_drm_gem_object_lookup(nv_dev->dev, filep, p->handle);
 

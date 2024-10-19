@@ -39,6 +39,7 @@
 #include "core/system.h"
 #include "vgpu/vgpu_util.h"
 #include "platform/sli/sli.h"
+#include "resserv/rs_client.h"
 
 #include "gpu/mem_mgr/virt_mem_allocator.h"
 
@@ -58,7 +59,6 @@
 
 #include "nvrm_registry.h" // For memdescOverrideInstLoc*()
 
-#include "deprecated/rmapi_deprecated.h"
 #include "rmapi/rmapi.h"
 #include "rmapi/rs_utils.h"
 #include "class/cl0071.h" // NV01_MEMORY_SYSTEM_OS_DESCRIPTOR
@@ -805,6 +805,7 @@ _memdescAllocInternal
             {
                 goto done;
             }
+
             if (memdescIsEgm(pMemDesc))
             {
                 NV_ASSERT_OK_OR_GOTO(status,
@@ -1370,19 +1371,6 @@ memdescAlloc
         gpumgrSetBcEnabledStatus(pGpu, bcState);
     }
 
-    if ((status == NV_OK) &&
-        IS_VIRTUAL_WITH_SRIOV(pGpu) &&
-        !gpuIsWarBug200577889SriovHeavyEnabled(pGpu) &&
-        (pMemDesc->_addressSpace == ADDR_SYSMEM) &&
-        !(pMemDesc->_flags & MEMDESC_FLAGS_CPU_ONLY))
-    {
-        status = vgpuUpdateSysmemPfnBitMap(pGpu, pMemDesc, NV_TRUE);
-        if (status != NV_OK)
-        {
-            NV_PRINTF(LEVEL_INFO, "Failed to update sysmem PFN bitmap, error 0x%x\n", status);
-        }
-    }
-
     return status;
 
 subdeviceAlloc_failed:
@@ -1621,8 +1609,8 @@ memdescFree
         }
 
         if (pMemDesc->_addressSpace != ADDR_FBMEM &&
-            pMemDesc->_addressSpace != ADDR_EGM &&
-            pMemDesc->_addressSpace != ADDR_SYSMEM)
+            pMemDesc->_addressSpace != ADDR_SYSMEM &&
+            pMemDesc->_addressSpace != ADDR_EGM)
         {
             return;
         }
@@ -1645,24 +1633,6 @@ memdescFree
 
         if (!pMemDesc->Allocated)
         {
-            /*
-             * For sysmem not allocated by RM but only registered to it, we
-             * would need to update the shared sysmem pfn bitmap here
-             */
-            if (pMemDesc->pGpu && IS_VIRTUAL_WITH_SRIOV(pMemDesc->pGpu) &&
-                !gpuIsWarBug200577889SriovHeavyEnabled(pMemDesc->pGpu) &&
-                !(pMemDesc->_flags & MEMDESC_FLAGS_CPU_ONLY))
-            {
-                if (memdescGetFlag(pMemDesc, MEMDESC_FLAGS_EXT_PAGE_ARRAY_MEM) &&
-                    (pMemDesc->_addressSpace == ADDR_SYSMEM))
-                {
-                    NV_STATUS status = vgpuUpdateSysmemPfnBitMap(pMemDesc->pGpu, pMemDesc, NV_FALSE);
-                    if (status != NV_OK)
-                    {
-                        NV_PRINTF(LEVEL_INFO, "Failed to update sysmem PFN bitmap\n");
-                    }
-                }
-            }
             return;
         }
         pMemDesc->Allocated--;
@@ -1683,16 +1653,6 @@ memdescFree
 
         if (pMemDesc->_addressSpace == ADDR_SYSMEM)
         {
-            if (pMemDesc->pGpu && IS_VIRTUAL_WITH_SRIOV(pMemDesc->pGpu) &&
-                !gpuIsWarBug200577889SriovHeavyEnabled(pMemDesc->pGpu) &&
-                !(pMemDesc->_flags & MEMDESC_FLAGS_CPU_ONLY))
-            {
-                NV_STATUS status = vgpuUpdateSysmemPfnBitMap(pMemDesc->pGpu, pMemDesc, NV_FALSE);
-                if (status != NV_OK)
-                {
-                    NV_PRINTF(LEVEL_INFO, "Failed to update sysmem PFN bitmap\n");
-                }
-            }
             // The memdesc is being freed so destroy all of its IOMMU mappings.
             _memdescFreeIommuMappings(pMemDesc);
         }
@@ -1895,21 +1855,16 @@ memdescMap
 
             if (bCoherentCpuMapping)
             {
-                NV_ASSERT(pMemDesc->_flags & MEMDESC_FLAGS_PHYSICALLY_CONTIGUOUS);
-
                 if (Kernel)
                 {
-                    NvP64 tempCpuPtr = kbusMapCoherentCpuMapping_HAL(pGpu, pKernelBus, pMemDesc);
-                    if (tempCpuPtr == NULL)
-                    {
-                        status = NV_ERR_GENERIC;
-                    }
-                    else
-                    {
-                        status = NV_OK;
-                        tempCpuPtr = NvP64_PLUS_OFFSET(tempCpuPtr, Offset);
-                    }
-                    *pAddress = tempCpuPtr;
+                    status = kbusMapCoherentCpuMapping_HAL(pGpu,
+                                                           pKernelBus,
+                                                           pMemDesc,
+                                                           Offset,
+                                                           Size,
+                                                           Protect,
+                                                           pAddress,
+                                                           &pMapping->pPriv);
                 }
                 else
                 {
@@ -1942,12 +1897,12 @@ memdescMap
 
             // Determine where in BAR1 the mapping will go
             pMapping->FbApertureLen = Size;
-            status = kbusMapFbAperture_HAL(pGpu, pKernelBus,
-                                           pMemDesc, Offset,
-                                           &pMapping->FbAperture,
-                                           &pMapping->FbApertureLen,
-                                           BUS_MAP_FB_FLAGS_MAP_UNICAST,
-                                           NULL);
+            status = kbusMapFbApertureSingle(pGpu, pKernelBus,
+                                             pMemDesc, Offset,
+                                             &pMapping->FbAperture,
+                                             &pMapping->FbApertureLen,
+                                             BUS_MAP_FB_FLAGS_MAP_UNICAST,
+                                             NULL);
             if (status != NV_OK)
             {
                 portMemFree(pMapping);
@@ -1976,10 +1931,10 @@ memdescMap
             {
                 if (!bCoherentCpuMapping)
                 {
-                    kbusUnmapFbAperture_HAL(pGpu, pKernelBus, pMemDesc,
-                                            pMapping->FbAperture,
-                                            pMapping->FbApertureLen,
-                                            BUS_MAP_FB_FLAGS_MAP_UNICAST);
+                    kbusUnmapFbApertureSingle(pGpu, pKernelBus, pMemDesc,
+                                              pMapping->FbAperture,
+                                              pMapping->FbApertureLen,
+                                              BUS_MAP_FB_FLAGS_MAP_UNICAST);
                 }
                 portMemFree(pMapping);
                 return status;
@@ -2070,7 +2025,7 @@ memdescUnmap
             {
                 if (Kernel)
                 {
-                    kbusUnmapCoherentCpuMapping_HAL(pGpu, pKernelBus, pMemDesc);
+                    kbusUnmapCoherentCpuMapping_HAL(pGpu, pKernelBus, pMemDesc, Address, pMapping->pPriv);
                 }
                 else
                 {
@@ -2082,10 +2037,10 @@ memdescUnmap
                 break;
             }
 
-            kbusUnmapFbAperture_HAL(pGpu, pKernelBus, pMemDesc,
-                                    pMapping->FbAperture,
-                                    Size,
-                                    BUS_MAP_FB_FLAGS_MAP_UNICAST);
+            kbusUnmapFbApertureSingle(pGpu, pKernelBus, pMemDesc,
+                                      pMapping->FbAperture,
+                                      Size,
+                                      BUS_MAP_FB_FLAGS_MAP_UNICAST);
             if (Kernel)
             {
                 osUnmapPciMemoryKernel64(pGpu, Address);
@@ -2251,13 +2206,20 @@ memdescMapInternal
         case MEMDESC_MAP_INTERNAL_TYPE_COHERENT_FBMEM:
         {
             NV_ASSERT(pGpu->getProperty(pGpu, PDB_PROP_GPU_ATS_SUPPORTED));
-            pMemDesc->_pInternalMapping = kbusMapCoherentCpuMapping_HAL(pGpu, GPU_GET_KERNEL_BUS(pGpu), pMemDesc);
-            NV_CHECK_OR_RETURN(LEVEL_ERROR, pMemDesc->_pInternalMapping != NULL, NULL);
+            status = kbusMapCoherentCpuMapping_HAL(pGpu,
+                                                   GPU_GET_KERNEL_BUS(pGpu),
+                                                   pMemDesc,
+                                                   0,
+                                                   memdescGetSize(pMemDesc),
+                                                   NV_PROTECT_READ_WRITE,
+                                                   &pMemDesc->_pInternalMapping,
+                                                   &pMemDesc->_pInternalMappingPriv);
+            NV_CHECK_OR_RETURN(LEVEL_ERROR, status == NV_OK, NULL);
             break;
         }
         case MEMDESC_MAP_INTERNAL_TYPE_BAR2:
             pMemDesc->_pInternalMapping = kbusMapBar2Aperture_HAL(pGpu, GPU_GET_KERNEL_BUS(pGpu), pMemDesc, flags);
-            NV_CHECK_OR_RETURN(LEVEL_ERROR, pMemDesc->_pInternalMapping != NULL, NULL);
+            NV_CHECK_OR_RETURN(LEVEL_INFO, pMemDesc->_pInternalMapping != NULL, NULL);
             break;
 
         default:
@@ -2305,7 +2267,8 @@ void memdescUnmapInternal
 
             case MEMDESC_MAP_INTERNAL_TYPE_COHERENT_FBMEM:
             {
-                kbusUnmapCoherentCpuMapping_HAL(pGpu, GPU_GET_KERNEL_BUS(pGpu), pMemDesc);
+                kbusUnmapCoherentCpuMapping_HAL(pGpu, GPU_GET_KERNEL_BUS(pGpu), pMemDesc,
+                                                pMemDesc->_pInternalMapping, pMemDesc->_pInternalMappingPriv);
                 break;
             }
             case MEMDESC_MAP_INTERNAL_TYPE_BAR2:
@@ -2715,6 +2678,7 @@ memdescCreateSubMem
         RmPhysAddr Base = pMemDesc->_pteArray[0] + pMemDesc->PteAdjust + Offset;
         pMemDescNew->_pteArray[0] = Base & ~pageArrayGranularityMask;
         pMemDescNew->PteAdjust   = NvU64_LO32(Base) & pageArrayGranularityMask;
+
         if (memdescIsEgm(pMemDesc))
         {
             NV_ASSERT_OK_OR_GOTO(status,
@@ -2762,6 +2726,7 @@ memdescCreateSubMem
                     pMemDescNew->_pteArray[i] = pMemDescNew->_pteArray[i - 1] + pMemDescNew->pageArrayGranularity;
                 }
             }
+
             if (memdescIsEgm(pMemDesc))
             {
                 NV_ASSERT_OK_OR_GOTO(status,
@@ -3221,13 +3186,12 @@ memdescGetPteArrayForGpu
                 {
                     return pMemDesc->pPteEgmMappings;
                 }
+
+                PIOVAMAPPING pIovaMap = memdescGetIommuMap(pMemDesc,
+                                            pGpu->busInfo.iovaspaceId);
+                if (pIovaMap != NULL)
                 {
-                    PIOVAMAPPING pIovaMap = memdescGetIommuMap(pMemDesc,
-                                                pGpu->busInfo.iovaspaceId);
-                    if (pIovaMap != NULL)
-                    {
-                        return pIovaMap->iovaArray;
-                    }
+                    return pIovaMap->iovaArray;
                 }
             }
 
@@ -4559,7 +4523,14 @@ NV_STATUS memdescGetNvLinkGpa
     // For each page, do the GPU PA to GPA conversion
     for (pageIndex = 0; pageIndex < pageCount; pageIndex++)
     {
-        pGpa[pageIndex] += pKernelMemorySystem->coherentCpuFbBase;
+        RmPhysAddr gpa;
+        gpa = pGpa[pageIndex] + pKernelMemorySystem->coherentCpuFbBase;
+
+        NV_ASSERT_OR_RETURN((gpa >= pKernelMemorySystem->coherentCpuFbBase) &&
+                            (gpa <= pKernelMemorySystem->coherentCpuFbEnd),
+                            NV_ERR_INVALID_ARGUMENT);
+
+        pGpa[pageIndex] = gpa;
     }
 
     return NV_OK;
@@ -4674,154 +4645,6 @@ memdescOverridePhysicalAddressWidthWindowsWAR
     }
 }
 
-/*!
-*  @brief Register MEMDESC to GSP
-*  Life of the registration: until memdescDeregisterFromGSP is called,
-*  always occurs when the memory is freed.
-*  <GSP-TODO>  Have argument as pMemory*; Move to NVOC
-*
-*  @param[in]  pGpu
-*  @param[in]  hClient    NvHandle
-*  @param[in]  hDevice    NvHandle
-*  @param[in]  hMemory    NvHandle
-*
-*  @returns NV_STATUS
-*/
-NV_STATUS
-memdescRegisterToGSP
-(
-    OBJGPU            *pGpu,
-    NvHandle           hClient,
-    NvHandle           hParent,
-    NvHandle           hMemory
-)
-{
-    NV_STATUS          status     = NV_OK;
-    Memory            *pMemory    = NULL;
-    RsResourceRef     *pMemoryRef = NULL;
-    MEMORY_DESCRIPTOR *pMemDesc   = NULL;
-    NvU32              hClass;
-
-    // Nothing to do without GSP
-    if (!IS_GSP_CLIENT(pGpu))
-    {
-        return NV_OK;
-    }
-
-    NV_CHECK_OK_OR_RETURN(LEVEL_ERROR, serverutilGetResourceRef(hClient, hMemory, &pMemoryRef));
-
-    pMemory = dynamicCast(pMemoryRef->pResource, Memory);
-    NV_CHECK_OR_RETURN(LEVEL_ERROR, pMemory != NULL, NV_ERR_INVALID_OBJECT);
-
-    pMemDesc = pMemory->pMemDesc;
-
-    // Check: memory already registered
-    if ((pMemDesc->_flags & MEMDESC_FLAGS_REGISTERED_TO_GSP) != 0)
-    {
-        return NV_OK;
-    }
-
-    // Check:  no subdevice memDescs
-    NV_CHECK_OR_RETURN(LEVEL_ERROR,
-                       !memdescHasSubDeviceMemDescs(pMemDesc),
-                       NV_ERR_INVALID_STATE);
-
-    // Check: SYSMEM or FBMEM only
-    if (memdescGetAddressSpace(pMemDesc) == ADDR_FBMEM)
-        hClass = NV01_MEMORY_LIST_FBMEM;
-    else if  (memdescGetAddressSpace(pMemDesc) == ADDR_SYSMEM)
-        hClass = NV01_MEMORY_LIST_SYSTEM;
-    else
-        return NV_ERR_INVALID_STATE;
-
-    NvU32 os02Flags = 0;
-
-    NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
-                          RmDeprecatedConvertOs32ToOs02Flags(pMemory->Attr,
-                                                             pMemory->Attr2,
-                                                             pMemory->Flags,
-                                                             &os02Flags));
-    NV_RM_RPC_ALLOC_MEMORY(pGpu,
-                           hClient,
-                           hParent,
-                           hMemory,
-                           hClass,
-                           os02Flags,
-                           pMemDesc,
-                           status);
-
-    if (status == NV_OK)
-    {
-        // Mark memory as registered in GSP
-        pMemDesc->_flags |= MEMDESC_FLAGS_REGISTERED_TO_GSP;
-    }
-
-    return status;
-}
-
-
-/*!
-*  @brief Deregister MEMDESC from GSP
-*   Is always called when the memory is freed.
-*  <GSP-TODO>  Have argument as pMemory*; Move to NVOC
-*
-*  @param[in]  pGpu
-*  @param[in]  hClient    NvHandle
-*  @param[in]  hParent    NvHandle
-*  @param[in]  hMemory    NvHandle
-*
-*  @returns NV_STATUS
-*/
-NV_STATUS
-memdescDeregisterFromGSP
-(
-    OBJGPU            *pGpu,
-    NvHandle           hClient,
-    NvHandle           hParent,
-    NvHandle           hMemory
-)
-{
-    NV_STATUS status = NV_OK;
-    Memory            *pMemory    = NULL;
-    RsResourceRef     *pMemoryRef = NULL;
-    MEMORY_DESCRIPTOR *pMemDesc   = NULL;
-
-    // Nothing to do without GSP
-    if ((pGpu == NULL) ||
-        !IS_GSP_CLIENT(pGpu))
-    {
-        return NV_OK;
-    }
-
-    NV_CHECK_OK_OR_RETURN(LEVEL_ERROR, serverutilGetResourceRef(hClient, hMemory, &pMemoryRef));
-
-    pMemory = dynamicCast(pMemoryRef->pResource, Memory);
-    NV_CHECK_OR_RETURN(LEVEL_ERROR, pMemory != NULL, NV_ERR_INVALID_OBJECT);
-
-    pMemDesc = pMemory->pMemDesc;
-
-    // Nothing to do if memory is not registered to GSP
-    if ((pMemDesc == NULL) ||
-        (pMemDesc->_flags & MEMDESC_FLAGS_REGISTERED_TO_GSP) == 0)
-    {
-        return NV_OK;
-    }
-
-    NV_RM_RPC_FREE(pGpu,
-                   hClient,
-                   hParent,
-                   hMemory,
-                   status);
-
-    if (status == NV_OK)
-    {
-        // Mark memory as not registered in GSP
-        pMemDesc->_flags &= ~MEMDESC_FLAGS_REGISTERED_TO_GSP;
-    }
-
-    return status;
-}
-
 void
 memdescSetName(OBJGPU *pGpu, MEMORY_DESCRIPTOR *pMemDesc, const char *name, const char* suffix)
 {
@@ -4832,6 +4655,7 @@ NV_STATUS
 memdescSendMemDescToGSP(OBJGPU *pGpu, MEMORY_DESCRIPTOR *pMemDesc, NvHandle *pHandle)
 {
     NV_STATUS                         status          = NV_OK;
+    RsClient                         *pClient;
     MemoryManager                    *pMemoryManager  = GPU_GET_MEMORY_MANAGER(pGpu);
     NvU32                             flags           = 0;
     NvU32                             index           = 0;
@@ -4901,12 +4725,16 @@ memdescSendMemDescToGSP(OBJGPU *pGpu, MEMORY_DESCRIPTOR *pMemDesc, NvHandle *pHa
                                        sizeof(listAllocParams)),
                          end);
 
+    NV_ASSERT_OK_OR_GOTO(status,
+        serverGetClientUnderLock(&g_resServ, pMemoryManager->hClient, &pClient),
+        end);
+
     // Register MemoryList object to GSP
     NV_ASSERT_OK_OR_GOTO(status,
-                         memdescRegisterToGSP(pGpu,
-                                              pMemoryManager->hClient,
-                                              pMemoryManager->hSubdevice,
-                                              *pHandle),
+                         memRegisterWithGsp(pGpu,
+                                            pClient,
+                                            pMemoryManager->hSubdevice,
+                                            *pHandle),
                          end);
 
 end:
@@ -5070,4 +4898,3 @@ memdescIsEgm
 
     return NV_FALSE;
 }
-

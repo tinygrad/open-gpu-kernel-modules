@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -51,7 +51,7 @@ namespace DisplayPort
     {
     public:
         //
-        //  IOCTL access to RM class DISPLAY_COMMON and NV50_DISPLAY
+
         //
         virtual NvU32 rmControl0073(NvU32 command, void * params, NvU32 paramSize) = 0;
         virtual NvU32 rmControl5070(NvU32 command, void * params, NvU32 paramSize) = 0;
@@ -147,6 +147,7 @@ namespace DisplayPort
         // Defines the same as NV0073_CTRL_CMD_DP_GET_CAPS_PARAMS.dpVersionsSupported
         //
         NvU32   _gpuSupportedDpVersions;
+
         bool _isStreamCloningEnabled;
         bool _needForceRmEdid;
         bool _skipPowerdownEDPPanelWhenHeadDetach;
@@ -157,9 +158,9 @@ namespace DisplayPort
         bool _applyLinkBwOverrideWarRegVal;
         bool _isDynamicMuxCapable;
         bool _enableMSAOverrideOverMST;
-
         bool _isLTPhyRepeaterSupported;
         bool _isMSTPCONCapsReadDisabled;
+        bool _isDownspreadSupported;
         //
         // LTTPR count reported by RM, it might not be the same with DPLib probe
         // For example, some Intel LTTPR might not be ready to response 0xF0000 probe
@@ -234,10 +235,9 @@ namespace DisplayPort
             if ((_applyLinkBwOverrideWarRegVal || _useDfpMaxLinkRateCaps) &&
                 (_maxLinkRateSupportedDfp < _maxLinkRateSupportedGpu))
             {
-                return _maxLinkRateSupportedDfp;
+                return (LINK_RATE_TO_DATA_RATE_8B_10B(_maxLinkRateSupportedDfp));
             }
-
-            return _maxLinkRateSupportedGpu;
+            return (LINK_RATE_TO_DATA_RATE_8B_10B(_maxLinkRateSupportedGpu));
         }
 
         virtual bool isForceRmEdidRequired()
@@ -256,6 +256,11 @@ namespace DisplayPort
         virtual bool isInternalPanelDynamicMuxCapable()
         {
             return (_isDynamicMuxCapable && _isEDP);
+        }
+
+        virtual bool isDownspreadSupported()
+        {
+            return _isDownspreadSupported;
         }
 
         // Get GPU DSC capabilities
@@ -313,6 +318,11 @@ namespace DisplayPort
             return this->_isLTPhyRepeaterSupported;
         }
 
+        EvoInterface * getProvider()
+        {
+            return this->provider;
+        }
+
         // Return the current mux state. Returns false if device is not mux capable
         bool getDynamicMuxState(NvU32 *muxState);
 
@@ -334,8 +344,8 @@ namespace DisplayPort
         virtual bool getMaxLinkConfigFromUefi(NvU8 &linkRate, NvU8 &laneCount);
         virtual bool setDpMSAParameters(bool bStereoEnable, const NV0073_CTRL_CMD_DP_SET_MSA_PROPERTIES_PARAMS &msaparams);
         virtual bool setDpStereoMSAParameters(bool bStereoEnable, const NV0073_CTRL_CMD_DP_SET_MSA_PROPERTIES_PARAMS &msaparams);
-        virtual bool setFlushMode();
-        virtual void clearFlushMode(unsigned headMask, bool testMode=false);
+        bool setFlushMode();
+        void clearFlushMode(unsigned headMask, bool testMode=false);
 
         virtual bool dscCrcTransaction(NvBool bEnable, gpuDscCrc *data, NvU16 *headIndex);
 

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -35,10 +35,13 @@
 #define GPU_FABRIC_PROBE_DEFAULT_PROBE_SLOWDOWN_THRESHOLD 10
 
 typedef struct GPU_FABRIC_PROBE_INFO_KERNEL GPU_FABRIC_PROBE_INFO_KERNEL;
+typedef struct GPU_FABRIC_PROBE_INFO_PHYSICAL GPU_FABRIC_PROBE_INFO_PHYSICAL;
 
 NV_STATUS gpuFabricProbeStart(OBJGPU *pGpu,
                               GPU_FABRIC_PROBE_INFO_KERNEL **ppGpuFabricProbeInfoKernel);
 void gpuFabricProbeStop(GPU_FABRIC_PROBE_INFO_KERNEL *pGpuFabricProbeInfoKernel);
+void gpuFabricProbeStopPhysical(GPU_FABRIC_PROBE_INFO_PHYSICAL *pGpuFabricProbeInfoPhysical,
+                                NvU32 gfId);
 
 void gpuFabricProbeSuspend(GPU_FABRIC_PROBE_INFO_KERNEL *pGpuFabricProbeInfoKernel);
 NV_STATUS gpuFabricProbeResume(GPU_FABRIC_PROBE_INFO_KERNEL *pGpuFabricProbeInfoKernel);
@@ -52,6 +55,7 @@ NV_STATUS gpuFabricProbeGetGpaAddress(GPU_FABRIC_PROBE_INFO_KERNEL *pInfo, NvU64
 NV_STATUS gpuFabricProbeGetGpaAddressRange(GPU_FABRIC_PROBE_INFO_KERNEL *pInfo, NvU64 *pGpaAddressRange);
 NV_STATUS gpuFabricProbeGetFlaAddress(GPU_FABRIC_PROBE_INFO_KERNEL *pInfo, NvU64 *pFlaAddress);
 NV_STATUS gpuFabricProbeGetFlaAddressRange(GPU_FABRIC_PROBE_INFO_KERNEL *pInfo, NvU64 *pFlaAddressRange);
+NV_STATUS gpuFabricProbeGetEgmGpaAddress(GPU_FABRIC_PROBE_INFO_KERNEL *pInfo, NvU64 *pEgmGpaAddress);
 NV_STATUS gpuFabricProbeGetNumProbeReqs(GPU_FABRIC_PROBE_INFO_KERNEL *pInfo, NvU64 *numProbes);
 NV_STATUS gpuFabricProbeGetFabricCliqueId(GPU_FABRIC_PROBE_INFO_KERNEL *pInfo, NvU32 *pFabricCliqueId);
 NV_STATUS gpuFabricProbeGetFabricHealthStatus(GPU_FABRIC_PROBE_INFO_KERNEL *pInfo, NvU32 *pFabricHealthStatusMask);
@@ -71,6 +75,6 @@ NV_STATUS gpuFabricProbeReceivePhysicalCallback(NvU32 gpuInstance, NvU64 *pNotif
             NV2080_CTRL_NVLINK_INBAND_RECEIVED_DATA_PARAMS *pInbandRcvParams);
 NV_STATUS gpuFabricProbeReceiveUpdatePhysicalCallback(NvU32 gpuInstance, NvU64 *pNotifyGfIdMask,
             NV2080_CTRL_NVLINK_INBAND_RECEIVED_DATA_PARAMS *pInbandRcvParams);
-
+NV_STATUS gpuFabricProbeGetGfid(OBJGPU *pGpu, NvU32 *pGfid);
 
 #endif // GPU_FABRIC_PROBE_H

@@ -36,17 +36,7 @@
 // Each of these stub functions returns a different type. Used to
 // stub out function pointers in OBJOS.
 //
-OSnv_rdcr4                      stubOsnv_rdcr4;
-OSnv_rdxcr0                     stubOsnv_rdxcr0;
-OSnv_cpuid                      stubOsnv_cpuid;
-OSnv_rdmsr                      stubOsnv_rdmsr;
-OSnv_wrmsr                      stubOsnv_wrmsr;
 OSSpinLoop                      stubOsSpinLoop;
 OSSetSurfaceName                stubOsSetSurfaceName;
-
-OSObjectEventNotification       stubOsObjectEventNotification;
-OSPageArrayGetPhysAddr          stubOsPageArrayGetPhysAddr;
-OSInternalReserveFreeCallback   stubOsInternalReserveFreeCallback;
-OSInternalReserveAllocCallback  stubOsInternalReserveAllocCallback;
 
 #endif // OS_STUB_H

@@ -34,7 +34,6 @@
 #include "dp_auxdefs.h"
 
 // Regkey Names
-#define NV_DP_REGKEY_ENABLE_AUDIO_BEYOND_48K          "ENABLE_AUDIO_BEYOND48K"
 #define NV_DP_REGKEY_OVERRIDE_DPCD_REV                "OVERRIDE_DPCD_REV"
 #define NV_DP_REGKEY_DISABLE_SSC                      "DISABLE_SSC"
 #define NV_DP_REGKEY_ENABLE_FAST_LINK_TRAINING        "ENABLE_FAST_LINK_TRAINING"
@@ -44,6 +43,7 @@
 #define NV_DP_REGKEY_ENABLE_OCA_LOGGING               "ENABLE_OCA_LOGGING"
 #define NV_DP_REGKEY_REPORT_DEVICE_LOST_BEFORE_NEW    "HP_WAR_1707690"
 #define NV_DP_REGKEY_APPLY_LINK_BW_OVERRIDE_WAR       "APPLY_LINK_BW_OVERRIDE_WAR"
+// For DP2x, the regkey value needs to be in 10M convention
 #define NV_DP_REGKEY_APPLY_MAX_LINK_RATE_OVERRIDES    "APPLY_OVERRIDES_FOR_BUG_2489143"
 #define NV_DP_REGKEY_DISABLE_DSC                      "DISABLE_DSC"
 #define NV_DP_REGKEY_SKIP_ASSESSLINK_FOR_EDP          "HP_WAR_2189772"
@@ -74,15 +74,14 @@
 //
 #define NV_DP_DSC_MST_CAP_BUG_3143315                  "DP_DSC_MST_CAP_BUG_3143315"
 
-//
+
 // Bug 4388987 : This regkey will disable reading PCON caps for MST.
-//
 #define NV_DP_REGKEY_MST_PCON_CAPS_READ_DISABLED       "DP_BUG_4388987_WAR"
 
-//
-// Bug 4459839 : This regkey will enable DSC irrespective of LT status.
-//
-#define NV_DP_REGKEY_FORCE_DSC_ON_SINK                 "DP_FORCE_DSC_ON_SINK"
+// Bug 4426624: Flush timeslot change to HW when dirty bit is set.
+#define NV_DP_REGKEY_FLUSH_TIMESLOT_INFO_WHEN_DIRTY    "DP_BUG_4426624_WAR"
+
+#define NV_DP_REGKEY_DISABLE_TUNNEL_BW_ALLOCATION      "DP_DISABLE_TUNNEL_BW_ALLOCATION"
 
 //
 // Data Base used to store all the regkey values.
@@ -95,7 +94,6 @@ struct DP_REGKEY_DATABASE
 {
     bool  bInitialized; // set to true after the first EvoMainLink instance is constructed
     // Below are regkey values
-    bool  bAudioBeyond48kEnabled;
     NvU32 dpcdRevOveride;
     bool  bSscDisabled;
     bool  bFastLinkTrainingEnabled;
@@ -118,8 +116,11 @@ struct DP_REGKEY_DATABASE
     bool  bPowerDownPhyBeforeD3;
     bool  bReassessMaxLink;
     bool  bMSTPCONCapsReadDisabled;
-    bool  bForceDscOnSink;
+    bool  bFlushTimeslotWhenDirty;
+    bool  bForceDisableTunnelBwAllocation;
 };
+
+extern struct DP_REGKEY_DATABASE dpRegkeyDatabase;
 
 #endif //INCLUDED_DP_REGKEYDATABASE_H
 

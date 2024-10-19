@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -35,6 +35,9 @@
 #include "published/hopper/gh100/pri_nv_xal_ep.h"
 #include "published/hopper/gh100/dev_vm.h"
 #include "published/hopper/gh100/dev_xtl_ep_pri.h"
+
+#include "published/hopper/gh100/dev_therm.h"
+#include "published/hopper/gh100/dev_therm_addendum.h"
 
 #include "ctrl/ctrl2080/ctrl2080mc.h"
 
@@ -90,7 +93,7 @@ gpuReadBusConfigReg_GH100
  * @returns    NV_OK on success
  */
 NV_STATUS
-gpuReadVgpuConfigReg_GH100
+gpuReadPassThruConfigReg_GH100
 (
     OBJGPU    *pGpu,
     NvU32      index,
@@ -204,7 +207,8 @@ gpuHandleSecFault_GH100
     OBJGPU *pGpu
 )
 {
-    NvU32   secDebug = 0;
+    NvU32 secDebug = 0;
+    NvU32 iffPos;
 
     //
     // Read SEC_FAULT config space to determine what went wrong.
@@ -216,9 +220,7 @@ gpuHandleSecFault_GH100
     NV_PRINTF(LEVEL_FATAL, "SEC_FAULT lockdown detected. This is fatal. "
                             "RM will now shut down. NV_EP_PCFG_GPU_VSEC_DEBUG_SEC: 0x%x\n", secDebug);
 
-// (void)REF_NUM grants us mcheck protection
 #define LOG_SEC_FAULT(field) \
-    (void)REF_NUM(NV_EP_PCFG_GPU_VSEC_DEBUG_SEC##field, 0); \
     if (DRF_VAL(_EP_PCFG_GPU, _VSEC_DEBUG_SEC, field, secDebug) != 0) \
     { \
         MODS_ARCH_ERROR_PRINTF("NV_EP_PCFG_GPU_VSEC_DEBUG_SEC" #field "\n"); \
@@ -243,9 +245,18 @@ gpuHandleSecFault_GH100
     LOG_SEC_FAULT(_FAULT_PRI);
     LOG_SEC_FAULT(_FAULT_WDG);
     LOG_SEC_FAULT(_FAULT_BOOTFSM);
-    LOG_SEC_FAULT(_IFF_POS);
 
 #undef LOG_SEC_FAULT
+
+    // IFF_POS has a multi-bit value
+    iffPos = DRF_VAL(_EP_PCFG_GPU, _VSEC_DEBUG_SEC, _IFF_POS, secDebug);
+    if (iffPos != 0)
+    {
+        MODS_ARCH_ERROR_PRINTF("NV_EP_PCFG_GPU_VSEC_DEBUG_SEC_IFF_POS value: 0x%x\n", iffPos);
+        NV_PRINTF(LEVEL_FATAL, "SEC_FAULT type: _IFF_POS value: 0x%x\n", iffPos);
+        nvErrorLog_va((void *)(pGpu), SEC_FAULT_ERROR,
+                      "SEC_FAULT: _IFF_POS value: 0x%x", iffPos);
+    }
 
     //
     // After SEC_FAULT occurs, the GPU will only return SCPM dummy values until properly reset.
@@ -483,6 +494,22 @@ gpuIsDevModeEnabledInHw_GH100
 }
 
 /*!
+ * Check if protected pcie has been set in the scratch register
+ *
+ * @param[in]  pGpu  GPU object pointer
+ */
+NvBool
+gpuIsProtectedPcieEnabledInHw_GH100
+(
+    OBJGPU *pGpu
+)
+{
+    NvU32 val = GPU_REG_RD32(pGpu, NV_PGC6_AON_SECURE_SCRATCH_GROUP_20_CC);
+    return FLD_TEST_DRF(_PGC6, _AON_SECURE_SCRATCH_GROUP_20_CC, _MULTI_GPU_MODE,
+                        _PROTECTED_PCIE, val);
+}
+
+/*!
  * @brief Check if register being accessed is within guest BAR0 space.
  *
  * @param[in] pGpu   OBJGPU pointer
@@ -515,4 +542,21 @@ gpuSanityCheckVirtRegAccess_GH100
     }
 
     return NV_ERR_INVALID_ADDRESS;
+}
+
+/*!
+ * @brief Check if GSP-FMC Inst_in_sys ucode needs to be booted.
+ *
+ * @param[in]  pGpu          OBJGPU pointer
+ *
+ * @return NV_TRUE if GSP Inst_in_sys FMC needs to be booted, or NV_FALSE otherwise
+ */
+NvBool
+gpuIsGspToBootInInstInSysMode_GH100
+(
+    OBJGPU    *pGpu
+)
+{
+
+    return NV_FALSE;
 }

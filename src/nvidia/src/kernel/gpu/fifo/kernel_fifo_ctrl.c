@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -42,7 +42,12 @@
 
 #include "ctrl/ctrl0080/ctrl0080fifo.h"
 
+#include "kernel/gpu/conf_compute/conf_compute.h"
+
 static NV_STATUS _kfifoGetCaps(OBJGPU *pGpu, NvU8 *pKfifoCaps);
+static NV_STATUS _kfifoDisableChannelsForKeyRotation(OBJGPU *pGpu, RmCtrlParams *pRmCtrlParams,
+                                                     NvBool bEnableAfterKeyRotation, NvBool bForceKeyRotation,
+                                                     NV2080_CTRL_FIFO_DISABLE_CHANNELS_PARAMS *pParams);
 
 /*!
  * @brief deviceCtrlCmdFifoGetChannelList
@@ -106,6 +111,7 @@ deviceCtrlCmdFifoIdleChannels_IMPL
     OBJGPU       *pGpu = GPU_RES_GET_GPU(pDevice);
     CALL_CONTEXT *pCallContext  = resservGetTlsCallContext();
     RmCtrlParams *pRmCtrlParams = pCallContext->pControlParams->pLegacyParams;
+    RM_API       *pRmApi        = GPU_GET_PHYSICAL_RMAPI(pGpu);
 
     // Check buffer size against maximum
     if (pParams->numChannels > NV0080_CTRL_CMD_FIFO_IDLE_CHANNELS_MAX_CHANNELS)
@@ -126,18 +132,17 @@ deviceCtrlCmdFifoIdleChannels_IMPL
     }
 
     //
-    // Send RPC if running in Guest/CPU-RM. Do this manually instead of ROUTE_TO_PHYSICAL
+    // Send RPC if running in CPU-RM. Do this manually instead of ROUTE_TO_PHYSICAL
     // so that we can acquire the GPU lock in CPU-RM first.
     //
-    if (IS_VIRTUAL(pGpu) || IS_GSP_CLIENT(pGpu))
+    if (IS_GSP_CLIENT(pGpu))
     {
-        NV_RM_RPC_CONTROL(pGpu,
-                          pRmCtrlParams->hClient,
-                          pRmCtrlParams->hObject,
-                          pRmCtrlParams->cmd,
-                          pRmCtrlParams->pParams,
-                          pRmCtrlParams->paramsSize,
-                          status);
+        status = pRmApi->Control(pRmApi,
+                                 pRmCtrlParams->hClient,
+                                 pRmCtrlParams->hObject,
+                                 pRmCtrlParams->cmd,
+                                 pRmCtrlParams->pParams,
+                                 pRmCtrlParams->paramsSize);
     }
     else
     {
@@ -229,7 +234,7 @@ subdeviceCtrlCmdFifoGetInfo_IMPL
         switch (pFifoInfoParams->fifoInfoTbl[i].index)
         {
             case NV2080_CTRL_FIFO_INFO_INDEX_INSTANCE_TOTAL:
-                data = memmgrGetRsvdMemorySize(pMemoryManager);
+                data = (NvU32)(memmgrGetRsvdMemorySize(pMemoryManager));
                 break;
             case NV2080_CTRL_FIFO_INFO_INDEX_MAX_CHANNEL_GROUPS:
                 //
@@ -552,6 +557,7 @@ subdeviceCtrlCmdFifoUpdateChannelInfo_IMPL
     NV_STATUS                 status         = NV_OK;
     NvU64                     userdAddr      = 0;
     NvU32                     userdAper      = 0;
+    RM_API                   *pRmApi         = GPU_GET_PHYSICAL_RMAPI(pGpu);
 
     // Bug 724186 -- Skip this check for deferred API
     LOCK_ASSERT_AND_RETURN(pRmCtrlParams->bDeferredApi || rmGpuLockIsOwner());
@@ -577,15 +583,14 @@ subdeviceCtrlCmdFifoUpdateChannelInfo_IMPL
         return NV_ERR_NOT_SUPPORTED;
     }
 
-    if (IS_VIRTUAL(pGpu) || IS_GSP_CLIENT(pGpu))
+    if (IS_GSP_CLIENT(pGpu))
     {
-        NV_RM_RPC_CONTROL(pGpu,
-                          pRmCtrlParams->hClient,
-                          pRmCtrlParams->hObject,
-                          pRmCtrlParams->cmd,
-                          pRmCtrlParams->pParams,
-                          pRmCtrlParams->paramsSize,
-                          status);
+        status = pRmApi->Control(pRmApi,
+                                 pRmCtrlParams->hClient,
+                                 pRmCtrlParams->hObject,
+                                 pRmCtrlParams->cmd,
+                                 pRmCtrlParams->pParams,
+                                 pRmCtrlParams->paramsSize);
         if (status != NV_OK)
             return status;
 
@@ -778,28 +783,97 @@ subdeviceCtrlCmdFifoDisableChannelsForKeyRotation_IMPL
 )
 {
     NV_STATUS       status        = NV_OK;
-    NV_STATUS       tmpStatus     = NV_OK;
     OBJGPU         *pGpu          = GPU_RES_GET_GPU(pSubdevice);
     CALL_CONTEXT   *pCallContext  = resservGetTlsCallContext();
     RmCtrlParams   *pRmCtrlParams = pCallContext->pControlParams;
-    NvU32           i;
+    NvU32           i = 0;
 
     NV_CHECK_OR_RETURN(LEVEL_INFO,
         pDisableChannelParams->numChannels <= NV_ARRAY_ELEMENTS(pDisableChannelParams->hChannelList),
         NV_ERR_INVALID_ARGUMENT);
-    ct_assert(NV_ARRAY_ELEMENTS(pDisableChannelParams->hClientList) == \
+    ct_assert(NV_ARRAY_ELEMENTS(pDisableChannelParams->hClientList) ==
               NV_ARRAY_ELEMENTS(pDisableChannelParams->hChannelList));
 
-    // Send RPC to handle message on Host-RM
-    if (IS_VIRTUAL(pGpu) || IS_GSP_CLIENT(pGpu))
+    NV2080_CTRL_FIFO_DISABLE_CHANNELS_PARAMS *pParams = NULL;
+    pParams = portMemAllocNonPaged(sizeof(NV2080_CTRL_FIFO_DISABLE_CHANNELS_PARAMS));
+    NV_ASSERT_OR_RETURN(pParams != NULL, NV_ERR_NO_MEMORY);
+    portMemSet(pParams, 0, sizeof(NV2080_CTRL_FIFO_DISABLE_CHANNELS_PARAMS));
+
+    for (i = 0; i < pDisableChannelParams->numChannels; i++)
     {
-        NV_RM_RPC_CONTROL(pGpu,
-                          pRmCtrlParams->hClient,
-                          pRmCtrlParams->hObject,
-                          pRmCtrlParams->cmd,
-                          pRmCtrlParams->pParams,
-                          pRmCtrlParams->paramsSize,
-                          status);
+        pParams->hClientList[i] = pDisableChannelParams->hClientList[i];
+        pParams->hChannelList[i] = pDisableChannelParams->hChannelList[i];
+    }
+    pParams->numChannels = pDisableChannelParams->numChannels;
+    status = _kfifoDisableChannelsForKeyRotation(pGpu, pRmCtrlParams, pDisableChannelParams->bEnableAfterKeyRotation,
+                                                 NV_FALSE, pParams);
+    portMemFree(pParams);
+    return status;
+}
+
+/**
+ * @brief This does the same thing as @ref subdeviceCtrlCmdFifoDisableChannelsForKeyRotation_IMPL
+ *        with the main difference being it operates on a single client and take a RO API lock.
+ */
+NV_STATUS
+subdeviceCtrlCmdFifoDisableChannelsForKeyRotationV2_IMPL
+(
+    Subdevice *pSubdevice,
+    NV2080_CTRL_FIFO_DISABLE_CHANNELS_FOR_KEY_ROTATION_V2_PARAMS *pDisableChannelParams
+)
+{
+    NV_STATUS       status        = NV_OK;
+    OBJGPU         *pGpu          = GPU_RES_GET_GPU(pSubdevice);
+    CALL_CONTEXT   *pCallContext  = resservGetTlsCallContext();
+    RmCtrlParams   *pRmCtrlParams = pCallContext->pControlParams;
+    NvU32           i = 0;
+
+    NV_CHECK_OR_RETURN(LEVEL_INFO,
+        pDisableChannelParams->numChannels <= NV_ARRAY_ELEMENTS(pDisableChannelParams->hChannelList),
+        NV_ERR_INVALID_ARGUMENT);
+
+    NV2080_CTRL_FIFO_DISABLE_CHANNELS_PARAMS *pParams = NULL;
+    pParams = portMemAllocNonPaged(sizeof(NV2080_CTRL_FIFO_DISABLE_CHANNELS_PARAMS));
+    NV_ASSERT_OR_RETURN(pParams != NULL, NV_ERR_NO_MEMORY);
+    portMemSet(pParams, 0, sizeof(NV2080_CTRL_FIFO_DISABLE_CHANNELS_PARAMS));
+
+    for (i = 0; i < pDisableChannelParams->numChannels; i++)
+    {
+        pParams->hClientList[i] = pRmCtrlParams->hClient;
+        pParams->hChannelList[i] = pDisableChannelParams->hChannelList[i];
+    }
+    pParams->numChannels = pDisableChannelParams->numChannels;
+    status = _kfifoDisableChannelsForKeyRotation(pGpu, pRmCtrlParams, pDisableChannelParams->bEnableAfterKeyRotation,
+                                                 NV_TRUE, pParams);
+    portMemFree(pParams);
+    return status;
+}
+
+static NV_STATUS
+_kfifoDisableChannelsForKeyRotation
+(
+    OBJGPU         *pGpu,
+    RmCtrlParams   *pRmCtrlParams,
+    NvBool          bEnableAfterKeyRotation,
+    NvBool          bForceKeyRotation,
+    NV2080_CTRL_FIFO_DISABLE_CHANNELS_PARAMS *pParams
+)
+{
+    NV_STATUS       status        = NV_OK;
+    NV_STATUS       tmpStatus     = NV_OK;
+    NvU32           i;
+    KernelChannel  *pKernelChannel = NULL;
+    RM_API         *pRmApi        = GPU_GET_PHYSICAL_RMAPI(pGpu);
+
+    // Send RPC to handle message on Host-RM
+    if (IS_GSP_CLIENT(pGpu))
+    {
+        status = pRmApi->Control(pRmApi,
+                                 pRmCtrlParams->hClient,
+                                 pRmCtrlParams->hObject,
+                                 pRmCtrlParams->cmd,
+                                 pRmCtrlParams->pParams,
+                                 pRmCtrlParams->paramsSize);
     }
     // Send internal control call to actually disable channels and preempt channels
     else
@@ -809,29 +883,196 @@ subdeviceCtrlCmdFifoDisableChannelsForKeyRotation_IMPL
     }
 
     // Loop through all the channels and mark them disabled
-    for (i = 0; i < pDisableChannelParams->numChannels; i++)
+    NvBool bFound = NV_FALSE;
+    NvU32 h2dKeyList[CC_KEYSPACE_TOTAL_SIZE];
+    NvU32 keyIndex = 0;
+    ConfidentialCompute *pConfCompute = GPU_GET_CONF_COMPUTE(pGpu);
+
+    for (i = 0; i < pParams->numChannels; i++)
     {
         RsClient              *pClient = NULL;
-        KernelChannel         *pKernelChannel = NULL;
         tmpStatus = serverGetClientUnderLock(&g_resServ,
-                                          pDisableChannelParams->hClientList[i], &pClient);
+                                          pParams->hClientList[i], &pClient);
         if (tmpStatus != NV_OK)
         {
             status = tmpStatus;
-            NV_PRINTF(LEVEL_ERROR, "Failed to get client with hClient = 0x%x status = 0x%x\n", pDisableChannelParams->hClientList[i], status);
+            NV_PRINTF(LEVEL_ERROR, "Failed to get client with hClient = 0x%x status = 0x%x\n", pParams->hClientList[i], status);
             continue;
         }
         tmpStatus = CliGetKernelChannel(pClient,
-                                     pDisableChannelParams->hChannelList[i], &pKernelChannel);
+                                     pParams->hChannelList[i], &pKernelChannel);
         if (tmpStatus != NV_OK)
         {
             status = tmpStatus;
             NV_PRINTF(LEVEL_ERROR, "Failed to get channel with hclient = 0x%x hChannel = 0x%x status = 0x%x\n", 
-                                    pDisableChannelParams->hClientList[i], pDisableChannelParams->hChannelList[i], status);
+                                    pParams->hClientList[i], pParams->hChannelList[i], status);
             continue;
         }
         kchannelDisableForKeyRotation(pGpu, pKernelChannel, NV_TRUE);
-        kchannelEnableAfterKeyRotation(pGpu, pKernelChannel, pDisableChannelParams->bEnableAfterKeyRotation);
+        kchannelEnableAfterKeyRotation(pGpu, pKernelChannel, bEnableAfterKeyRotation);
+        if (IS_GSP_CLIENT(pGpu))
+        {
+            NvU32 h2dKey, d2hKey;
+            NV_ASSERT_OK_OR_RETURN(confComputeGetKeyPairByChannel_HAL(pGpu, pConfCompute, pKernelChannel,
+                                                                      &h2dKey, &d2hKey));
+            if (bForceKeyRotation)
+            {
+                //
+                // This loop doesn't need to execute in the first iteration of above loop
+                // since keyList is empty.
+                //
+                for (NvU32 j = 0; j < keyIndex; j++)
+                {
+                    if (h2dKeyList[j] == h2dKey)
+                    {
+                        bFound = NV_TRUE;
+                        break;
+                    }
+                }
+                if (!bFound)
+                {
+                    NV_ASSERT_OR_RETURN(keyIndex < CC_KEYSPACE_TOTAL_SIZE, NV_ERR_INVALID_STATE);
+                    h2dKeyList[keyIndex++] = h2dKey;
+                }
+                bFound = NV_FALSE;
+            }
+            else
+            {
+                KEY_ROTATION_STATUS state;
+                NV_ASSERT_OK_OR_RETURN(confComputeGetKeyRotationStatus(pConfCompute, h2dKey, &state));
+                if ((state == KEY_ROTATION_STATUS_PENDING) ||
+                    (state == KEY_ROTATION_STATUS_PENDING_TIMER_SUSPENDED))
+                {
+                    NV_ASSERT_OK_OR_RETURN(confComputeCheckAndPerformKeyRotation(pGpu, pConfCompute, h2dKey, d2hKey));
+                }
+            }
+        }
+    }
+
+    if (IS_GSP_CLIENT(pGpu) && bForceKeyRotation)
+    {
+        for (NvU32 j = 0; j < keyIndex; j++)
+        {
+            NvU32 h2dKey, d2hKey;
+            confComputeGetKeyPairByKey(pConfCompute, h2dKeyList[j], &h2dKey, &d2hKey);
+            NV_PRINTF(LEVEL_INFO, "Forcing key rotation on h2dKey 0x%x\n", h2dKey);
+            status = confComputeForceKeyRotation(pGpu, pConfCompute, h2dKey, d2hKey);
+            if (status != NV_OK)
+            {
+                NV_PRINTF(LEVEL_ERROR, "Forced key rotation for key 0x%x failed\n", h2dKey);
+                return status;
+            }
+        }
     }
     return status;
+}
+
+NV_STATUS
+subdeviceCtrlCmdFifoGetDeviceInfoTable_VF
+(
+    Subdevice *pSubdevice,
+    NV2080_CTRL_FIFO_GET_DEVICE_INFO_TABLE_PARAMS *pParams
+)
+{
+    OBJGPU *pGpu = GPU_RES_GET_GPU(pSubdevice);
+    VGPU_STATIC_INFO *pVSI = GPU_GET_STATIC_INFO(pGpu);
+    NvU32 i = pParams->baseIndex / NV2080_CTRL_FIFO_GET_DEVICE_INFO_TABLE_MAX_ENTRIES;
+
+    NV_ASSERT_OR_RETURN(pVSI != NULL, NV_ERR_INVALID_STATE);
+
+    if (i >= MAX_ITERATIONS_DEVICE_INFO_TABLE)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    pParams->numEntries = pVSI->fifoDeviceInfoTable[i].numEntries;
+    if (pParams->numEntries > NV2080_CTRL_FIFO_GET_DEVICE_INFO_TABLE_MAX_ENTRIES)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    pParams->bMore = pVSI->fifoDeviceInfoTable[i].bMore;
+
+    portMemCopy(&pParams->entries,
+                pParams->numEntries * sizeof(NV2080_CTRL_FIFO_DEVICE_ENTRY),
+                pVSI->fifoDeviceInfoTable[i].entries,
+                pParams->numEntries * sizeof(NV2080_CTRL_FIFO_DEVICE_ENTRY));
+
+    return NV_OK;
+}
+
+NV_STATUS
+deviceCtrlCmdFifoGetLatencyBufferSize_VF
+(
+    Device *pDevice,
+    NV0080_CTRL_FIFO_GET_LATENCY_BUFFER_SIZE_PARAMS *pParams
+)
+{
+    OBJGPU *pGpu = GPU_RES_GET_GPU(pDevice);
+    VGPU_STATIC_INFO *pVSI = GPU_GET_STATIC_INFO(pGpu);
+    NvU32 i;
+
+    NV_ASSERT_OR_RETURN(pVSI != NULL, NV_ERR_INVALID_STATE);
+
+    for (i = 0; i < NV2080_ENGINE_TYPE_LAST_v1C_09; i++)
+    {
+        if (pParams->engineID == pVSI->fifoLatencyBufferSize[i].engineID)
+        {
+            pParams->gpEntries = pVSI->fifoLatencyBufferSize[i].gpEntries;
+            pParams->pbEntries = pVSI->fifoLatencyBufferSize[i].pbEntries;
+            break;
+        }
+    }
+
+    NV_ASSERT_OR_RETURN(i < NV2080_ENGINE_TYPE_LAST_v1C_09, NV_ERR_INVALID_ARGUMENT);
+
+    return NV_OK;
+}
+
+NV_STATUS
+deviceCtrlCmdFifoGetEngineContextProperties_VF
+(
+    Device *pDevice,
+    NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_PARAMS *pParams
+)
+{
+    OBJGPU *pGpu = GPU_RES_GET_GPU(pDevice);
+    VGPU_STATIC_INFO *pVSI = GPU_GET_STATIC_INFO(pGpu);
+    NV_STATUS status = NV_OK;
+
+    NV_ASSERT_OR_RETURN(pVSI != NULL, NV_ERR_INVALID_STATE);
+
+    if (gpuIsClientRmAllocatedCtxBufferEnabled(pGpu))
+    {
+        NvU32 size = 0;
+        NvU32 alignment = RM_PAGE_SIZE;
+        NvU32 engine;
+
+        pParams->size = 0;
+        pParams->alignment = 0;
+
+        engine = DRF_VAL(0080_CTRL_FIFO, _GET_ENGINE_CONTEXT_PROPERTIES, _ENGINE_ID,
+                pParams->engineId);
+
+        switch (engine)
+        {
+            case NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_ENGINE_ID_GRAPHICS:
+            case NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_ENGINE_ID_GRAPHICS_ZCULL:
+            case NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_ENGINE_ID_GRAPHICS_PREEMPT:
+            case NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_ENGINE_ID_GRAPHICS_SPILL:
+            case NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_ENGINE_ID_GRAPHICS_PAGEPOOL:
+            case NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_ENGINE_ID_GRAPHICS_BETACB:
+            case NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_ENGINE_ID_GRAPHICS_RTV:
+                pParams->size = NV_MAX(pVSI->ctxBuffInfo.engineContextBuffersInfo[0].engine[engine].size, size);
+                pParams->alignment = NV_MAX(pVSI->ctxBuffInfo.engineContextBuffersInfo[0].engine[engine].alignment, alignment);
+                status = NV_OK;
+                break;
+
+            default:
+                status = NV_ERR_NOT_SUPPORTED;
+        }
+        return status;
+    }
+
+    return NV_ERR_NOT_SUPPORTED;
 }

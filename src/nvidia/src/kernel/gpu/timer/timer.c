@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -27,7 +27,7 @@
  */
 
 /* ------------------------ Includes ---------------------------------------- */
-#include "objtmr.h"
+#include "gpu/timer/objtmr.h"
 #include "class/cl0004.h" // NV004_NOTIFIERS_SET_ALARM_NOTIFY
 #include "gpu/gpu_resource.h"
 #include "core/locks.h"
@@ -35,12 +35,12 @@
 #include "kernel/gpu/intr/intr.h"
 
 /* ------------------------ Static Function Prototypes ---------------------- */
-static PTMR_EVENT_PVT   _tmrPullCallbackFromHead (OBJTMR *);
+static TMR_EVENT_PVT *  _tmrPullCallbackFromHead (OBJTMR *);
 static void             _tmrScanCallback(OBJTMR *, void *);
-static void             _tmrScanCallbackOSTimer(OBJTMR *, PTMR_EVENT_PVT);
-static PTMR_EVENT_PVT   _tmrGetNextFreeCallback(OBJTMR *);
-static NV_STATUS        _tmrInsertCallback(OBJTMR *, PTMR_EVENT_PVT, NvU64);
-static void             _tmrInsertCallbackInList(OBJGPU *pGpu, OBJTMR *pTmr, PTMR_EVENT_PVT pEvent);
+static void             _tmrScanCallbackOSTimer(OBJTMR *, TMR_EVENT_PVT *);
+static TMR_EVENT_PVT *  _tmrGetNextFreeCallback(OBJTMR *);
+static NV_STATUS        _tmrInsertCallback(OBJTMR *, TMR_EVENT_PVT *, NvU64);
+static void             _tmrInsertCallbackInList(OBJGPU *pGpu, OBJTMR *pTmr, TMR_EVENT_PVT *pEvent);
 static void             _tmrStateLoadCallbacks(OBJGPU *, OBJTMR *);
 static NV_STATUS        _tmrGetNextAlarmTime(OBJTMR *, NvU64 *);
 static void             _tmrScheduleCallbackInterrupt(OBJGPU *, OBJTMR *, NvU64);
@@ -206,7 +206,7 @@ static NV_INLINE NvBool tmrEventsExist(OBJTMR *pTmr)
     return pTmr->pRmActiveEventList != NULL;
 }
 
-static NV_INLINE NvBool tmrIsOSTimer(OBJTMR *pTmr, PTMR_EVENT pEventPublic)
+static NV_INLINE NvBool tmrIsOSTimer(OBJTMR *pTmr, TMR_EVENT *pEventPublic)
 {
     return ((pEventPublic != NULL) &&
            (pTmr->getProperty(pTmr, PDB_PROP_TMR_USE_OS_TIMER_FOR_CALLBACKS) ||
@@ -221,13 +221,13 @@ static NV_INLINE NvBool tmrIsOSTimer(OBJTMR *pTmr, PTMR_EVENT pEventPublic)
 NV_STATUS tmrEventCreate_IMPL
 (
     OBJTMR     *pTmr,
-    PTMR_EVENT *ppEventPublic,
+    TMR_EVENT **ppEventPublic,
     TIMEPROC    Proc,
     void       *pUserData,
     NvU32       flags
 )
 {
-    PTMR_EVENT_PVT *ppEvent = (PTMR_EVENT_PVT*)ppEventPublic;
+    TMR_EVENT_PVT **ppEvent = (TMR_EVENT_PVT **)ppEventPublic;
     NV_STATUS status = NV_OK;
 
     *ppEvent = portMemAllocNonPaged(sizeof(TMR_EVENT_PVT));
@@ -328,13 +328,13 @@ tmrGetCallbackInterruptPending_IMPL
 void tmrEventCancel_IMPL
 (
     OBJTMR         *pTmr,
-    PTMR_EVENT      pEventPublic
+    TMR_EVENT      *pEventPublic
 )
 {
     NvU64 nextAlarmTime;
     OBJGPU *pGpu = ENG_GET_GPU(pTmr);
-    PTMR_EVENT_PVT pEvent = (PTMR_EVENT_PVT)pEventPublic;
-    PTMR_EVENT_PVT pChaser = pTmr->pRmActiveEventList;
+    TMR_EVENT_PVT *pEvent = (TMR_EVENT_PVT *)pEventPublic;
+    TMR_EVENT_PVT *pChaser = pTmr->pRmActiveEventList;
     NvBool bRemovedHead = pChaser == pEvent;
 
     if (pEventPublic == NULL)
@@ -397,10 +397,10 @@ void tmrEventCancel_IMPL
 void tmrEventDestroy_IMPL
 (
     OBJTMR     *pTmr,
-    PTMR_EVENT  pEventPublic
+    TMR_EVENT  *pEventPublic
 )
 {
-    PTMR_EVENT_PVT pEvent = (PTMR_EVENT_PVT)pEventPublic;
+    TMR_EVENT_PVT *pEvent = (TMR_EVENT_PVT *)pEventPublic;
 
     if (pEvent != NULL)
     {
@@ -421,12 +421,50 @@ void tmrEventDestroy_IMPL
 }
 
 /*!
- * TODO: document
+ * Returns time until next callback for a given event
+ *
+ * @param[in]   pEvent   The event whose remaining time needs to be determined.
+ */
+NV_STATUS
+tmrEventTimeUntilNextCallback_IMPL
+(
+    OBJTMR     *pTmr,
+    TMR_EVENT  *pEventPublic,
+    NvU64      *pTimeUntilCallbackNs
+)
+{
+    NvU64 currentTime;
+    NvU64 nextAlarmTime;
+
+    NV_ASSERT_OK_OR_RETURN(tmrGetCurrentTime(pTmr, &currentTime));
+    TMR_EVENT_PVT *pEvent = (TMR_EVENT_PVT*)pEventPublic;
+
+    if (tmrIsOSTimer(pTmr, pEventPublic))
+    {
+        // timens corresponds to  relative time for OS timer 
+        NV_CHECK_OR_RETURN(LEVEL_ERROR, portSafeAddU64(pEvent->timens, pEvent->startTimeNs, &nextAlarmTime),
+                           NV_ERR_INVALID_ARGUMENT);
+    }
+    else
+    {
+        // timens corresponds to abs time in case of ptimer
+        nextAlarmTime = pEvent->timens;
+    }
+    if (currentTime >= nextAlarmTime)
+        return NV_ERR_INVALID_STATE;
+
+    *pTimeUntilCallbackNs = nextAlarmTime - currentTime;
+    return NV_OK;
+}
+
+
+/*!
+ * Callback invoked by NV0004_CTRL_CMD_TMR_SET_ALARM_NOTIFY
  */
 static NV_STATUS
-_nv0004CtrlCmdTmrSetAlarmNotifyCallback(OBJGPU *pGpu, OBJTMR *pTmr, void *pData)
+_nv0004CtrlCmdTmrSetAlarmNotifyCallback(OBJGPU *pGpu, OBJTMR *pTmr, TMR_EVENT *pTmrEvent)
 {
-    PEVENTNOTIFICATION pNotifyEvent = pData;
+    PEVENTNOTIFICATION pNotifyEvent = pTmrEvent->pUserData;
     NV_STATUS status = NV_OK;
 
     // perform a direct callback to the client
@@ -434,15 +472,16 @@ _nv0004CtrlCmdTmrSetAlarmNotifyCallback(OBJGPU *pGpu, OBJTMR *pTmr, void *pData)
     {
         //one shot signal
         status = osNotifyEvent(pGpu, pNotifyEvent, NV004_NOTIFIERS_SET_ALARM_NOTIFY, 0, NV_OK);
+        if (status != NV_OK)
+        {
+            NV_PRINTF(LEVEL_ERROR, "failed to notify event in callback, status: 0x%08x\n", status);
+            return status;
+        }
     }
 
     return status;
 }
 
-/*!
- * TODO: document
- * TODO: Migrate this to match current API (probably)
- */
 NV_STATUS
 tmrapiCtrlCmdTmrSetAlarmNotify_IMPL
 (
@@ -450,8 +489,10 @@ tmrapiCtrlCmdTmrSetAlarmNotify_IMPL
     NV0004_CTRL_TMR_SET_ALARM_NOTIFY_PARAMS *pParams
 )
 {
+    NV_STATUS status;
     OBJGPU *pGpu = GPU_RES_GET_GPU(pTimerApi);
     OBJTMR *pTmr = GPU_GET_TIMER(pGpu);
+    TMR_EVENT *pTmrEvent = NULL;
     PEVENTNOTIFICATION pNotifyEvent = inotifyGetNotificationList(staticCast(pTimerApi, INotifier));
 
     // Validate the timer event
@@ -466,11 +507,29 @@ tmrapiCtrlCmdTmrSetAlarmNotify_IMPL
         return NV_ERR_INVALID_ARGUMENT;
     }
 
-    // schedule the timer
-    tmrScheduleCallbackRel(pTmr,
-                           _nv0004CtrlCmdTmrSetAlarmNotifyCallback,
-                           pNotifyEvent,
-                           pParams->alarmTimeNsecs, 0, 0);
+    // Create an OS timer if not already created
+    if (pNotifyEvent->pTmrEvent == NULL)
+    {
+        status = tmrEventCreate(pTmr,
+                                &pTmrEvent,
+                                _nv0004CtrlCmdTmrSetAlarmNotifyCallback,
+                                (void*)pNotifyEvent,
+                                0);
+        if (status != NV_OK)
+            return status;
+
+        pNotifyEvent->pGpu = pGpu;
+        pNotifyEvent->pTmrEvent = pTmrEvent;
+    }
+    else
+    {
+        pTmrEvent = pNotifyEvent->pTmrEvent;
+    }
+
+    // Schedule the timer
+    status = tmrEventScheduleRel(pTmr, pTmrEvent, pParams->alarmTimeNsecs);
+    if (status != NV_OK)
+        return status;
 
     return NV_OK;
 }
@@ -549,7 +608,7 @@ NV_STATUS tmrGetCurrentDiffTime_IMPL
 NV_STATUS tmrEventScheduleRel_IMPL
 (
     OBJTMR     *pTmr,
-    PTMR_EVENT  pEvent,
+    TMR_EVENT  *pEvent,
     NvU64       RelTime
 )
 {
@@ -640,11 +699,11 @@ NV_STATUS tmrScheduleCallbackRelSec_IMPL
 NvBool tmrEventOnList_IMPL
 (
     OBJTMR     *pTmr,
-    PTMR_EVENT  pEventPublic
+    TMR_EVENT  *pEventPublic
 )
 {
-    PTMR_EVENT_PVT pEvent = (PTMR_EVENT_PVT)pEventPublic;
-    PTMR_EVENT_PVT pScan  = tmrIsOSTimer(pTmr, pEventPublic) ?
+    TMR_EVENT_PVT *pEvent = (TMR_EVENT_PVT *)pEventPublic;
+    TMR_EVENT_PVT *pScan  = tmrIsOSTimer(pTmr, pEventPublic) ?
                             pTmr->pRmActiveOSTimerEventList :
                             pTmr->pRmActiveEventList;
 
@@ -673,8 +732,8 @@ NvBool tmrCallbackOnList_IMPL
 )
 {
     NvBool onList = NV_FALSE;
-    PTMR_EVENT_PVT tmrScan;
-    PTMR_EVENT_PVT tmrList;
+    TMR_EVENT_PVT *tmrScan;
+    TMR_EVENT_PVT *tmrList;
 
     tmrList = pTmr->pRmActiveEventList;
 
@@ -694,13 +753,13 @@ NvBool tmrCallbackOnList_IMPL
 /*!
  * OBSOLETE: This will be removed very soon!
  */
-static PTMR_EVENT_PVT
+static TMR_EVENT_PVT *
 _tmrGetNextFreeCallback
 (
     OBJTMR *pTmr
 )
 {
-    PTMR_EVENT_PVT pEvent = NULL;
+    TMR_EVENT_PVT *pEvent = NULL;
 
     pEvent = pTmr->pRmCallbackFreeList_OBSOLETE;
     if (pEvent != NULL)
@@ -718,7 +777,7 @@ _tmrGetNextFreeCallback
  * Creates and inserts a node into the callback list.
  *
  *  @param[in]  pEvent     Callback memory structure, provided by user.
- *  @param[in]  Time       Absolute nanoseconds at which to call Proc.
+ *  @param[in]  Time       Absolute(for ptimer) or relative (for OS timer) nanoseconds at which to call Proc.
  *
  *  @returns               Status
  */
@@ -726,7 +785,7 @@ static NV_STATUS
 _tmrInsertCallback
 (
     OBJTMR         *pTmr,
-    PTMR_EVENT_PVT  pEvent,
+    TMR_EVENT_PVT *pEvent,
     NvU64           Time
 )
 {
@@ -734,7 +793,7 @@ _tmrInsertCallback
     OBJGPU *pGpu = ENG_GET_GPU(pTmr);
 
     // If this is a free callback
-    if (!pEvent->bInUse && !tmrEventOnList(pTmr, (PTMR_EVENT)pEvent))
+    if (!pEvent->bInUse && !tmrEventOnList(pTmr, (TMR_EVENT *)pEvent))
     {
         pEvent->timens    = Time;
 
@@ -765,17 +824,17 @@ _tmrInsertCallbackInList
 (
     OBJGPU         *pGpu,
     OBJTMR         *pTmr,
-    PTMR_EVENT_PVT  pEvent
+    TMR_EVENT_PVT *pEvent
 )
 {
-    PTMR_EVENT_PVT   pScan;
+    TMR_EVENT_PVT   *pScan;
     NvBool           bAddedAsHead  = NV_TRUE;
     NvU64            nextAlarmTime;
 
     NV_ASSERT(!pEvent->bInUse);
     pEvent->bInUse = NV_TRUE;
 
-    if (tmrIsOSTimer(pTmr, (PTMR_EVENT)pEvent))
+    if (tmrIsOSTimer(pTmr, (TMR_EVENT *)pEvent))
     {
         pEvent->pNext = pTmr->pRmActiveOSTimerEventList;
         pTmr->pRmActiveOSTimerEventList = pEvent;
@@ -857,7 +916,7 @@ _tmrInsertCallbackInList
 NV_STATUS tmrEventScheduleAbs_IMPL
 (
     OBJTMR     *pTmr,
-    PTMR_EVENT  pEventPublic,
+    TMR_EVENT  *pEventPublic,
     NvU64       timeAbsNs
 )
 {
@@ -866,13 +925,19 @@ NV_STATUS tmrEventScheduleAbs_IMPL
 
     if ((pEvent != NULL) && tmrIsOSTimer(pTmr, pEventPublic))
     {
+        NvU64 timeRelNs, currentTime;
+
+        rmStatus = tmrGetCurrentTime(pTmr, &currentTime);
+        if (rmStatus != NV_OK)
+            return rmStatus;
+
         //
-        // OS-Timer is supported only in Relative mode. This assert is to trap
-        // if someone trying to call tmrEventScheduleAbs for OSTimer
+        // If absolute time is less than current time, then timer has already
+        // expired. For this case, schedule timer with zero delay to trigger
+        // immediate callback.
         //
-        NV_ASSERT_FAILED("Attempting to schedule OS-Timer callback with Abs time.");
-        rmStatus = NV_ERR_INVALID_ARGUMENT;
-        return rmStatus;
+        timeRelNs = (timeAbsNs > currentTime) ? (timeAbsNs - currentTime) : 0;
+        return tmrEventScheduleRel(pTmr, pEventPublic, timeRelNs);
     }
 
     if ((pEvent == NULL) || (pEventPublic->pTimeProc == NULL &&
@@ -927,7 +992,7 @@ NV_STATUS tmrScheduleCallbackAbs_IMPL
     NvU32               ChId
 )
 {
-    PTMR_EVENT_PVT tmrInsert;
+    TMR_EVENT_PVT *tmrInsert;
     // Get a free callback from the free list.
     if(pTmr->pRmCallbackFreeList_OBSOLETE == NULL)
     {
@@ -943,7 +1008,7 @@ NV_STATUS tmrScheduleCallbackAbs_IMPL
             tmrInsert->super.flags = Flags;
             tmrInsert->super.chId = ChId;
 
-            return tmrEventScheduleAbs(pTmr, (PTMR_EVENT)tmrInsert, Time);
+            return tmrEventScheduleAbs(pTmr, (TMR_EVENT *)tmrInsert, Time);
         }
         else
         {
@@ -959,7 +1024,7 @@ NV_STATUS tmrScheduleCallbackAbs_IMPL
 }
 
 /*!
- *  Searches specified lists for PTMR_EVENT  associated with Object and
+ *  Searches specified lists for TMR_EVENT* associated with Object and
  *  removes it.
  *
  *  @param[in]  Object  Unique identifier based on TMR_POBJECT_BASE (tmr.h)
@@ -972,9 +1037,9 @@ static void _tmrScanCallback
     void   *pObject
 )
 {
-    PTMR_EVENT_PVT  tmrScan;
-    PTMR_EVENT_PVT  tmrNext;
-    PTMR_EVENT_PVT  tmrCurrent;
+    TMR_EVENT_PVT *tmrScan;
+    TMR_EVENT_PVT *tmrNext;
+    TMR_EVENT_PVT *tmrCurrent;
 
     //
     // Start at the beginning of the callback list.
@@ -1062,10 +1127,10 @@ static void
 _tmrScanCallbackOSTimer
 (
     OBJTMR *pTmr,
-    PTMR_EVENT_PVT  pEvent
+    TMR_EVENT_PVT *pEvent
 )
 {
-    PTMR_EVENT_PVT  pCurrent = pTmr->pRmActiveOSTimerEventList;
+    TMR_EVENT_PVT *pCurrent = pTmr->pRmActiveOSTimerEventList;
 
     if (pCurrent == pEvent)
     {
@@ -1111,12 +1176,12 @@ _tmrGetNextAlarmTime
  * Return the very next callback to be scheduled, removing it from the list
  * and marking it as free (only "In Use" when in the list)
  */
-static PTMR_EVENT_PVT  _tmrPullCallbackFromHead
+static TMR_EVENT_PVT * _tmrPullCallbackFromHead
 (
     OBJTMR         *pTmr
 )
 {
-    PTMR_EVENT_PVT tmrDelete = pTmr->pRmActiveEventList;
+    TMR_EVENT_PVT *tmrDelete = pTmr->pRmActiveEventList;
     if (tmrDelete)
     {
         // remove from callbackList
@@ -1180,7 +1245,7 @@ tmrCallExpiredCallbacks_IMPL
 {
     NvU64           currentTime = 0;
     NvU64           nextAlarmTime;
-    PTMR_EVENT_PVT  pEvent;
+    TMR_EVENT_PVT  *pEvent;
     NV_STATUS       rmStatus;
     NvBool          bProccessedCallback = NV_FALSE;
 
@@ -1215,7 +1280,7 @@ tmrCallExpiredCallbacks_IMPL
                 }
                 else if (!pEvent->bLegacy && pEvent->super.pTimeProc != NULL)
                 {
-                    pEvent->super.pTimeProc(pGpu, pTmr, (PTMR_EVENT)pEvent);
+                    pEvent->super.pTimeProc(pGpu, pTmr, (TMR_EVENT *)pEvent);
                     bProccessedCallback = NV_TRUE;
                 }
                 else
@@ -1257,7 +1322,7 @@ _tmrStateLoadCallbacks
 )
 {
     NvU64 nextAlarmTime = 0;
-    PTMR_EVENT_PVT pScan = pTmr->pRmActiveOSTimerEventList;
+    TMR_EVENT_PVT *pScan = pTmr->pRmActiveOSTimerEventList;
 
     if (tmrEventsExist(pTmr))
     {
@@ -1291,7 +1356,7 @@ _tmrStateLoadCallbacks
         // if there is a state unload before receiving the OS timer callback.
         //
         osGetCurrentTick(&pScan->startTimeNs);
-        tmrEventScheduleRelOSTimer_HAL(pTmr, (PTMR_EVENT)pScan, pScan->timens);
+        tmrEventScheduleRelOSTimer_HAL(pTmr, (TMR_EVENT *)pScan, pScan->timens);
         pScan = pScan->pNext;
     }
 }
@@ -1387,7 +1452,7 @@ tmrCheckCallbacksReleaseSem_IMPL
     NvU32   chId
 )
 {
-    PTMR_EVENT_PVT pScan;
+    TMR_EVENT_PVT *pScan;
 
     for (pScan = pTmr->pRmActiveEventList; pScan != NULL; pScan = pScan->pNext)
     {
@@ -1517,9 +1582,17 @@ tmrDiffExceedsTime_IMPL
     return bRetVal;
 }
 
-/*!
- * TODO: document
- */
+NV_STATUS
+tmrStatePreInitLocked_IMPL
+(
+    OBJGPU *pGpu,
+    OBJTMR *pTmr
+)
+{
+
+    return NV_OK;
+}
+
 NV_STATUS
 tmrStateInitLocked_IMPL
 (
@@ -1559,7 +1632,7 @@ tmrStateUnload_IMPL
     NvU32   flags
 )
 {
-    PTMR_EVENT_PVT pScan = pTmr->pRmActiveOSTimerEventList;
+    TMR_EVENT_PVT *pScan = pTmr->pRmActiveOSTimerEventList;
     NvU64 currentSysTime, elapsedTime;
 
     // Disable Timer interrupt.
@@ -1586,7 +1659,7 @@ tmrStateUnload_IMPL
             }
         }
 
-        tmrEventCancelOSTimer_HAL(pTmr, (PTMR_EVENT)pScan);
+        tmrEventCancelOSTimer_HAL(pTmr, (TMR_EVENT *)pScan);
         pScan = pScan->pNext;
     }
     return NV_OK;
@@ -1660,7 +1733,17 @@ tmrapiDeregisterEvents_IMPL(TimerApi *pTimerApi)
     // Validate the timer event
     while (pNotifyEvent != NULL)
     {
-        tmrCancelCallback(pTmr, pNotifyEvent);
+        //
+        // TimerApi events are only set through NV0004_CTRL_CMD_TMR_SET_ALARM_NOTIFY
+        // which only schedules TMR_EVENT type callbacks. So only call the new API.
+        //
+        TMR_EVENT *pTmrEvent = pNotifyEvent->pTmrEvent;
+        if (pTmrEvent != NULL)
+        {
+            tmrEventDestroy(pTmr, pTmrEvent);
+            pNotifyEvent->pGpu = NULL;
+            pNotifyEvent->pTmrEvent = NULL;
+        }
 
         pNotifyEvent = pNotifyEvent->Next;
     }
@@ -1691,7 +1774,7 @@ static NV_STATUS _tmrCallbackWrapperfunction
 (
     OBJGPU *pGpu,
     OBJTMR *pTmr,
-    PTMR_EVENT pEvent
+    TMR_EVENT *pEvent
 )
 {
     wrapperStorage_t *pObj_Inner = (wrapperStorage_t *)pEvent->pUserData;
@@ -1732,7 +1815,7 @@ tmrCtrlCmdEventCreate
 )
 {
     NV_STATUS         rc;
-    PTMR_EVENT        pEvent;
+    TMR_EVENT        *pEvent;
     wrapperStorage_t *pWrapper;
     OBJTMR *pTmr = GPU_GET_TIMER(pGpu);
 
@@ -1760,7 +1843,6 @@ tmrCtrlCmdEventCreate
 /*!
  * Schedules an existing event. Takes in time arguments and a flag to
  * determine if it should be interpreted as absolute or relative time.
- * While using OSTimer, use this api only with relative time.
  *
  * @returns NV_STATUS
  */
@@ -1773,19 +1855,10 @@ tmrCtrlCmdEventSchedule
 {
     NV_STATUS rc;
     OBJTMR    *pTmr   = GPU_GET_TIMER(pGpu);
-    TMR_EVENT *pEvent = (PTMR_EVENT)NvP64_VALUE(pParams->pEvent);
+    TMR_EVENT *pEvent = (TMR_EVENT *)NvP64_VALUE(pParams->pEvent);
 
     if (pParams->bUseTimeAbs)
     {
-        //
-        // FIXME: This function is called only from dynamic_power.c file,
-        // using OSTimer. And OSTimer is always scheduled in relative mode
-        //
-        if ((pEvent != NULL) && tmrIsOSTimer(pTmr, pEvent))
-        {
-            NV_ASSERT_FAILED("Attempting to schedule OSTimer with Abs time.");
-            return NV_ERR_INVALID_ARGUMENT;
-        }
         rc = tmrEventScheduleAbs(pTmr, pEvent, pParams->timeNs);
     }
     else
@@ -1809,7 +1882,7 @@ tmrCtrlCmdEventCancel
 )
 {
     OBJTMR    *pTmr   = GPU_GET_TIMER(pGpu);
-    PTMR_EVENT pEvent = (PTMR_EVENT)NvP64_VALUE(pParams->pEvent);
+    TMR_EVENT *pEvent = (TMR_EVENT *)NvP64_VALUE(pParams->pEvent);
     tmrEventCancel(pTmr, pEvent);
 
     return NV_OK;
@@ -1829,7 +1902,7 @@ tmrCtrlCmdEventDestroy
 )
 {
     OBJTMR    *pTmr   = GPU_GET_TIMER(pGpu);
-    PTMR_EVENT pEvent = (PTMR_EVENT)NvP64_VALUE(pParams->pEvent);
+    TMR_EVENT *pEvent = (TMR_EVENT *)NvP64_VALUE(pParams->pEvent);
 
     // Free our temporary wrapper storage
     portMemFree(pEvent->pUserData);
@@ -1843,18 +1916,18 @@ NV_STATUS tmrEventServiceTimer_IMPL
 (
     OBJGPU             *pGpu,
     OBJTMR             *pTmr,
-    PTMR_EVENT          pPublicEvent
+    TMR_EVENT          *pPublicEvent
 )
 {
-    PTMR_EVENT_PVT pEvent = (PTMR_EVENT_PVT)pPublicEvent;
+    TMR_EVENT_PVT *pEvent = (TMR_EVENT_PVT *)pPublicEvent;
     NV_STATUS status      = NV_ERR_INVALID_REQUEST;
 
-    if ((pEvent == NULL) || !tmrIsOSTimer(pTmr, (PTMR_EVENT)pEvent))
+    if ((pEvent == NULL) || !tmrIsOSTimer(pTmr, (TMR_EVENT *)pEvent))
     {
         return status;
     }
 
-    if (tmrEventOnList(pTmr, (PTMR_EVENT)pEvent))
+    if (tmrEventOnList(pTmr, (TMR_EVENT *)pEvent))
     {
         _tmrScanCallbackOSTimer(pTmr, pEvent);
         status = tmrEventServiceOSTimerCallback_HAL(pGpu, pTmr, pPublicEvent);

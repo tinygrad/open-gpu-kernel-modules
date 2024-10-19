@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2016-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2016-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -65,7 +65,7 @@ ctxBufPoolIsSupported
         return NV_FALSE;
     }
 
-    if (!memmgrIsPmaInitialized(pMemoryManager))
+    if (!memmgrIsPmaEnabled(pMemoryManager) || !memmgrIsPmaSupportedOnPlatform(pMemoryManager))
     {
         NV_PRINTF(LEVEL_INFO, "PMA is disabled. Ctx buffers will be allocated in RM reserved heap\n");
         return NV_FALSE;
@@ -154,6 +154,9 @@ ctxBufPoolInit
                 break;
             case RM_ATTR_PAGE_SIZE_512MB:
                 poolConfig = POOL_CONFIG_CTXBUF_512M;
+                break;
+            case RM_ATTR_PAGE_SIZE_256GB:
+                poolConfig = POOL_CONFIG_CTXBUF_256G;
                 break;
             default:
                 NV_PRINTF(LEVEL_ERROR, "Unsupported page size attr %d\n", i);
@@ -293,6 +296,9 @@ ctxBufPoolReserve
                 break;
             case RM_PAGE_SIZE_512M:
                 totalSize[RM_ATTR_PAGE_SIZE_512MB] += size;
+                break;
+            case RM_PAGE_SIZE_256G:
+                totalSize[RM_ATTR_PAGE_SIZE_256GB] += size;
                 break;
             default:
                 NV_PRINTF(LEVEL_ERROR, "Unrecognized/unsupported page size = 0x%llx\n", pageSize);
@@ -436,6 +442,9 @@ ctxBufPoolAllocate
         case RM_PAGE_SIZE_512M:
             pPool = pCtxBufPool->pMemPool[RM_ATTR_PAGE_SIZE_512MB];
             break;
+        case RM_PAGE_SIZE_256G:
+            pPool = pCtxBufPool->pMemPool[RM_ATTR_PAGE_SIZE_256GB];
+            break;
         default:
             NV_PRINTF(LEVEL_ERROR, "Unsupported page size = 0x%llx set for context buffer\n", pageSize);
             NV_ASSERT_OR_RETURN(0, NV_ERR_INVALID_ARGUMENT);
@@ -494,6 +503,9 @@ ctxBufPoolFree
         case RM_PAGE_SIZE_512M:
             pPool = pCtxBufPool->pMemPool[RM_ATTR_PAGE_SIZE_512MB];
             break;
+        case RM_PAGE_SIZE_256G:
+            pPool = pCtxBufPool->pMemPool[RM_ATTR_PAGE_SIZE_256GB];
+            break;
         default:
             NV_PRINTF(LEVEL_ERROR, "Unsupported page size detected for context buffer\n");
             NV_ASSERT_OR_RETURN(0, NV_ERR_INVALID_STATE);
@@ -504,15 +516,9 @@ ctxBufPoolFree
     {
         OBJGPU *pGpu = pMemDesc->pGpu;
         MemoryManager *pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
-        TRANSFER_SURFACE surf = {0};
 
-        surf.pMemDesc = pMemDesc;
-        surf.offset = 0;
-
-        NV_ASSERT_OK_OR_RETURN(
-            memmgrMemSet(pMemoryManager, &surf, 0,
-                         pMemDesc->Size,
-                         TRANSFER_FLAGS_NONE));
+        memmgrMemsetInBlocks(pMemoryManager, pMemDesc, 0, 0, pMemDesc->Size,
+                                    TRANSFER_FLAGS_NONE, 0 /* Default Block Size */);
     }
     rmMemPoolFree(pPool, (RM_POOL_ALLOC_MEMDESC*)pMemDesc, 0);
 
@@ -621,6 +627,10 @@ ctxBufPoolGetSizeAndPageSize
         case RM_ATTR_PAGE_SIZE_512MB:
             retAttr = FLD_SET_DRF(OS32, _ATTR, _PAGE_SIZE, _HUGE, retAttr);
             retAttr2 = FLD_SET_DRF(OS32, _ATTR2, _PAGE_SIZE_HUGE, _512MB, retAttr2);
+            break;
+        case RM_ATTR_PAGE_SIZE_256GB:
+            retAttr = FLD_SET_DRF(OS32, _ATTR, _PAGE_SIZE, _HUGE, retAttr);
+            retAttr2 = FLD_SET_DRF(OS32, _ATTR2, _PAGE_SIZE_HUGE, _256GB, retAttr2);
             break;
         default:
             NV_PRINTF(LEVEL_ERROR, "unsupported page size attr\n");

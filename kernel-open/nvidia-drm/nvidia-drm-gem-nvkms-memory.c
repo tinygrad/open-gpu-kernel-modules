@@ -380,7 +380,7 @@ int nv_drm_gem_import_nvkms_memory_ioctl(struct drm_device *dev,
     int ret;
 
     if (!drm_core_check_feature(dev, DRIVER_MODESET)) {
-        ret = -EINVAL;
+        ret = -EOPNOTSUPP;
         goto failed;
     }
 
@@ -430,7 +430,7 @@ int nv_drm_gem_export_nvkms_memory_ioctl(struct drm_device *dev,
     int ret = 0;
 
     if (!drm_core_check_feature(dev, DRIVER_MODESET)) {
-        ret = -EINVAL;
+        ret = -EOPNOTSUPP;
         goto done;
     }
 
@@ -483,7 +483,7 @@ int nv_drm_gem_alloc_nvkms_memory_ioctl(struct drm_device *dev,
     int ret = 0;
 
     if (!drm_core_check_feature(dev, DRIVER_MODESET)) {
-        ret = -EINVAL;
+        ret = -EOPNOTSUPP;
         goto failed;
     }
 
@@ -551,14 +551,12 @@ static struct drm_gem_object *__nv_drm_gem_nvkms_prime_dup(
 {
     struct nv_drm_device *nv_dev = to_nv_device(dev);
     const struct nv_drm_device *nv_dev_src;
-    const struct nv_drm_gem_nvkms_memory *nv_nvkms_memory_src;
     struct nv_drm_gem_nvkms_memory *nv_nvkms_memory;
     struct NvKmsKapiMemory *pMemory;
 
     BUG_ON(nv_gem_src == NULL || nv_gem_src->ops != &nv_gem_nvkms_memory_ops);
 
     nv_dev_src = to_nv_device(nv_gem_src->base.dev);
-    nv_nvkms_memory_src = to_nv_nvkms_memory_const(nv_gem_src);
 
     if ((nv_nvkms_memory =
             nv_drm_calloc(1, sizeof(*nv_nvkms_memory))) == NULL) {

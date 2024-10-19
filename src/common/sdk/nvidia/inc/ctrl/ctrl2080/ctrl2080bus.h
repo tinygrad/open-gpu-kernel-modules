@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2005-2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2005-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -705,75 +705,13 @@ typedef struct NV2080_CTRL_BUS_SET_PCIE_SPEED_PARAMS {
     NvU32 busSpeed;
 } NV2080_CTRL_BUS_SET_PCIE_SPEED_PARAMS;
 
-#define NV2080_CTRL_BUS_SET_PCIE_SPEED_2500MBPS          (0x00000001)
-#define NV2080_CTRL_BUS_SET_PCIE_SPEED_5000MBPS          (0x00000002)
-#define NV2080_CTRL_BUS_SET_PCIE_SPEED_8000MBPS          (0x00000003)
-#define NV2080_CTRL_BUS_SET_PCIE_SPEED_16000MBPS         (0x00000004)
-#define NV2080_CTRL_BUS_SET_PCIE_SPEED_32000MBPS         (0x00000005)
-#define NV2080_CTRL_BUS_SET_PCIE_SPEED_64000MBPS         (0x00000006)
+#define NV2080_CTRL_BUS_SET_PCIE_SPEED_2500MBPS  (0x00000001)
+#define NV2080_CTRL_BUS_SET_PCIE_SPEED_5000MBPS  (0x00000002)
+#define NV2080_CTRL_BUS_SET_PCIE_SPEED_8000MBPS  (0x00000003)
+#define NV2080_CTRL_BUS_SET_PCIE_SPEED_16000MBPS (0x00000004)
+#define NV2080_CTRL_BUS_SET_PCIE_SPEED_32000MBPS (0x00000005)
+#define NV2080_CTRL_BUS_SET_PCIE_SPEED_64000MBPS (0x00000006)
 
-/*
- * NV2080_CTRL_CMD_BUS_SET_HWBC_UPSTREAM_PCIE_SPEED
- *
- * This command Initiates a change in PCIE Bus Speed for a HWBC device's upstream
- * link.
- *
- *   busSpeed
- *     This field specifies the target speed to which to train.
- *     Legal values for this parameter are:
- *       NV2080_CTRL_BUS_SET_PCIE_SPEED_2500MBPS
- *       NV2080_CTRL_BUS_SET_PCIE_SPEED_5000MBPS
- *   primaryBus
- *     This field is the PCI Express Primary Bus number that uniquely identifies
- *     a HWBC device's upstream port, i.e. the BR04 Upstream Port.
- *
- *   Possible status values returned are:
- *     NV_OK
- *     NV_ERR_INVALID_ARGUMENT
- */
-#define NV2080_CTRL_CMD_BUS_SET_HWBC_UPSTREAM_PCIE_SPEED (0x20801806) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_BUS_INTERFACE_ID << 8) | NV2080_CTRL_BUS_SET_HWBC_UPSTREAM_PCIE_SPEED_PARAMS_MESSAGE_ID" */
-
-#define NV2080_CTRL_BUS_SET_HWBC_UPSTREAM_PCIE_SPEED_PARAMS_MESSAGE_ID (0x6U)
-
-typedef struct NV2080_CTRL_BUS_SET_HWBC_UPSTREAM_PCIE_SPEED_PARAMS {
-    NvU32 busSpeed;
-    NvU8  primaryBus;
-} NV2080_CTRL_BUS_SET_HWBC_UPSTREAM_PCIE_SPEED_PARAMS;
-
-#define NV2080_CTRL_BUS_SET_HWBC_UPSTREAM_PCIE_SPEED_2500MBPS (0x00000001)
-#define NV2080_CTRL_BUS_SET_HWBC_UPSTREAM_PCIE_SPEED_5000MBPS (0x00000002)
-
-/*
- * NV2080_CTRL_CMD_BUS_GET_HWBC_UPSTREAM_PCIE_SPEED
- *
- * This command gets the current PCIE Bus Speed for a HWBC device's upstream
- * link.
- *
- *   primaryBus
- *     This field is the PCI Express Primary Bus number that uniquely identifies
- *     a HWBC device's upstream port, i.e. the BR04 Upstream Port.
- *   busSpeed
- *     This field specifies a pointer in the caller's address space
- *     to the NvU32 variable into which the bus speed is to be returned.
- *     On success, this parameter will contain one of the following values:
- *       NV2080_CTRL_BUS_SET_PCIE_SPEED_2500MBPS
- *       NV2080_CTRL_BUS_SET_PCIE_SPEED_5000MBPS
- *
- *   Possible status values returned are:
- *     NV_OK
- *     NV_ERR_INVALID_ARGUMENT
- */
-#define NV2080_CTRL_CMD_BUS_GET_HWBC_UPSTREAM_PCIE_SPEED      (0x20801807) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_BUS_INTERFACE_ID << 8) | NV2080_CTRL_BUS_GET_HWBC_UPSTREAM_PCIE_SPEED_PARAMS_MESSAGE_ID" */
-
-#define NV2080_CTRL_BUS_GET_HWBC_UPSTREAM_PCIE_SPEED_PARAMS_MESSAGE_ID (0x7U)
-
-typedef struct NV2080_CTRL_BUS_GET_HWBC_UPSTREAM_PCIE_SPEED_PARAMS {
-    NvU32 busSpeed;
-    NvU8  primaryBus;
-} NV2080_CTRL_BUS_GET_HWBC_UPSTREAM_PCIE_SPEED_PARAMS;
-
-#define NV2080_CTRL_BUS_GET_HWBC_UPSTREAM_PCIE_SPEED_2500MBPS (0x00000001)
-#define NV2080_CTRL_BUS_GET_HWBC_UPSTREAM_PCIE_SPEED_5000MBPS (0x00000002)
 
 /*
  * NV2080_CTRL_CMD_BUS_MAP_BAR2
@@ -791,7 +729,7 @@ typedef struct NV2080_CTRL_BUS_GET_HWBC_UPSTREAM_PCIE_SPEED_PARAMS {
  *    NV_ERR_NOT_SUPPORTED
  *
  */
-#define NV2080_CTRL_CMD_BUS_MAP_BAR2                          (0x20801809) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_BUS_INTERFACE_ID << 8) | NV2080_CTRL_BUS_MAP_BAR2_PARAMS_MESSAGE_ID" */
+#define NV2080_CTRL_CMD_BUS_MAP_BAR2             (0x20801809) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_BUS_INTERFACE_ID << 8) | NV2080_CTRL_BUS_MAP_BAR2_PARAMS_MESSAGE_ID" */
 
 #define NV2080_CTRL_BUS_MAP_BAR2_PARAMS_MESSAGE_ID (0x9U)
 
@@ -852,31 +790,6 @@ typedef struct NV2080_CTRL_BUS_VERIFY_BAR2_PARAMS {
     NvU32    offset;
     NvU32    size;
 } NV2080_CTRL_BUS_VERIFY_BAR2_PARAMS;
-
-/*
- * NV2080_CTRL_CMD_BUS_HWBC_GET_UPSTREAM_BAR0
- *
- * This command gets the BAR0 for a HWBC device's upstream port.
- *
- *   primaryBus
- *     This field is the PCI Express Primary Bus number that uniquely identifies
- *     a HWBC device's upstream port, i.e. the BR04 Upstream Port.
- *   physBAR0
- *     This field returns the BAR0 physical address of the HWBC device's
- *     upstream port.
- *
- *   Possible status values returned are:
- *     NV_OK
- *     NV_ERR_INVALID_ARGUMENT
- */
-#define NV2080_CTRL_CMD_BUS_HWBC_GET_UPSTREAM_BAR0 (0x2080180e) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_BUS_INTERFACE_ID << 8) | NV2080_CTRL_BUS_HWBC_GET_UPSTREAM_BAR0_PARAMS_MESSAGE_ID" */
-
-#define NV2080_CTRL_BUS_HWBC_GET_UPSTREAM_BAR0_PARAMS_MESSAGE_ID (0xEU)
-
-typedef struct NV2080_CTRL_BUS_HWBC_GET_UPSTREAM_BAR0_PARAMS {
-    NV_DECLARE_ALIGNED(NvU64 physBAR0, 8);
-    NvU8 primaryBus;
-} NV2080_CTRL_BUS_HWBC_GET_UPSTREAM_BAR0_PARAMS;
 
 /*
  * NV2080_CTRL_CMD_BUS_SERVICE_GPU_MULTIFUNC_STATE
@@ -1269,10 +1182,19 @@ typedef struct NV2080_CTRL_BUS_GET_EOM_STATUS_PARAMS {
  * NV2080_CTRL_CMD_BUS_GET_PCIE_REQ_ATOMICS_CAPS
  *
  * This command returns the PCIe requester atomics operation capabilities
- * from GPU to coherent SYSMEM.
+ * of the GPU with regards to the aspect of support the client is asking for.
+ *
+ *
+ * capType [IN]
+ *  The aspect of the atomics support the client is querying atomics capability for.
+ *  Supported types are defined under NV2080_CTRL_CMD_BUS_PCIE_ATOMICS_CAPTYPE_*.
+ *
+ * dbdf [IN] -
+ * Argument used to identify the PCIe peer endpoint. Used only for the _CAPTYPE_P2P.
+ * Encoded as: domain (31:16), bus (15:8), device (7:3), function (2:0)
  *
  * atomicsCaps[OUT]
- *  Mask of supported PCIe atomic operations in the form of
+ *  Mask of supported PCIe requester atomic operations in the form of
  *  NV2080_CTRL_CMD_BUS_GET_PCIE_REQ_ATOMICS_CAPS_*
  *
  * Possible status values returned are:
@@ -1285,8 +1207,25 @@ typedef struct NV2080_CTRL_BUS_GET_EOM_STATUS_PARAMS {
 #define NV2080_CTRL_CMD_BUS_GET_PCIE_REQ_ATOMICS_CAPS_PARAMS_MESSAGE_ID (0x29U)
 
 typedef struct NV2080_CTRL_CMD_BUS_GET_PCIE_REQ_ATOMICS_CAPS_PARAMS {
+    NvU32 capType;
+    NvU32 dbdf;
     NvU32 atomicsCaps;
 } NV2080_CTRL_CMD_BUS_GET_PCIE_REQ_ATOMICS_CAPS_PARAMS;
+
+/*
+ * Defined methods to expose atomics capability.
+ *
+ * NV2080_CTRL_CMD_BUS_PCIE_ATOMICS_CAPTYPE_SYSMEM
+ *  Exposes the state of atomics support between GPU and Sysmem.
+ * NV2080_CTRL_CMD_BUS_PCIE_ATOMICS_CAPTYPE_GPU
+ *  Exposes the state of the GPU atomics support without taking into account PCIe topology.
+ * NV2080_CTRL_CMD_BUS_PCIE_ATOMICS_CAPTYPE_P2P
+ *  Exposes the state of atomics support between the source (this GPU)
+ *  and peer GPU identified by the dbdf argument.
+ */
+#define NV2080_CTRL_CMD_BUS_PCIE_ATOMICS_CAPTYPE_SYSMEM 0x0
+#define NV2080_CTRL_CMD_BUS_PCIE_ATOMICS_CAPTYPE_GPU    0x1
+#define NV2080_CTRL_CMD_BUS_PCIE_ATOMICS_CAPTYPE_P2P    0x2
 
 #define NV2080_CTRL_CMD_BUS_GET_PCIE_REQ_ATOMICS_CAPS_FETCHADD_32      0:0
 #define NV2080_CTRL_CMD_BUS_GET_PCIE_REQ_ATOMICS_CAPS_FETCHADD_32_YES (0x00000001)
@@ -1317,19 +1256,19 @@ typedef struct NV2080_CTRL_CMD_BUS_GET_PCIE_REQ_ATOMICS_CAPS_PARAMS {
  * that map to the capable PCIe atomic operations from GPU to
  * coherent SYSMEM.
  *
+ * capType [IN]
+ *  The aspect of the atomics support the client is querying atomics capability for.
+ *  Supported types are defined under NV2080_CTRL_CMD_BUS_PCIE_ATOMICS_CAPTYPE_*.
+ *
+ * dbdf [IN] -
+ * Argument used to identify the PCIe peer endpoint. Used only for the _CAPTYPE_P2P.
+ * Encoded as: domain (31:16), bus (15:8), device (7:3), function (2:0)
+ *
  * atomicOp[OUT]
- *  Array of structure that contains the atomic operation
+ *  Array of NV2080_CTRL_BUS_PCIE_GPU_ATOMICS that contains the atomic operation
  *  supported status and its attributes. The array can be
  *  indexed using one of NV2080_CTRL_PCIE_SUPPORTED_GPU_ATOMICS_OP_TYPE_*
  *  
- *  bSupported[OUT]
- *   Is the GPU atomic operation natively supported by the PCIe?
- *  
- *  attributes[OUT]
- *   Provides the attributes mask of the GPU atomic operation when supported
- *   in the form of
- *   NV2080_CTRL_PCIE_SUPPORTED_GPU_ATOMICS_ATTRIB_REDUCTION_*
- *
  */
 #define NV2080_CTRL_CMD_BUS_GET_PCIE_SUPPORTED_GPU_ATOMICS            (0x2080182a) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_BUS_INTERFACE_ID << 8) | NV2080_CTRL_CMD_BUS_GET_PCIE_SUPPORTED_GPU_ATOMICS_PARAMS_MESSAGE_ID" */
 
@@ -1349,13 +1288,30 @@ typedef struct NV2080_CTRL_CMD_BUS_GET_PCIE_REQ_ATOMICS_CAPS_PARAMS {
 
 #define NV2080_CTRL_PCIE_SUPPORTED_GPU_ATOMICS_OP_TYPE_COUNT          13
 
+/*
+ * NV2080_CTRL_BUS_PCIE_GPU_ATOMIC_OP_INFO
+ *
+ *  Describes the support state and related attributes of a single GPU atomic op.
+ *
+ *  bSupported
+ *   Is the GPU atomic operation natively supported by the PCIe
+ *
+ *  attributes
+ *   Provides the attributes mask of the GPU atomic operation when supported
+ *   in the form of
+ *   NV2080_CTRL_PCIE_SUPPORTED_GPU_ATOMICS_ATTRIB_*
+ */
+typedef struct NV2080_CTRL_BUS_PCIE_GPU_ATOMIC_OP_INFO {
+    NvBool bSupported;
+    NvU32  attributes;
+} NV2080_CTRL_BUS_PCIE_GPU_ATOMIC_OP_INFO;
+
 #define NV2080_CTRL_CMD_BUS_GET_PCIE_SUPPORTED_GPU_ATOMICS_PARAMS_MESSAGE_ID (0x2AU)
 
 typedef struct NV2080_CTRL_CMD_BUS_GET_PCIE_SUPPORTED_GPU_ATOMICS_PARAMS {
-    struct {
-        NvBool bSupported;
-        NvU32  attributes;
-    } atomicOp[NV2080_CTRL_PCIE_SUPPORTED_GPU_ATOMICS_OP_TYPE_COUNT];
+    NvU32                                   capType;
+    NvU32                                   dbdf;
+    NV2080_CTRL_BUS_PCIE_GPU_ATOMIC_OP_INFO atomicOp[NV2080_CTRL_PCIE_SUPPORTED_GPU_ATOMICS_OP_TYPE_COUNT];
 } NV2080_CTRL_CMD_BUS_GET_PCIE_SUPPORTED_GPU_ATOMICS_PARAMS;
 
 #define NV2080_CTRL_PCIE_SUPPORTED_GPU_ATOMICS_ATTRIB_SCALAR         0:0
@@ -1417,14 +1373,8 @@ typedef struct NV2080_CTRL_CMD_BUS_GET_PCIE_SUPPORTED_GPU_ATOMICS_PARAMS {
  *
  *   remoteType[OUT]
  *       NV2080_CTRL_BUS_GET_C2C_INFO_REMOTE_TYPE_CPU - connected to a CPU
+ *       in either self-hosted mode or externally-hostedmode.
  */
-
- /*
- *                                                      in either self-hosted mode or
- *                                                      externally-hostedmode.
- */
-
-
 
 #define NV2080_CTRL_CMD_BUS_GET_C2C_INFO                            (0x2080182b) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_BUS_INTERFACE_ID << 8) | NV2080_CTRL_CMD_BUS_GET_C2C_INFO_PARAMS_MESSAGE_ID" */
 
@@ -1556,4 +1506,49 @@ typedef struct NV2080_CTRL_BUS_UNSET_P2P_MAPPING_PARAMS {
     NvU32  remoteGpuId;
     NvU8   remoteGpuUuid[NV2080_SET_P2P_MAPPING_UUID_LEN];
 } NV2080_CTRL_BUS_UNSET_P2P_MAPPING_PARAMS;
+
+/*
+ * NV2080_CTRL_CMD_BUS_GET_PCIE_CPL_ATOMICS_CAPS
+ *
+ * This command returns the PCIe completer atomics operation capabilities
+ * of the GPU.
+ *
+ * atomicsCaps[OUT]
+ *  Mask of supported PCIe completer atomic operations in the form of
+ *  NV2080_CTRL_CMD_BUS_GET_PCIE_CPL_ATOMICS_CAPS_*
+ *
+ * Possible status values returned are:
+ *   NV_OK
+ *   NV_ERR_NOT_SUPPORTED
+ */
+
+#define NV2080_CTRL_CMD_BUS_GET_PCIE_CPL_ATOMICS_CAPS (0x20801830) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_BUS_INTERFACE_ID << 8) | NV2080_CTRL_CMD_BUS_GET_PCIE_CPL_ATOMICS_CAPS_PARAMS_MESSAGE_ID" */
+
+#define NV2080_CTRL_CMD_BUS_GET_PCIE_CPL_ATOMICS_CAPS_PARAMS_MESSAGE_ID (0x30U)
+
+typedef struct NV2080_CTRL_CMD_BUS_GET_PCIE_CPL_ATOMICS_CAPS_PARAMS {
+    NvU32 atomicsCaps;
+} NV2080_CTRL_CMD_BUS_GET_PCIE_CPL_ATOMICS_CAPS_PARAMS;
+
+#define NV2080_CTRL_CMD_BUS_GET_PCIE_CPL_ATOMICS_CAPS_FETCHADD_32      0:0
+#define NV2080_CTRL_CMD_BUS_GET_PCIE_CPL_ATOMICS_CAPS_FETCHADD_32_YES (0x00000001)
+#define NV2080_CTRL_CMD_BUS_GET_PCIE_CPL_ATOMICS_CAPS_FETCHADD_32_NO  (0x00000000)
+#define NV2080_CTRL_CMD_BUS_GET_PCIE_CPL_ATOMICS_CAPS_FETCHADD_64      1:1
+#define NV2080_CTRL_CMD_BUS_GET_PCIE_CPL_ATOMICS_CAPS_FETCHADD_64_YES (0x00000001)
+#define NV2080_CTRL_CMD_BUS_GET_PCIE_CPL_ATOMICS_CAPS_FETCHADD_64_NO  (0x00000000)
+#define NV2080_CTRL_CMD_BUS_GET_PCIE_CPL_ATOMICS_CAPS_SWAP_32          2:2
+#define NV2080_CTRL_CMD_BUS_GET_PCIE_CPL_ATOMICS_CAPS_SWAP_32_YES     (0x00000001)
+#define NV2080_CTRL_CMD_BUS_GET_PCIE_CPL_ATOMICS_CAPS_SWAP_32_NO      (0x00000000)
+#define NV2080_CTRL_CMD_BUS_GET_PCIE_CPL_ATOMICS_CAPS_SWAP_64          3:3
+#define NV2080_CTRL_CMD_BUS_GET_PCIE_CPL_ATOMICS_CAPS_SWAP_64_YES     (0x00000001)
+#define NV2080_CTRL_CMD_BUS_GET_PCIE_CPL_ATOMICS_CAPS_SWAP_64_NO      (0x00000000)
+#define NV2080_CTRL_CMD_BUS_GET_PCIE_CPL_ATOMICS_CAPS_CAS_32           4:4
+#define NV2080_CTRL_CMD_BUS_GET_PCIE_CPL_ATOMICS_CAPS_CAS_32_YES      (0x00000001)
+#define NV2080_CTRL_CMD_BUS_GET_PCIE_CPL_ATOMICS_CAPS_CAS_32_NO       (0x00000000)
+#define NV2080_CTRL_CMD_BUS_GET_PCIE_CPL_ATOMICS_CAPS_CAS_64           5:5
+#define NV2080_CTRL_CMD_BUS_GET_PCIE_CPL_ATOMICS_CAPS_CAS_64_YES      (0x00000001)
+#define NV2080_CTRL_CMD_BUS_GET_PCIE_CPL_ATOMICS_CAPS_CAS_64_NO       (0x00000000)
+#define NV2080_CTRL_CMD_BUS_GET_PCIE_CPL_ATOMICS_CAPS_CAS_128          6:6
+#define NV2080_CTRL_CMD_BUS_GET_PCIE_CPL_ATOMICS_CAPS_CAS_128_YES     (0x00000001)
+#define NV2080_CTRL_CMD_BUS_GET_PCIE_CPL_ATOMICS_CAPS_CAS_128_NO      (0x00000000)
 

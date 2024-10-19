@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2009-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2009-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -62,8 +62,7 @@ _p2papiReservePeerID
     NvU32 gpu1Instance = gpuGetInstance(pRemoteGpu);
 
     // loopback request
-    if (
-        !bEgmPeer &&
+    if (!bEgmPeer &&
         (pNv503bAllocParams->hSubDevice == pNv503bAllocParams->hPeerSubDevice))
     {
         *peer1 = *peer2 = 0;
@@ -145,10 +144,11 @@ _p2papiReservePeerID
     }
 
 update_mask:
-        if (bEgmPeer)
-        {
-            NV_PRINTF(LEVEL_INFO, "EGM peer\n");
-        }
+    if (bEgmPeer)
+    {
+        NV_PRINTF(LEVEL_INFO, "EGM peer\n");
+    }
+
     //
     // Does the mapping already exist between the given pair of GPUs using the peerIDs
     // peer1 and peer2 respectively ?
@@ -281,6 +281,7 @@ p2papiConstruct_IMPL
 
     subDevicePeerIdMask     = pNv503bAllocParams->subDevicePeerIdMask;
     peerSubDevicePeerIdMask = pNv503bAllocParams->peerSubDevicePeerIdMask;
+
     NvU32                        egmPeer1;
     NvU32                        egmPeer2;
     NvU32                        subDeviceEgmPeerIdMask;
@@ -343,6 +344,7 @@ p2papiConstruct_IMPL
         {
             return NV_ERR_INVALID_ARGUMENT;
         }
+
         if (pNv503bAllocParams->subDeviceEgmPeerIdMask != pNv503bAllocParams->peerSubDeviceEgmPeerIdMask)
         {
             return NV_ERR_INVALID_ARGUMENT;
@@ -546,9 +548,17 @@ p2papiConstruct_IMPL
     pP2PApi->attributes  = DRF_NUM(_P2PAPI, _ATTRIBUTES, _CONNECTION_TYPE, p2pConnectionType);
     pP2PApi->attributes |= bSpaAccessOnly ? DRF_DEF(_P2PAPI, _ATTRIBUTES, _LINK_TYPE, _SPA) :
                                             DRF_DEF(_P2PAPI, _ATTRIBUTES, _LINK_TYPE, _GPA);
+
+    //
+    // For Nvswitch connected systems, AAS(Alternate Address Space) is set by Nvswitch itself
+    // based on the EGM fabric address range and so there is no need for a separate peer id
+    // in the Nvswitch case.
+    //
     bEgmPeer = (!bSpaAccessOnly &&
                 memmgrIsLocalEgmEnabled(GPU_GET_MEMORY_MANAGER(pLocalGpu)) &&
-                memmgrIsLocalEgmEnabled(GPU_GET_MEMORY_MANAGER(pRemoteGpu)));
+                memmgrIsLocalEgmEnabled(GPU_GET_MEMORY_MANAGER(pRemoteGpu)) &&
+                !GPU_IS_NVSWITCH_DETECTED(pLocalGpu));
+
     if (bSpaAccessOnly &&
         memmgrIsLocalEgmEnabled(GPU_GET_MEMORY_MANAGER(pLocalGpu)) &&
         memmgrIsLocalEgmEnabled(GPU_GET_MEMORY_MANAGER(pRemoteGpu)))
@@ -574,13 +584,13 @@ p2papiConstruct_IMPL
 
         // setup the p2p resources
         NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
-                              kbusCreateP2PMapping_HAL(pLocalGpu, pLocalKernelBus, pRemoteGpu,
+                              kbusCreateP2PMapping_GH100(pLocalGpu, pLocalKernelBus, pRemoteGpu,
                                                        pRemoteKernelBus, &peer1, &peer2,
                                                        pP2PApi->attributes));
         if (bEgmPeer)
         {
             NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
-                                  kbusCreateP2PMapping_HAL(pLocalGpu, pLocalKernelBus, pRemoteGpu,
+                                  kbusCreateP2PMapping_GH100(pLocalGpu, pLocalKernelBus, pRemoteGpu,
                                                            pRemoteKernelBus, &egmPeer1, &egmPeer2,
                                                            pP2PApi->attributes |
                                                            DRF_DEF(_P2PAPI, _ATTRIBUTES, _REMOTE_EGM, _YES)));
@@ -590,13 +600,13 @@ p2papiConstruct_IMPL
             (pCallContext->secInfo.privLevel >= RS_PRIV_LEVEL_KERNEL))
         {
             NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
-                                  kbusGetBar1P2PDmaInfo_HAL(pLocalGpu, pRemoteGpu,
+                                  kbusGetBar1P2PDmaInfo_GH100(pLocalGpu, pRemoteGpu,
                                       pRemoteKernelBus,
                                       &pNv503bAllocParams->l2pBar1P2PDmaInfo.dma_address,
                                       &pNv503bAllocParams->l2pBar1P2PDmaInfo.dma_size));
 
             NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
-                                  kbusGetBar1P2PDmaInfo_HAL(pRemoteGpu, pLocalGpu,
+                                  kbusGetBar1P2PDmaInfo_GH100(pRemoteGpu, pLocalGpu,
                                       pLocalKernelBus, 
                                       &pNv503bAllocParams->p2lBar1P2PDmaInfo.dma_address,
                                       &pNv503bAllocParams->p2lBar1P2PDmaInfo.dma_size));
@@ -732,15 +742,16 @@ p2papiDestruct_IMPL
     {
         // remove any resources associated with this mapping
         NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR,
-                            kbusRemoveP2PMapping_HAL(pLocalGpu, pLocalKernelBus,
+                            kbusRemoveP2PMapping_GH100(pLocalGpu, pLocalKernelBus,
                                                      pRemoteGpu, pRemoteKernelBus,
                                                      pP2PApi->peerId1, pP2PApi->peerId2,
                                                      pP2PApi->attributes), end);
         if (!FLD_TEST_DRF(_P2PAPI, _ATTRIBUTES, _LINK_TYPE, _SPA, pP2PApi->attributes) &&
             memmgrIsLocalEgmEnabled(GPU_GET_MEMORY_MANAGER(pLocalGpu)) &&
-            memmgrIsLocalEgmEnabled(GPU_GET_MEMORY_MANAGER(pRemoteGpu)))
+            memmgrIsLocalEgmEnabled(GPU_GET_MEMORY_MANAGER(pRemoteGpu)) &&
+            !GPU_IS_NVSWITCH_DETECTED(pLocalGpu))
         {
-            status = kbusRemoveP2PMapping_HAL(pLocalGpu, pLocalKernelBus,
+            status = kbusRemoveP2PMapping_GH100(pLocalGpu, pLocalKernelBus,
                                               pRemoteGpu, pRemoteKernelBus,
                                               pP2PApi->egmPeerId1, pP2PApi->egmPeerId2,
                                               pP2PApi->attributes |

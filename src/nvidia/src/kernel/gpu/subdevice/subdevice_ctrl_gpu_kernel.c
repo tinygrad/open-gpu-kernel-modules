@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2004-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2004-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -38,6 +38,7 @@
 #include "nvVer.h"
 #include "gpu/bif/kernel_bif.h"
 #include "gpu/bus/kern_bus.h"
+#include "gpu/gsp/gsp_static_config.h"
 #include "gpu/disp/kern_disp.h"
 #include "disp/nvfbc_session.h"
 #include "gpu/mmu/kern_gmmu.h"
@@ -45,18 +46,18 @@
 #include "kernel/gpu/mc/kernel_mc.h"
 #include "kernel/gpu/nvlink/kernel_nvlink.h"
 #include "gpu/gpu_fabric_probe.h"
-#include "objtmr.h"
+#include "gpu/timer/objtmr.h"
 #include "platform/chipset/chipset.h"
 #include "kernel/gpu/gr/kernel_graphics.h"
 #include "kernel/gpu/mig_mgr/kernel_mig_manager.h"
 #include "kernel/gpu/gr/kernel_graphics_manager.h"
 #include "vgpu/rpc.h"
 #include "gpu/mem_mgr/mem_mgr.h"
-
+#include "virtualization/hypervisor/hypervisor.h"
 #include "gpu/mem_sys/kern_mem_sys.h"
 #include "gpu/nvenc/nvencsession.h"
-
 #include "kernel/gpu/fifo/kernel_fifo.h"
+#include "gpu/ce/kernel_ce_shared.h"
 #include "rmapi/resource_fwd_decls.h"
 #include "rmapi/client.h"
 
@@ -66,6 +67,7 @@
 
 // bit to set when telling physical to fill in an info entry
 #define INDEX_FORWARD_TO_PHYSICAL 0x80000000
+ct_assert(INDEX_FORWARD_TO_PHYSICAL == DRF_NUM(2080, _CTRL_GPU_INFO_INDEX, _RESERVED, 1));
 
 static NV_STATUS
 getGpuInfos(Subdevice *pSubdevice, NV2080_CTRL_GPU_GET_INFO_V2_PARAMS *pParams, NvBool bCanAccessHw)
@@ -84,13 +86,62 @@ getGpuInfos(Subdevice *pSubdevice, NV2080_CTRL_GPU_GET_INFO_V2_PARAMS *pParams, 
 
     for (i = 0; i < pParams->gpuInfoListSize; i++)
     {
-        if (pParams->gpuInfoList[i].index >= NV2080_CTRL_GPU_INFO_MAX_LIST_SIZE)
+
+        const NvU32 index = DRF_VAL(2080, _CTRL_GPU_INFO_INDEX, _INDEX, pParams->gpuInfoList[i].index);
+
+        if (index >= NV2080_CTRL_GPU_INFO_MAX_LIST_SIZE)
         {
             return NV_ERR_INVALID_ARGUMENT;
         }
 
-        switch (pParams->gpuInfoList[i].index)
+        const NvU32 groupId = DRF_VAL(2080, _CTRL_GPU_INFO_INDEX, _GROUP_ID, pParams->gpuInfoList[i].index);
+
+        if (groupId >= pGpu->gpuGroupCount)
         {
+            NV_PRINTF(LEVEL_WARNING, "invalid groupId\n");
+            return NV_ERR_INVALID_ARGUMENT;
+        }
+
+        data = 0;
+
+        switch (index)
+        {
+            case NV2080_CTRL_GPU_INFO_INDEX_ECID_LO32:
+            {
+                if (IS_GSP_CLIENT(pGpu))
+                {
+                    GspStaticConfigInfo *pGSCI = GPU_GET_GSP_STATIC_INFO(pGpu);
+                    data =  pGSCI->ecidInfo[groupId].ecidLow;
+                    break;
+                }
+                data = 0;
+                status = NV_ERR_NOT_SUPPORTED;
+                break;
+            }
+            case NV2080_CTRL_GPU_INFO_INDEX_ECID_HI32:
+            {
+                if (IS_GSP_CLIENT(pGpu))
+                {
+                    GspStaticConfigInfo *pGSCI = GPU_GET_GSP_STATIC_INFO(pGpu);
+                    data = pGSCI->ecidInfo[groupId].ecidHigh;
+                    break;
+                }
+                data = 0;
+                status = NV_ERR_NOT_SUPPORTED;
+                break;
+            }
+            case NV2080_CTRL_GPU_INFO_INDEX_ECID_EXTENDED:
+            {
+                if (IS_GSP_CLIENT(pGpu))
+                {
+                    GspStaticConfigInfo *pGSCI = GPU_GET_GSP_STATIC_INFO(pGpu);
+                    data = pGSCI->ecidInfo[groupId].ecidExtended;
+                    break;
+                }
+                data = 0;
+                status = NV_ERR_NOT_SUPPORTED;
+                break;
+            }
             case NV2080_CTRL_GPU_INFO_INDEX_GPU_FLA_CAPABILITY:
             {
                 KernelBus *pKernelBus = GPU_GET_KERNEL_BUS(pGpu);
@@ -493,6 +544,16 @@ subdeviceCtrlCmdGpuGetInfoV2_IMPL
     return getGpuInfos(pSubdevice, pGpuInfoParams, NV_TRUE);
 }
 
+NV_STATUS
+subdeviceCtrlCmdGpuGetVfCaps_IMPL
+(
+    Subdevice *pSubdevice,
+    NV2080_CTRL_GPU_GET_VF_CAPS_PARAMS *pParams
+)
+{
+    return NV_ERR_NOT_SUPPORTED;
+}
+
 //
 // subdeviceCtrlCmdGpuGetCachedInfo: As subdeviceCtrlCmdGpuGetInfoV2, except
 // does not perform any HW access (NO_GPUS_ACCESS and NO_GPUS_LOCK flags)
@@ -507,7 +568,7 @@ subdeviceCtrlCmdGpuGetCachedInfo_IMPL
     return getGpuInfos(pSubdevice, pGpuInfoParams, NV_FALSE);
 }
 
-static POBJHWBC
+static OBJHWBC *
 getBridgeObject(OBJHWBC *pHWBC, NvU32 hwbcId)
 {
     OBJHWBC *pBridgeObject = NULL;
@@ -1200,6 +1261,7 @@ subdeviceCtrlCmdGpuSetSdm_IMPL
     NV2080_CTRL_GPU_SET_SDM_PARAMS* pSdmParams
 )
 {
+    NV_STATUS status = NV_OK;
     OBJGPU *pGpu = GPU_RES_GET_GPU(pSubdevice);
     NvU32   subdeviceInstance;
 
@@ -1216,6 +1278,7 @@ subdeviceCtrlCmdGpuSetSdm_IMPL
         NV_PRINTF(LEVEL_ERROR, "NV2080_CTRL_CMD_GPU_SET_SDM cannot be called after the GPU is loaded");
         return NV_ERR_INVALID_STATE;
     }
+
     subdeviceInstance = BIT_IDX_32(pSdmParams->subdeviceMask);
 
     if (subdeviceInstance >= NV_MAX_SUBDEVICES)
@@ -1223,9 +1286,10 @@ subdeviceCtrlCmdGpuSetSdm_IMPL
         NV_PRINTF(LEVEL_ERROR, "Subdevice mask exceeds the max count of subdevices");
         return NV_ERR_INVALID_DATA;
     }
+
     pGpu->subdeviceInstance = subdeviceInstance;
 
-    return NV_OK;
+    return status;
 }
 
 //
@@ -1320,8 +1384,7 @@ subdeviceCtrlCmdGpuGetEnginesV2_IMPL
     // Validate engine count
     if (pGpu->engineDB.size > NV2080_GPU_MAX_ENGINES_LIST_SIZE)
     {
-        NV_PRINTF(LEVEL_ERROR, "The engine database's size (0x%x) exceeds "
-                  "NV2080_GPU_MAX_ENGINES_LIST_SIZE (0x%x)!\n",
+        NV_PRINTF(LEVEL_ERROR, "The engine database's size (0x%x) exceeds NV2080_GPU_MAX_ENGINES_LIST_SIZE (0x%x)!\n",
                   pGpu->engineDB.size, NV2080_GPU_MAX_ENGINES_LIST_SIZE);
         DBG_BREAKPOINT();
         return NV_ERR_INVALID_STATE;
@@ -1348,7 +1411,48 @@ subdeviceCtrlCmdGpuGetEnginesV2_IMPL
                                            pEngineParams->engineCount,
                                            pEngineParams->engineList);
             }
+
+            // Validate engine count
+            if (pEngineParams->engineCount > NV2080_GPU_MAX_ENGINES_LIST_SIZE)
+            {
+                NV_PRINTF(LEVEL_ERROR, "The engine count (0x%x) exceeds NV2080_GPU_MAX_ENGINES_LIST_SIZE (0x%x)!\n",
+                          pEngineParams->engineCount, NV2080_GPU_MAX_ENGINES_LIST_SIZE);
+                DBG_BREAKPOINT();
+                return NV_ERR_INVALID_STATE;
+            }
         }
+    }
+
+// removal tracking bug: 3748354
+    NvBool bOwnsLock = NV_FALSE;
+    if (!rmDeviceGpuLockIsOwner(pGpu->gpuInstance))
+    {
+        status = rmDeviceGpuLocksAcquire(pGpu, GPU_LOCK_FLAGS_SAFE_LOCK_UPGRADE, RM_LOCK_MODULES_NONE);
+        NV_ASSERT_OK_OR_RETURN(status);
+
+        bOwnsLock = NV_TRUE;
+        NvU32 i;
+        
+        for (i = 0; i < pEngineParams->engineCount; i++)
+        {
+            NvU32 nv2080EngineId;
+            nv2080EngineId = pEngineParams->engineList[i];
+
+            if (NV2080_ENGINE_TYPE_IS_COPY(nv2080EngineId))
+            {
+                // Check if this is a decomp LCE
+                if (ceIsDecompLce(pGpu, nv2080EngineId))
+                {
+                    NvU32 ceInstanceId;
+                    ceInstanceId = NV2080_ENGINE_TYPE_COPY_IDX(nv2080EngineId);
+                    pEngineParams->engineList[i] = NV2080_ENGINE_TYPE_COMP_DECOMP_COPY(ceInstanceId);
+                }
+            }
+        }
+        
+
+        if (bOwnsLock == NV_TRUE)
+            rmDeviceGpuLocksRelease(pGpu, GPU_LOCK_FLAGS_SAFE_LOCK_UPGRADE, NULL);
     }
 
     return status;
@@ -1430,7 +1534,7 @@ subdeviceCtrlCmdGpuGetEnginePartnerList_IMPL
     OBJGPU          *pGpu = GPU_RES_GET_GPU(pSubdevice);
     KernelMIGManager *pKernelMIGManager = GPU_GET_KERNEL_MIG_MANAGER(pGpu);
     ENGDESCRIPTOR    engDesc;
-    NvU32            localNv2080EngineType;
+    NvU32            nv2080EngineType;
     RM_ENGINE_TYPE   rmEngineType;
     NvU32            i;
     PCLASSDESCRIPTOR pClass;
@@ -1466,7 +1570,7 @@ subdeviceCtrlCmdGpuGetEnginePartnerList_IMPL
         return NV_ERR_NOT_SUPPORTED;
     }
 
-    localNv2080EngineType = pPartnerListParams->engineType;
+    nv2080EngineType = pPartnerListParams->engineType;
 
     // Translate the instance-local engine type to the global engine type in MIG mode
     if (IS_MIG_IN_USE(pGpu))
@@ -1492,7 +1596,7 @@ subdeviceCtrlCmdGpuGetEnginePartnerList_IMPL
     status = kfifoGetEnginePartnerList_HAL(pGpu, pKernelFifo, pPartnerListParams);
 
     // Restore the client's passed engineType
-    pPartnerListParams->engineType = localNv2080EngineType;
+    pPartnerListParams->engineType = nv2080EngineType;
 
     if (NV_OK == status)
     {
@@ -1519,22 +1623,28 @@ subdeviceCtrlCmdGpuGetEnginePartnerList_IMPL
     // Copy over all of the engines except the target
     for (i = 0; i < pGpu->engineDB.size; i++)
     {
-        localNv2080EngineType = gpuGetNv2080EngineType(pGpu->engineDB.pType[i]);
+        nv2080EngineType = gpuGetNv2080EngineType(pGpu->engineDB.pType[i]);
 
         // Skip the engine handed in
-        if (localNv2080EngineType != pPartnerListParams->engineType )
+        if (nv2080EngineType != pPartnerListParams->engineType )
         {
-            pPartnerListParams->partnerList[pPartnerListParams->numPartners++] = localNv2080EngineType;
+            pPartnerListParams->partnerList[pPartnerListParams->numPartners++] = nv2080EngineType;
         }
     }
 
 subdeviceCtrlCmdGpuGetEnginePartnerList_filter:
     if (IS_MIG_IN_USE(pGpu))
     {
+        Device *pDevice = GPU_RES_GET_DEVICE(pSubdevice);
+        MIG_INSTANCE_REF ref;
+
+        NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
+            kmigmgrGetInstanceRefFromDevice(pGpu, pKernelMIGManager, pDevice, &ref));
         // Remove entries which don't exist in this client's GPU instance
         status = kmigmgrFilterEnginePartnerList(pGpu, pKernelMIGManager,
                                                 pSubdevice,
                                                 pPartnerListParams);
+
     }
 
     return status;
@@ -2387,7 +2497,7 @@ subdeviceCtrlCmdGpuGetMaxSupportedPageSize_IMPL
     // Default to minimal page size (4k)
     pParams->maxSupportedPageSize = RM_PAGE_SIZE;
 
-    if (IS_VIRTUAL(pGpu))
+    if (IS_VIRTUAL_WITHOUT_SRIOV(pGpu) || IS_VIRTUAL_WITH_HEAVY_SRIOV(pGpu))
     {
         VGPU_STATIC_INFO *pVSI = GPU_GET_STATIC_INFO(pGpu);
 
@@ -2398,6 +2508,11 @@ subdeviceCtrlCmdGpuGetMaxSupportedPageSize_IMPL
 
     KernelGmmu *pKernelGmmu = GPU_GET_KERNEL_GMMU(pGpu);
 
+    if (kgmmuIsPageSize256gbSupported(pKernelGmmu))
+    {
+        pParams->maxSupportedPageSize = RM_PAGE_SIZE_256G;
+    }
+    else
     if (kgmmuIsPageSize512mbSupported(pKernelGmmu))
     {
         pParams->maxSupportedPageSize = RM_PAGE_SIZE_512M;
@@ -2411,9 +2526,9 @@ subdeviceCtrlCmdGpuGetMaxSupportedPageSize_IMPL
         pParams->maxSupportedPageSize = (NvU32)kgmmuGetMaxBigPageSize_HAL(pKernelGmmu);
     }
 
-    if (gpuIsSriovEnabled(pGpu)
+    if (gpuIsSriovEnabled(pGpu) || IS_VIRTUAL_WITH_SRIOV(pGpu)
         || gpuIsCCFeatureEnabled(pGpu)
-       )
+        )
     {
         NvU64 vmmuSegmentSize = gpuGetVmmuSegmentSize(pGpu);
         if (vmmuSegmentSize > 0 &&
@@ -2900,6 +3015,7 @@ subdeviceCtrlCmdUpdateGfidP2pCapability_IMPL
 {
     return gpuUpdateGfidP2pCapability(GPU_RES_GET_GPU(pSubdevice), pParams);
 }
+
 /*
  * Set the EGM fabric base address
  */
@@ -3103,7 +3219,10 @@ subdeviceCtrlCmdGetGpuFabricProbeInfo_IMPL
     status = gpuFabricProbeGetfmCaps(pGpu->pGpuFabricProbeInfoKernel, &fmCaps);
     NV_ASSERT_OK_OR_RETURN(status);
 
-    pParams->fabricCaps = _convertGpuFabricProbeInfoCaps(fmCaps);
+    if (!gpuIsCCFeatureEnabled(pGpu) || !gpuIsCCMultiGpuProtectedPcieModeEnabled(pGpu))
+    {
+        pParams->fabricCaps = _convertGpuFabricProbeInfoCaps(fmCaps);
+    }
 
     status = gpuFabricProbeGetFabricCliqueId(pGpu->pGpuFabricProbeInfoKernel,
                                              &pParams->fabricCliqueId);
@@ -3269,26 +3388,76 @@ subdeviceCtrlCmdGpuGetChipDetails_IMPL
     return gpuGetChipDetails(pGpu, pParams);
 }
 
+NV_STATUS
+subdeviceCtrlCmdBiosGetSKUInfo_KERNEL
+(
+    Subdevice *pSubdevice,
+    NV2080_CTRL_BIOS_GET_SKU_INFO_PARAMS *pBiosGetSKUInfoParams
+)
+{
+    OBJGPU              *pGpu  = GPU_RES_GET_GPU(pSubdevice);
+    GspStaticConfigInfo *pGSCI = GPU_GET_GSP_STATIC_INFO(pGpu);
+
+    NV_ASSERT_OR_RETURN(pGSCI != NULL, NV_ERR_INVALID_STATE);
+
+    portMemCopy(pBiosGetSKUInfoParams,
+                sizeof(NV2080_CTRL_BIOS_GET_SKU_INFO_PARAMS),
+                &pGSCI->SKUInfo,
+                sizeof(NV2080_CTRL_BIOS_GET_SKU_INFO_PARAMS));
+
+    return NV_OK;
+}
+
 /*!
- * @brief   This Command is used to report if the specified logo illumination attribute
- *          is supported
+ * @brief   This Command is used to set a new value for the specified logo illumination
+ *          attribute on the specified GPU
  *
  * @param[in,out]   pConfigParams
  *                  attribute:  The attribute whose support is to be determined.
- *                  bSupported: indicator if the specified attribute is supported.
+ *                  value:      The new value of the specified attribute to be applied.
  *
  * @return  Returns NV_STATUS
+ *          NV_ERR_INVALID_ARGUMENT   Invalid value for attribute
+ *          NV_ERR_NOT_SUPPORTED      Invalid Attribute for specified GPU
  *          NV_OK                     Success
  *
  */
 NV_STATUS
-subdeviceCtrlCmdGpuQueryIllumSupport_VF
+subdeviceCtrlCmdGpuSetIllum_IMPL
 (
     Subdevice *pSubdevice,
-    NV2080_CTRL_CMD_GPU_QUERY_ILLUM_SUPPORT_PARAMS *pConfigParams
+    NV2080_CTRL_CMD_GPU_ILLUM_PARAMS *pConfigParams
 )
 {
-    pConfigParams->bSupported = NV_FALSE;
+    OBJGPU     *pGpu        = GPU_RES_GET_GPU(pSubdevice);
+    NV_STATUS   status      = NV_OK;
+    RM_API *pRmApi = rmapiGetInterface(RMAPI_GPU_LOCK_INTERNAL);
+    NvHandle hClient = RES_GET_CLIENT_HANDLE(pSubdevice);
+    NvHandle hSubdevice = RES_GET_HANDLE(pSubdevice);
+    NV2080_CTRL_INTERNAL_GPU_SET_ILLUM_PARAMS *pConfigParamsInternal = (NV2080_CTRL_INTERNAL_GPU_SET_ILLUM_PARAMS*)pConfigParams;
 
-    return NV_OK;
+    status = pRmApi->Control(pRmApi, hClient, hSubdevice,
+                            NV2080_CTRL_CMD_INTERNAL_GPU_SET_ILLUM,
+                            pConfigParamsInternal, sizeof(*pConfigParamsInternal));
+
+    if (NV_OK == status)
+    {
+        // convert the attribute to the GPIO function.
+        switch(pConfigParams->attribute)
+        {
+            case NV2080_CTRL_GPU_ILLUM_ATTRIB_LOGO_BRIGHTNESS:
+            {
+                osWriteRegistryDword(pGpu, NV_REG_STR_ILLUM_ATTRIB_LOGO_BRIGHTNESS, pConfigParams->value);
+                break;
+            }
+            case NV2080_CTRL_GPU_ILLUM_ATTRIB_SLI_BRIGHTNESS:
+            {
+                osWriteRegistryDword(pGpu, NV_REG_STR_ILLUM_ATTRIB_SLI_BRIGHTNESS, pConfigParams->value);
+                break;
+            }
+        }
+    }
+
+    return status;
 }
+

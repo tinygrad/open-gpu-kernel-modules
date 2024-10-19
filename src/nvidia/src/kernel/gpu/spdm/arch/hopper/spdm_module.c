@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2022-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -33,7 +33,7 @@
 #include "gpu/conf_compute/ccsl.h"
 #include "gpu/conf_compute/conf_compute.h"
 #include "spdm/rmspdmvendordef.h"
-#include "objtmr.h"
+#include "gpu/timer/objtmr.h"
 /* ------------------------- Macros and Defines ----------------------------- */
 
 /* ------------------------- Static Functions ------------------------------ */

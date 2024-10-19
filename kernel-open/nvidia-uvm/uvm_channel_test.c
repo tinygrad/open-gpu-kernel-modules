@@ -340,9 +340,9 @@ static NV_STATUS uvm_test_iommu_rc_for_gpu(uvm_gpu_t *gpu)
     if (!domain || !iommu_is_dma_domain(domain))
         return NV_OK;
 
-    // Only run if ATS is enabled. Otherwise the CE doesn't get response on
-    // writing to unmapped location.
-    if (!g_uvm_global.ats.enabled)
+    // Only run if ATS is enabled with 64kB base page.
+    // Otherwise the CE doesn't get response on writing to unmapped location.
+    if (!g_uvm_global.ats.enabled || PAGE_SIZE != UVM_PAGE_SIZE_64K)
         return NV_OK;
 
     status = uvm_mem_alloc_sysmem_and_map_cpu_kernel(data_size, NULL, &sysmem);
@@ -793,7 +793,7 @@ done:
 // This test verifies that concurrent pushes using the same channel pool
 // select different channels, when the Confidential Computing feature is
 // enabled.
-NV_STATUS test_conf_computing_channel_selection(uvm_va_space_t *va_space)
+static NV_STATUS test_conf_computing_channel_selection(uvm_va_space_t *va_space)
 {
     NV_STATUS status = NV_OK;
     uvm_channel_pool_t *pool;
@@ -853,7 +853,7 @@ error:
     return status;
 }
 
-NV_STATUS test_channel_iv_rotation(uvm_va_space_t *va_space)
+static NV_STATUS test_channel_iv_rotation(uvm_va_space_t *va_space)
 {
     uvm_gpu_t *gpu;
 
@@ -948,7 +948,7 @@ release:
     return NV_OK;
 }
 
-NV_STATUS test_write_ctrl_gpfifo_noop(uvm_va_space_t *va_space)
+static NV_STATUS test_write_ctrl_gpfifo_noop(uvm_va_space_t *va_space)
 {
     uvm_gpu_t *gpu;
 
@@ -987,7 +987,7 @@ NV_STATUS test_write_ctrl_gpfifo_noop(uvm_va_space_t *va_space)
     return NV_OK;
 }
 
-NV_STATUS test_write_ctrl_gpfifo_and_pushes(uvm_va_space_t *va_space)
+static NV_STATUS test_write_ctrl_gpfifo_and_pushes(uvm_va_space_t *va_space)
 {
     uvm_gpu_t *gpu;
 
@@ -1035,7 +1035,7 @@ NV_STATUS test_write_ctrl_gpfifo_and_pushes(uvm_va_space_t *va_space)
     return NV_OK;
 }
 
-NV_STATUS test_write_ctrl_gpfifo_tight(uvm_va_space_t *va_space)
+static NV_STATUS test_write_ctrl_gpfifo_tight(uvm_va_space_t *va_space)
 {
     NV_STATUS status = NV_OK;
     uvm_gpu_t *gpu;

@@ -75,6 +75,7 @@
 #include <nvos.h>                       // NV01_EVENT_KERNEL_CALLBACK_EX
 #include <class/cl0004.h>               // NV01_TIMER
 #include <class/cl0090.h>               // KERNEL_GRAPHICS_CONTEXT
+#include <class/cl0100.h>               // LOCK_STRESS_OBJECT
 #include <class/cl506f.h>               // NV50_CHANNEL_GPFIFO
 #include <class/cl906f.h>               // GF100_CHANNEL_GPFIFO
 #include <class/cla06f.h>               // KEPLER_CHANNEL_GPFIFO_A
@@ -86,6 +87,7 @@
 #include <class/clc46f.h>               // TURING_CHANNEL_GPFIFO_A
 #include <class/clc56f.h>               // AMPERE_CHANNEL_GPFIFO_A
 #include <class/clc86f.h>               // HOPPER_CHANNEL_GPFIFO_A
+#include <class/clc96f.h>               // BLACKWELL_CHANNEL_GPFIFO_A
 #include <class/cl007d.h>               // NV04_SOFTWARE_TEST
 #include <class/cl30f1.h>               // NV30_GSYNC
 #include <class/clc361.h>               // VOLTA_USERMODE_A
@@ -137,6 +139,7 @@
 #include <class/clc6b0.h>               // NVC6B0_VIDEO_DECODER
 #include <class/clc7b0.h>               // NVC7B0_VIDEO_DECODER
 #include <class/clc9b0.h>               // NVC9B0_VIDEO_DECODER
+#include <class/clcdb0.h>               // NVCDB0_VIDEO_DECODER
 #include <class/clc4b7.h>               // NVC4B7_VIDEO_ENCODER
 #include <class/clb4b7.h>               // NVB4B7_VIDEO_ENCODER
 #include <class/clc7b7.h>               // NVC7B7_VIDEO_ENCODER
@@ -144,10 +147,12 @@
 #include <class/clb8d1.h>               // NVB8D1_VIDEO_NVJPG
 #include <class/clc4d1.h>               // NVC4D1_VIDEO_NVJPG
 #include <class/clc9d1.h>               // NVC9D1_VIDEO_NVJPG
+#include <class/clcdd1.h>               // NVCDD1_VIDEO_NVJPG
 #include <class/clb8fa.h>               // NVB8FA_VIDEO_OFA
 #include <class/clc6fa.h>               // NVC6FA_VIDEO_OFA
 #include <class/clc7fa.h>               // NVC7FA_VIDEO_OFA
 #include <class/clc9fa.h>               // NVC9FA_VIDEO_OFA
+#include <class/clcdfa.h>               // NVCDFA_VIDEO_OFA
 #include <class/cla140.h>               // KEPLER_INLINE_TO_MEMORY_B
 #include <class/cl9067.h>               // FERMI_CONTEXT_SHARE_A
 #include <class/cla06c.h>               // KEPLER_CHANNEL_GROUP_A
@@ -156,6 +161,7 @@
 #include <class/clc6b5.h>               // AMPERE_DMA_COPY_A
 #include <class/clc7b5.h>               // AMPERE_DMA_COPY_B
 #include <class/clc8b5.h>               // HOPPER_DMA_COPY_A
+#include <class/clc9b5.h>               // BLACKWELL_DMA_COPY_A
 #include <class/clb0b5.h>               // MAXWELL_DMA_COPY_A
 #include <class/clc365.h>               // ACCESS_COUNTER_NOTIFY_BUFFER
 #include <class/clc369.h>               // MMU_FAULT_BUFFER
@@ -175,6 +181,9 @@
 #include <class/clc640.h>               // AMPERE_SMC_MONITOR_SESSION
 #include <class/clcb97.h>               // HOPPER_A
 #include <class/clcbc0.h>               // HOPPER_COMPUTE_A
+#include <class/clcd97.h>               // BLACKWELL_A
+#include <class/clcdc0.h>               // BLACKWELL_COMPUTE_A
+#include <class/clcd40.h>               // BLACKWELL_INLINE_TO_MEMORY_A
 #include <class/cl00db.h>               // NV40_DEBUG_BUFFER
 #include <class/cl00de.h>               // RM_USER_SHARED_DATA
 #include <class/cl83de.h>               // GT200_DEBUGGER
@@ -426,6 +435,10 @@
 #define KERNEL_GRAPHICS_CONTEXT                  (0x00000090)
 #endif
 
+#ifndef LOCK_STRESS_OBJECT
+#define LOCK_STRESS_OBJECT                       (0x00000100)
+#endif
+
 #ifndef NV50_CHANNEL_GPFIFO
 #define NV50_CHANNEL_GPFIFO                      (0x0000506f)
 #endif
@@ -468,6 +481,10 @@
 
 #ifndef HOPPER_CHANNEL_GPFIFO_A
 #define HOPPER_CHANNEL_GPFIFO_A                  (0x0000c86f)
+#endif
+
+#ifndef BLACKWELL_CHANNEL_GPFIFO_A
+#define BLACKWELL_CHANNEL_GPFIFO_A               (0x0000c96f)
 #endif
 
 #ifndef NV04_SOFTWARE_TEST
@@ -677,6 +694,10 @@
 #define NVC9B0_VIDEO_DECODER                     (0x0000c9b0)
 #endif
 
+#ifndef NVCDB0_VIDEO_DECODER
+#define NVCDB0_VIDEO_DECODER                     (0x0000cdb0)
+#endif
+
 #ifndef NVC4B7_VIDEO_ENCODER
 #define NVC4B7_VIDEO_ENCODER                     (0x0000c4b7)
 #endif
@@ -705,6 +726,10 @@
 #define NVC9D1_VIDEO_NVJPG                       (0x0000c9d1)
 #endif
 
+#ifndef NVCDD1_VIDEO_NVJPG
+#define NVCDD1_VIDEO_NVJPG                       (0x0000cdd1)
+#endif
+
 #ifndef NVB8FA_VIDEO_OFA
 #define NVB8FA_VIDEO_OFA                         (0x0000b8fa)
 #endif
@@ -719,6 +744,10 @@
 
 #ifndef NVC9FA_VIDEO_OFA
 #define NVC9FA_VIDEO_OFA                         (0x0000c9fa)
+#endif
+
+#ifndef NVCDFA_VIDEO_OFA
+#define NVCDFA_VIDEO_OFA                         (0x0000cdfa)
 #endif
 
 #ifndef KEPLER_INLINE_TO_MEMORY_B
@@ -751,6 +780,10 @@
 
 #ifndef HOPPER_DMA_COPY_A
 #define HOPPER_DMA_COPY_A                        (0x0000c8b5)
+#endif
+
+#ifndef BLACKWELL_DMA_COPY_A
+#define BLACKWELL_DMA_COPY_A                     (0x0000c9b5)
 #endif
 
 #ifndef MAXWELL_DMA_COPY_A
@@ -827,6 +860,18 @@
 
 #ifndef HOPPER_COMPUTE_A
 #define HOPPER_COMPUTE_A                         (0x0000cbc0)
+#endif
+
+#ifndef BLACKWELL_A
+#define BLACKWELL_A                              (0x0000cd97)
+#endif
+
+#ifndef BLACKWELL_COMPUTE_A
+#define BLACKWELL_COMPUTE_A                      (0x0000cdc0)
+#endif
+
+#ifndef BLACKWELL_INLINE_TO_MEMORY_A
+#define BLACKWELL_INLINE_TO_MEMORY_A             (0x0000cd40)
 #endif
 
 #ifndef NV40_DEBUG_BUFFER

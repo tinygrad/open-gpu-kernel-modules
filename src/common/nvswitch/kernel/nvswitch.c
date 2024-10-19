@@ -291,7 +291,7 @@ _nvswitch_corelib_get_uphy_load
 )
 {
     nvswitch_device *device = link->dev->pDevInfo;
-    return device->hal.nvswitch_corelib_get_uphy_load(link, bUnlocked);
+    device->hal.nvswitch_corelib_get_uphy_load(link, bUnlocked);
 }
 
 
@@ -805,6 +805,17 @@ nvswitch_soe_init_l2_state
     device->hal.nvswitch_soe_init_l2_state(device);
 }
 
+NvlStatus
+nvswitch_soe_issue_ingress_stop
+(
+    nvswitch_device *device,
+    NvU32 nport,
+    NvBool bStop
+)
+{
+    return device->hal.nvswitch_soe_issue_ingress_stop(device, nport, bStop);
+}
+
 void
 nvswitch_fsp_update_cmdq_head_tail
 (
@@ -813,7 +824,7 @@ nvswitch_fsp_update_cmdq_head_tail
     NvU32 queueTail
 )
 {
-    return device->hal.nvswitch_fsp_update_cmdq_head_tail(device, queueHead, queueTail);
+    device->hal.nvswitch_fsp_update_cmdq_head_tail(device, queueHead, queueTail);
 }
 
 void
@@ -824,7 +835,7 @@ nvswitch_fsp_get_cmdq_head_tail
     NvU32 *pQueueTail
 )
 {
-    return device->hal.nvswitch_fsp_get_cmdq_head_tail(device, pQueueHead, pQueueTail);
+    device->hal.nvswitch_fsp_get_cmdq_head_tail(device, pQueueHead, pQueueTail);
 }
 
 void
@@ -835,7 +846,7 @@ nvswitch_fsp_update_msgq_head_tail
     NvU32 msgqTail
 )
 {
-    return device->hal.nvswitch_fsp_update_msgq_head_tail(device, msgqHead, msgqTail);
+    device->hal.nvswitch_fsp_update_msgq_head_tail(device, msgqHead, msgqTail);
 }
 
 void
@@ -846,7 +857,7 @@ nvswitch_fsp_get_msgq_head_tail
     NvU32 *pMsgqTail
 )
 {
-   return device->hal.nvswitch_fsp_get_msgq_head_tail(device, pMsgqHead, pMsgqTail);
+   device->hal.nvswitch_fsp_get_msgq_head_tail(device, pMsgqHead, pMsgqTail);
 }
 
 NvU32
@@ -989,6 +1000,36 @@ _nvswitch_ctrl_fsprpc_get_caps
 )
 {
     return device->hal.nvswitch_fsprpc_get_caps(device, params);
+}
+
+static NvlStatus
+_nvswitch_ctrl_get_attestation_certificate_chain
+(
+    nvswitch_device *device,
+    NVSWITCH_GET_ATTESTATION_CERTIFICATE_CHAIN_PARAMS *params
+)
+{
+    return device->hal.nvswitch_tnvl_get_attestation_certificate_chain(device, params);
+}
+
+static NvlStatus
+_nvswitch_ctrl_get_attestation_report
+(
+    nvswitch_device *device,
+    NVSWITCH_GET_ATTESTATION_REPORT_PARAMS *params
+)
+{
+    return device->hal.nvswitch_tnvl_get_attestation_report(device, params);
+}
+
+static NvlStatus
+_nvswitch_ctrl_get_tnvl_status
+(
+    nvswitch_device *device,
+    NVSWITCH_GET_TNVL_STATUS_PARAMS *params
+)
+{
+    return device->hal.nvswitch_tnvl_get_status(device, params);
 }
 
 static NvlStatus
@@ -1312,7 +1353,15 @@ nvswitch_ctrl_blacklist_device(
     if (status != NVL_SUCCESS)
         return status;
 
-    nvswitch_lib_disable_interrupts(device);
+    if (nvswitch_is_tnvl_mode_locked(device))
+    {
+        NVSWITCH_PRINT(device, ERROR,
+            "%s(%d): Security locked\n", __FUNCTION__, __LINE__);
+    }
+    else
+    {
+        nvswitch_lib_disable_interrupts(device);
+    }
 
     // Unregister links from NVLinkCoreLib, so that link training is not
     // attempted
@@ -2778,6 +2827,11 @@ nvswitch_lib_register_device
     device->device_blacklist_reason = NVSWITCH_DEVICE_BLACKLIST_REASON_NONE;
 
     //
+    // Initialize TNVL Mode
+    //
+    device->tnvl_mode = NVSWITCH_DEVICE_TNVL_MODE_DISABLED;
+
+    //
     // Initialize HAL connectivity as early as possible so that other lib
     // interfaces can work.
     //
@@ -3382,7 +3436,7 @@ nvswitch_init_npg_multicast
     nvswitch_device *device
 )
 {
-    return device->hal.nvswitch_init_npg_multicast(device);
+    device->hal.nvswitch_init_npg_multicast(device);
 }
 
 void
@@ -3391,7 +3445,7 @@ nvswitch_init_warm_reset
     nvswitch_device *device
 )
 {
-    return device->hal.nvswitch_init_warm_reset(device);
+    device->hal.nvswitch_init_warm_reset(device);
 }
 
 static NvlStatus
@@ -4465,15 +4519,15 @@ nvswitch_filter_messages
 
     if (nvswitch_is_message_persistent(device, msghdr))
     {
-         if (nvListCount(&device->link[linkId].inbandData.persistent_list) <
-             device->hal.nvswitch_get_max_persistent_message_count(device))
-         {
-         nvListAdd(&msg->entry, &device->link[linkId].inbandData.persistent_list);
-    }
-    else
-    {
-             bSendNackOrDrop = NV_TRUE;
-         }
+        if (nvListCount(&device->link[linkId].inbandData.persistent_list) <
+            device->hal.nvswitch_get_max_persistent_message_count(device))
+        {
+            nvListAdd(&msg->entry, &device->link[linkId].inbandData.persistent_list);
+        }
+        else
+        {
+            bSendNackOrDrop = NV_TRUE;
+        }
     }
     else
     {
@@ -4495,13 +4549,13 @@ nvswitch_filter_messages
     }
     else
     {
-    status = nvswitch_lib_notify_client_events(device,
-                                               NVSWITCH_DEVICE_EVENT_INBAND_DATA);
-    if (status != NVL_SUCCESS)
-    {
-          NVSWITCH_PRINT(device, ERROR, "%s: Failed to notify INBAND_DATA event\n",
-                         __FUNCTION__);
-    }
+        status = nvswitch_lib_notify_client_events(device,
+                                                   NVSWITCH_DEVICE_EVENT_INBAND_DATA);
+        if (status != NVL_SUCCESS)
+        {
+              NVSWITCH_PRINT(device, ERROR, "%s: Failed to notify INBAND_DATA event\n",
+                             __FUNCTION__);
+        }
     }
 
     device->link[linkId].inbandData.message = NULL;
@@ -5066,7 +5120,7 @@ nvswitch_init_clock_gating
     nvswitch_device *device
 )
 {
-    return device->hal.nvswitch_init_clock_gating(device);
+    device->hal.nvswitch_init_clock_gating(device);
 }
 
 void
@@ -5459,7 +5513,7 @@ nvswitch_setup_link_loopback_mode
     NvU32            linkNumber
 )
 {
-    return device->hal.nvswitch_setup_link_loopback_mode(device, linkNumber);
+    device->hal.nvswitch_setup_link_loopback_mode(device, linkNumber);
 }
 
 void
@@ -5469,7 +5523,7 @@ nvswitch_reset_persistent_link_hw_state
     NvU32            linkNumber
 )
 {
-    return device->hal.nvswitch_reset_persistent_link_hw_state(device, linkNumber);
+    device->hal.nvswitch_reset_persistent_link_hw_state(device, linkNumber);
 }
 
 void
@@ -5479,7 +5533,7 @@ nvswitch_store_topology_information
     nvlink_link *link
 )
 {
-    return device->hal.nvswitch_store_topology_information(device, link);
+    device->hal.nvswitch_store_topology_information(device, link);
 }
 
 void
@@ -5568,7 +5622,7 @@ nvswitch_init_buffer_ready
     NvBool bNportBufferReady
 )
 {
-    return device->hal.nvswitch_init_buffer_ready(device, link, bNportBufferReady);
+    device->hal.nvswitch_init_buffer_ready(device, link, bNportBufferReady);
 }
 
 void
@@ -5578,7 +5632,7 @@ nvswitch_apply_recal_settings
     nvlink_link *link
 )
 {
-    return device->hal.nvswitch_apply_recal_settings(device, link);
+    device->hal.nvswitch_apply_recal_settings(device, link);
 }
 
 NvlStatus
@@ -5886,6 +5940,101 @@ _nvswitch_ctrl_set_link_l1_threshold
     FOR_EACH_INDEX_IN_MASK_END
 
     return NVL_SUCCESS;
+}
+
+NvlStatus
+nvswitch_detect_tnvl_mode
+(
+    nvswitch_device *device
+)
+{
+    return device->hal.nvswitch_detect_tnvl_mode(device);
+}
+
+NvBool
+nvswitch_is_tnvl_mode_enabled
+(
+    nvswitch_device *device
+)
+{
+    return device->hal.nvswitch_is_tnvl_mode_enabled(device);
+}
+
+NvBool
+nvswitch_is_tnvl_mode_locked
+(
+    nvswitch_device *device
+)
+{
+    return device->hal.nvswitch_is_tnvl_mode_locked(device);
+}
+
+NvBool NV_API_CALL
+nvswitch_lib_is_tnvl_enabled
+(
+    nvswitch_device *device
+)
+{
+    return nvswitch_is_tnvl_mode_enabled(device);
+}
+
+NvlStatus
+nvswitch_tnvl_send_fsp_lock_config
+(
+    nvswitch_device *device
+)
+{
+    return device->hal.nvswitch_tnvl_send_fsp_lock_config(device);
+}
+
+static NvlStatus
+_nvswitch_ctrl_set_device_tnvl_lock
+(
+    nvswitch_device *device,
+    NVSWITCH_SET_DEVICE_TNVL_LOCK_PARAMS *p
+)
+{
+    NvlStatus status = NVL_SUCCESS;
+
+    if (!NVSWITCH_IS_DEVICE_ACCESSIBLE(device))
+    {
+        return -NVL_BAD_ARGS;
+    }
+
+    if (!nvswitch_is_tnvl_mode_enabled(device))
+    {
+        NVSWITCH_PRINT(device, ERROR,
+           "%s: TNVL is not enabled\n",
+           __FUNCTION__);
+        return -NVL_ERR_NOT_SUPPORTED;
+    }
+
+    // Return failure if FM is not yet configured
+    if (device->device_fabric_state != NVSWITCH_DEVICE_FABRIC_STATE_CONFIGURED)
+    {
+        NVSWITCH_PRINT(device, ERROR,
+           "%s: FM is not configured yet\n",
+           __FUNCTION__);
+        return -NVL_ERR_INVALID_STATE;
+    }
+
+    //
+    // Disable non-fatal and legacy interrupts
+    // Disable commands to SOE
+    //
+
+    // Send lock-config command to FSP
+    status = nvswitch_tnvl_send_fsp_lock_config(device);
+    if (status == NVL_SUCCESS)
+    {
+        device->tnvl_mode = NVSWITCH_DEVICE_TNVL_MODE_LOCKED;
+    }
+    else
+    {
+        device->tnvl_mode = NVSWITCH_DEVICE_TNVL_MODE_FAILURE;
+    }
+
+    return status;
 }
 
 NvlStatus
@@ -6308,7 +6457,26 @@ nvswitch_lib_ctrl
         NVSWITCH_DEV_CMD_DISPATCH(CTRL_NVSWITCH_FSPRPC_GET_CAPS,
                 _nvswitch_ctrl_fsprpc_get_caps,
                 NVSWITCH_FSPRPC_GET_CAPS_PARAMS);
-
+        NVSWITCH_DEV_CMD_DISPATCH_PRIVILEGED(
+                CTRL_NVSWITCH_SET_DEVICE_TNVL_LOCK,
+                _nvswitch_ctrl_set_device_tnvl_lock,
+                NVSWITCH_SET_DEVICE_TNVL_LOCK_PARAMS,
+                osPrivate, flags);
+        NVSWITCH_DEV_CMD_DISPATCH_PRIVILEGED(
+                CTRL_NVSWITCH_GET_ATTESTATION_CERTIFICATE_CHAIN,
+                _nvswitch_ctrl_get_attestation_certificate_chain,
+                NVSWITCH_GET_ATTESTATION_CERTIFICATE_CHAIN_PARAMS,
+                osPrivate, flags);
+        NVSWITCH_DEV_CMD_DISPATCH_PRIVILEGED(
+                CTRL_NVSWITCH_GET_ATTESTATION_REPORT,
+                _nvswitch_ctrl_get_attestation_report,
+                NVSWITCH_GET_ATTESTATION_REPORT_PARAMS,
+                osPrivate, flags);
+        NVSWITCH_DEV_CMD_DISPATCH_PRIVILEGED(
+                CTRL_NVSWITCH_GET_TNVL_STATUS,
+                _nvswitch_ctrl_get_tnvl_status,
+                NVSWITCH_GET_TNVL_STATUS_PARAMS,
+                osPrivate, flags);
         default:
             nvswitch_os_print(NVSWITCH_DBG_LEVEL_INFO, "unknown ioctl %x\n", cmd);
             retval = -NVL_BAD_ARGS;

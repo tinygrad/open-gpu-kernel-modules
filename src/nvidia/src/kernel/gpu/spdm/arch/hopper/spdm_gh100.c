@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2022-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -31,7 +31,7 @@
 #include "gpu/spdm/spdm.h"
 #include "spdm/rmspdmtransport.h"
 #include "spdm/rmspdmvendordef.h"
-#include "objtmr.h"
+#include "gpu/timer/objtmr.h"
 #include "gpu/gsp/kernel_gsp.h"
 #include "gpu/bus/kern_bus.h"
 #include "gpu/mem_mgr/mem_mgr.h"
@@ -43,6 +43,7 @@
 #include "platform/sli/sli.h"
 #include "nvspdm_rmconfig.h"
 #include "published/hopper/gh100/dev_falcon_v4.h"
+#include "nvmisc.h"
 #include "gpu/conf_compute/conf_compute.h"
 
 /* ------------------------ Macros ----------------------------------------- */
@@ -89,7 +90,7 @@ static SPDM_ALGO_CHECK_ENTRY g_SpdmAlgoCheckTable_GH100[] =
 
 /* ------------------------ Static Function Prototypes --------------------- */
 static void _spdmSendHeartbeat(NvU32 gpuInstance, void *pArgs);
-static NV_STATUS _spdmTriggerHeartbeat(OBJGPU *pGpu, OBJTMR *pTmr, PTMR_EVENT pTmrEvent);
+static NV_STATUS _spdmTriggerHeartbeat(OBJGPU *pGpu, OBJTMR *pTmr, TMR_EVENT *pTmrEvent);
 
 //
 // Static transport layer functions which we pass to libspdm as function pointers.
@@ -220,7 +221,7 @@ _spdmTriggerHeartbeat
 (
     OBJGPU     *pGpu,
     OBJTMR     *pTmr,
-    PTMR_EVENT  pTmrEvent
+    TMR_EVENT *pTmrEvent
 )
 {
     NV_STATUS  status = NV_OK;
@@ -235,7 +236,7 @@ _spdmTriggerHeartbeat
     status = osQueueWorkItemWithFlags(pGpu, _spdmSendHeartbeat, pTmrEvent->pUserData,
                                         OS_QUEUE_WORKITEM_FLAGS_DONT_FREE_PARAMS |
                                         OS_QUEUE_WORKITEM_FLAGS_LOCK_API_RW      |
-                                        OS_QUEUE_WORKITEM_FLAGS_LOCK_GPUS_RW);
+                                        OS_QUEUE_WORKITEM_FLAGS_LOCK_GPUS);
 
     ErrorExit:
     if (status != NV_OK && pGpu != NULL)
@@ -1029,7 +1030,7 @@ spdmCheckConnection_GH100
     }
 
     // Check all crypto algorithms match expected.
-    algoCheckCount = sizeof(g_SpdmAlgoCheckTable_GH100)/sizeof(SPDM_ALGO_CHECK_ENTRY);
+    algoCheckCount = NV_ARRAY_ELEMENTS(g_SpdmAlgoCheckTable_GH100);
 
     for (i = 0; i < algoCheckCount; i++)
     {
@@ -1368,7 +1369,6 @@ spdmUnregisterFromHeartbeats_GH100
 
 ErrorExit:
     // In any case, cancel any further heartbeats that might occur. Handles NULL gracefully.
-    tmrEventCancel(pTmr, pSpdm->pHeartbeatEvent);
     tmrEventDestroy(pTmr, pSpdm->pHeartbeatEvent);
     pSpdm->pHeartbeatEvent    = NULL;
     pSpdm->heartbeatPeriodSec = 0;

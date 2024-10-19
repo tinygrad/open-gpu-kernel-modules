@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2015-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2015-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -40,7 +40,10 @@
 #if !defined(SRT_BUILD)
 // These files are not found on SRT builds
 #include "os/os.h"
+#define PMA_DEBUG 1
 #else
+// disable PMA debug prints on SRTs to not bloat the logs
+#define PMA_DEBUG 0
 NV_STATUS pmaNumaAllocate
 (
     PMA                    *pPma,
@@ -70,7 +73,7 @@ void pmaNumaSetReclaimSkipThreshold(PMA *pPma, NvU32 data)
 }
 #endif
 
-typedef NV_STATUS (*scanFunc)(void *, NvU64, NvU64, NvU64, NvU64, NvU64*, NvU64, NvU64, NvU64*, NvBool, NvBool);
+typedef NV_STATUS (*scanFunc)(void *, NvU64, NvU64, NvU64, NvU64, NvU64*, NvU64, NvU64, NvU64, NvU32, NvU64*, NvBool, NvBool);
 
 static void
 _pmaRollback
@@ -560,11 +563,15 @@ pmaAllocatePages
 {
     NvS32 regionList[PMA_REGION_SIZE];
     NV_STATUS status, prediction;
-    NvU32 flags, evictFlag, contigFlag, persistFlag, alignFlag, pinFlag, rangeFlag, blacklistOffFlag, partialFlag, skipScrubFlag, reverseFlag;
+    NvU32 flags;
+    NvBool evictFlag, contigFlag, persistFlag, alignFlag, pinFlag, rangeFlag, blacklistOffFlag, partialFlag, skipScrubFlag, reverseFlag;
+
     NvU32 regId, regionIdx;
     NvU64 numPagesAllocatedThisTime, numPagesLeftToAllocate, numPagesAllocatedSoFar;
     NvU64 addrBase, addrLimit;
     NvU64 rangeStart, rangeEnd;
+    NvU64 stride = 0;
+    NvU32 strideStart = 0;
     NvU64 *curPages;
     NvBool blacklistOffPerRegion[PMA_REGION_SIZE]={NV_FALSE};
     NvU64 blacklistOffAddrStart[PMA_REGION_SIZE] = {0}, blacklistOffRangeSize[PMA_REGION_SIZE] = {0};
@@ -574,7 +581,8 @@ pmaAllocatePages
     scanFunc useFunc;
     PMA_PAGESTATUS pinOption;
     NvU64 alignment = pageSize;
-    NvU32 framesPerPage  = (NvU32)(pageSize >> PMA_PAGE_SHIFT);
+    NvU32 framesPerPage;
+    NvU64 numFramesToAllocateTotal;
 
     //
     // A boolean indicating if we should try to evict. We at most try eviction once per call
@@ -582,8 +590,6 @@ pmaAllocatePages
     //
     NvBool tryEvict = NV_TRUE;
     NvBool tryAlloc = NV_TRUE;
-
-    const NvU64 numFramesToAllocateTotal = framesPerPage * allocationCount;
 
     if (pPma == NULL || pPages == NULL || allocationCount == 0
         || (pageSize != _PMA_64KB && pageSize != _PMA_128KB && pageSize != _PMA_2MB && pageSize != _PMA_512MB)
@@ -622,6 +628,7 @@ pmaAllocatePages
             NV_PRINTF(LEVEL_ERROR, "Reverse allocation not supported on NUMA.\n");
             return NV_ERR_INVALID_ARGUMENT;
         }
+
         return pmaNumaAllocate(pPma, allocationCount, pageSize, allocationOptions, pPages);
     }
 
@@ -688,6 +695,9 @@ pmaAllocatePages
         }
     }
 
+    framesPerPage  = (NvU32)(pageSize >> PMA_PAGE_SHIFT);
+    numFramesToAllocateTotal = framesPerPage * allocationCount;
+
     pinOption = pinFlag ? STATE_PIN : STATE_UNPIN;
     pinOption |= persistFlag ? ATTRIB_PERSISTENT : 0;
 
@@ -715,7 +725,7 @@ pmaAllocatePages
         }
     }
 
-    tryEvict = (evictFlag == 1);
+    tryEvict = evictFlag;
 
 pmaAllocatePages_retry:
     //
@@ -723,10 +733,12 @@ pmaAllocatePages_retry:
     // after checking the scrubber so any pages allocated so far are not guaranteed
     // to be there any more. Restart from scratch.
     //
+#if PMA_DEBUG
     NV_PRINTF(LEVEL_INFO, "Attempt %s allocation of 0x%llx pages of size 0x%llx "
                           "(0x%x frames per page)\n",
                           contigFlag ? "contiguous" : "discontiguous",
                           (NvU64)allocationCount, pageSize, framesPerPage);
+#endif
 
     // Check if scrubbing is done before allocating each time before we retry
     if (bScrubOnFree)
@@ -812,7 +824,7 @@ pmaAllocatePages_retry:
 
         numPagesAllocatedThisTime = 0;
         status = (*useFunc)(pMap, addrBase, rangeStart, rangeEnd, numPagesLeftToAllocate,
-            curPages, pageSize, alignment, &numPagesAllocatedThisTime, !tryEvict, (NvBool)reverseFlag);
+            curPages, pageSize, alignment, stride, strideStart, &numPagesAllocatedThisTime, !tryEvict, reverseFlag);
 
         NV_ASSERT(numPagesAllocatedThisTime <= numPagesLeftToAllocate);
 
@@ -1067,9 +1079,11 @@ pmaAllocatePages_retry:
             addrBase = pPma->pRegDescriptors[regId]->base;
             frameBase = PMA_ADDR2FRAME(pPages[0], addrBase);
 
+#if PMA_DEBUG
             NV_PRINTF(LEVEL_INFO, "Successfully allocated frames 0x%llx through 0x%llx\n",
                                   frameBase,
                                   frameBase + numFramesAllocated - 1);
+#endif
 
             pPma->pMapInfo->pmaMapChangeBlockStateAttrib(pMap, frameBase, numPagesAllocatedSoFar * framesPerPage,
                                                          pinOption, MAP_MASK);
@@ -1088,24 +1102,27 @@ pmaAllocatePages_retry:
         }
         else
         {
+            NvU64 frameBase = 0;
+#if PMA_DEBUG
             NvU64 frameRangeStart   = 0;
             NvU64 nextExpectedFrame = 0;
             NvU32 frameRangeRegId   = 0;
-            NvU64 frameBase = 0;
 
             (void)frameRangeStart;   //Silence the compiler
             (void)nextExpectedFrame;
             (void)frameRangeRegId;
 
             NV_PRINTF(LEVEL_INFO, "Successfully allocated frames:\n");
+#endif
 
             for (i = 0; i < numPagesAllocatedSoFar; i++)
             {
                 regId = findRegionID(pPma, pPages[i]);
                 pMap  = pPma->pRegions[regId];
                 addrBase = pPma->pRegDescriptors[regId]->base;
-                frameBase = PMA_ADDR2FRAME(pPages[i], addrBase);
+                frameBase =  PMA_ADDR2FRAME(pPages[i], addrBase);
 
+#if PMA_DEBUG
                 // Print out contiguous frames in the same NV_PRINTF
                 if (i == 0)
                 {
@@ -1124,19 +1141,22 @@ pmaAllocatePages_retry:
                     frameRangeRegId = regId;
                 }
                 nextExpectedFrame = reverseFlag ? frameBase - framesPerPage : frameBase + framesPerPage;
+#endif
 
-                pPma->pMapInfo->pmaMapChangePageStateAttrib(pMap, PMA_ADDR2FRAME(pPages[i], addrBase),
+                pPma->pMapInfo->pmaMapChangePageStateAttrib(pMap, frameBase,
                                                             pageSize, pinOption, MAP_MASK);
 
             }
 
             pPma->pStatsUpdateCb(pPma->pStatsUpdateCtx, pPma->pmaStats.numFreeFrames);
 
-            // Break in frame range detected
-            NV_PRINTF(LEVEL_INFO, "0x%llx through 0x%llx region %d \n",
+#if PMA_DEBUG
+                // Break in frame range detected
+                NV_PRINTF(LEVEL_INFO, "0x%llx through 0x%llx region %d \n",
                                       reverseFlag ? nextExpectedFrame + framesPerPage : frameRangeStart,
                                       reverseFlag ? frameRangeStart + framesPerPage - 1 : nextExpectedFrame - 1,
                                       frameRangeRegId);
+#endif
         }
     }
 
@@ -1312,8 +1332,6 @@ pmaFreePages
         return;
     }
 
-    framesPerPage = size >> PMA_PAGE_SHIFT;
-
     // Check if any scrubbing is done before we actually free
     if (bNeedScrub)
     {
@@ -1340,6 +1358,8 @@ pmaFreePages
 
     portSyncSpinlockAcquire(pPma->pPmaLock);
 
+    framesPerPage = size >> PMA_PAGE_SHIFT;
+
     for (i = 0; i < pageCount; i++)
     {
         regId    = findRegionID(pPma, pPages[i]);
@@ -1351,11 +1371,13 @@ pmaFreePages
         for (j = 0; j < framesPerPage; j++)
         {
             PMA_PAGESTATUS newStatus = (bScrubValid && bNeedScrub) ? ATTRIB_SCRUBBING : STATE_FREE;
+            PMA_PAGESTATUS exceptedMask = ATTRIB_EVICTING | ATTRIB_BLACKLIST;
+
             //
             // Reset everything except for the (ATTRIB_EVICTING and ATTRIB_BLACKLIST) state to support memory being freed
             // after being picked for eviction.
             //
-            pPma->pMapInfo->pmaMapChangeStateAttrib(pPma->pRegions[regId], (frameNum + j), newStatus, ~(ATTRIB_EVICTING | ATTRIB_BLACKLIST));
+            pPma->pMapInfo->pmaMapChangeStateAttrib(pPma->pRegions[regId], (frameNum + j), newStatus, ~(exceptedMask));
         }
     }
 
@@ -1369,17 +1391,18 @@ pmaFreePages
         PSCRUB_NODE pPmaScrubList = NULL;
         NvU64 count;
         if (scrubSubmitPages(pPma->pScrubObj, size, pPages, pageCount,
-                             &pPmaScrubList, &count) != NV_OK)
+                             &pPmaScrubList, &count) == NV_OK)
+        {
+            if (count > 0)
+            {
+                _pmaClearScrubBit(pPma, pPmaScrubList, count);
+            }
+        }
+        else
         {
             portAtomicSetSize(&pPma->scrubberValid, PMA_SCRUBBER_INVALID);
-            goto exit;
         }
 
-        if (count > 0)
-        {
-            _pmaClearScrubBit(pPma, pPmaScrubList, count);
-        }
-exit:
         // Free the actual list, although allocated by objscrub
         portMemFree(pPmaScrubList);
 

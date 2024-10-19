@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -29,7 +29,7 @@
 #include "vgpu/rpc.h"
 #include "vgpu/vgpu_events.h"
 
-#include "nvRmReg.h"
+#include "nvrm_registry.h"
 
 #include "class/cl2080.h"
 
@@ -91,6 +91,22 @@ kfifoStateLoad_IMPL
         }
     }
 
+    // Send RPC to GSP-RM to resume scheduling
+    if (IS_GSP_CLIENT(pGpu) && (flags & GPU_STATE_FLAGS_PM_TRANSITION))
+    {
+        RM_API    *pRmApi = GPU_GET_PHYSICAL_RMAPI(pGpu);
+        NV2080_CTRL_CMD_INTERNAL_FIFO_TOGGLE_ACTIVE_CHANNEL_SCHEDULING_PARAMS  fifoToggleActiveChannelSchedulingParam;
+        fifoToggleActiveChannelSchedulingParam.bDisableActiveChannels = NV_FALSE;
+
+        NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
+                            pRmApi->Control(pRmApi,
+                                            pGpu->hInternalClient,
+                                            pGpu->hInternalSubdevice,
+                                            NV2080_CTRL_CMD_INTERNAL_FIFO_TOGGLE_ACTIVE_CHANNEL_SCHEDULING,
+                                            &fifoToggleActiveChannelSchedulingParam,
+                                            sizeof(fifoToggleActiveChannelSchedulingParam)));
+    }
+
     return NV_OK;
 }
 
@@ -114,6 +130,22 @@ kfifoStateUnload_IMPL
             DBG_BREAKPOINT();
             return rmStatus;
         }
+    }
+
+    // Send RPC to GSP-RM to disable active channels
+    if (IS_GSP_CLIENT(pGpu) && (flags & GPU_STATE_FLAGS_PM_TRANSITION))
+    {
+        RM_API    *pRmApi = GPU_GET_PHYSICAL_RMAPI(pGpu);
+        NV2080_CTRL_CMD_INTERNAL_FIFO_TOGGLE_ACTIVE_CHANNEL_SCHEDULING_PARAMS  fifoToggleActiveChannelSchedulingParam;
+        fifoToggleActiveChannelSchedulingParam.bDisableActiveChannels = NV_TRUE;
+
+        NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
+                            pRmApi->Control(pRmApi,
+                                            pGpu->hInternalClient,
+                                            pGpu->hInternalSubdevice,
+                                            NV2080_CTRL_CMD_INTERNAL_FIFO_TOGGLE_ACTIVE_CHANNEL_SCHEDULING,
+                                            &fifoToggleActiveChannelSchedulingParam,
+                                            sizeof(fifoToggleActiveChannelSchedulingParam)));
     }
 
     return NV_OK;
@@ -143,6 +175,7 @@ _kfifoPreConstructRegistryOverrides
         NV_PRINTF(LEVEL_ERROR, "Enabling MapMemoryDma of USERD\n");
         pKernelFifo->bUserdMapDmaSupported = NV_TRUE;
     }
+
 
     return;
 }
@@ -231,7 +264,7 @@ kfifoStateDestroy_IMPL
     // On LDDM, we don't free these during freechannel because it's possible
     // we wouldn't be able to reallocate them (we want to keep them preallocated
     // from boot time). But we need to free before shutdown, so do that here.
-    kfifoGetChannelIterator(pGpu, pKernelFifo, &chanIt);
+    kfifoGetChannelIterator(pGpu, pKernelFifo, &chanIt, INVALID_RUNLIST_ID);
     while ((kfifoGetNextKernelChannel(pGpu, pKernelFifo, &chanIt, &pKernelChannel) == NV_OK))
     {
         RM_ENGINE_TYPE rmEngineType;

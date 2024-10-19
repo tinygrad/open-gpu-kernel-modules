@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2020-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2020-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -270,6 +270,68 @@ _knvlinkCheckFabricCliqueId
 }
 
 /*!
+ * @brief Checks whether EGM addresses are valid for P2P
+ * when GPU is connected to NVSwitch
+ *
+ * @param[in] pGpu           OBJGPU pointer for local GPU
+ * @param[in] pKernelNvlink  KernelNvlink pointer
+ * @param[in] pPeerGpu       OBJGPU pointer for remote GPU
+ *
+ * @return  NV_TRUE if EGM addresses are valid
+ */
+static NvBool
+_knvlinkCheckNvswitchEgmAddressSanity
+(
+    OBJGPU       *pGpu,
+    KernelNvlink *pKernelNvlink,
+    OBJGPU       *pPeerGpu
+)
+{
+    NvU64 egmRangeStart = knvlinkGetUniqueFabricEgmBaseAddress(pGpu, pKernelNvlink);
+
+    if (knvlinkIsGpuConnectedToNvswitch(pGpu, pKernelNvlink))
+    {
+        if (gpuIsSriovEnabled(pGpu))
+        {
+            // currently vgpu + switch doesn't support GPA addressing.
+            return NV_TRUE;
+        }
+
+        if (gpuFabricProbeIsSupported(pGpu) && gpuFabricProbeIsSupported(pPeerGpu))
+        {
+            if (!_knvlinkCheckFabricCliqueId(pGpu, pPeerGpu))
+            {
+                return NV_FALSE;
+            }
+        }
+
+        // Sanity checks for EGM address
+        if (egmRangeStart == NVLINK_INVALID_FABRIC_ADDR)
+        {
+            NV_PRINTF(LEVEL_ERROR, "GPU %d doesn't have a EGM fabric address\n",
+                      gpuGetInstance(pGpu));
+
+            return NV_FALSE;
+        }
+    }
+    else
+    {
+        // Sanity check for EGM address
+        if (egmRangeStart != NVLINK_INVALID_FABRIC_ADDR)
+        {
+            NV_PRINTF(LEVEL_ERROR,
+                      "non-NVSwitch GPU %d has a valid EGM fabric address\n",
+                      gpuGetInstance(pGpu));
+
+            return NV_FALSE;
+        }
+
+    }
+
+    return NV_TRUE;
+}
+
+/*!
  * @brief Checks whether necessary the config setup is done to
  *        support P2P over NVSwitch
  *
@@ -288,10 +350,10 @@ knvlinkCheckNvswitchP2pConfig_IMPL
 )
 {
     MemoryManager *pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
-    NvU64          rangeStart     = knvlinkGetUniqueFabricBaseAddress(pGpu, pKernelNvlink);
-    NvU64          rangeEnd       = rangeStart + (pMemoryManager->Ram.fbTotalMemSizeMb << 20);
-    NvU64          peerRangeStart = knvlinkGetUniqueFabricBaseAddress(pPeerGpu,
-                                                             GPU_GET_KERNEL_NVLINK(pPeerGpu));
+    NvU64          hbmRangeStart  = knvlinkGetUniqueFabricBaseAddress(pGpu, pKernelNvlink);
+    NvU64          hbmRangeEnd    = hbmRangeStart + (pMemoryManager->Ram.fbTotalMemSizeMb << 20);
+    NvU64          hbmPeerRangeStart = knvlinkGetUniqueFabricBaseAddress(pPeerGpu,
+                                        GPU_GET_KERNEL_NVLINK(pPeerGpu));
 
     if (knvlinkIsGpuConnectedToNvswitch(pGpu, pKernelNvlink))
     {
@@ -309,8 +371,8 @@ knvlinkCheckNvswitchP2pConfig_IMPL
             }
         }
 
-        if (knvlinkGetUniqueFabricBaseAddress(pGpu, pKernelNvlink) ==
-            NVLINK_INVALID_FABRIC_ADDR)
+        // Sanity checks for HBM addresses
+        if (hbmRangeStart == NVLINK_INVALID_FABRIC_ADDR)
         {
             NV_PRINTF(LEVEL_ERROR, "GPU %d doesn't have a fabric address\n",
                       gpuGetInstance(pGpu));
@@ -319,7 +381,7 @@ knvlinkCheckNvswitchP2pConfig_IMPL
         }
 
         if ((pGpu != pPeerGpu) &&
-            ((peerRangeStart >= rangeStart) && (peerRangeStart < rangeEnd)))
+            ((hbmPeerRangeStart >= hbmRangeStart) && (hbmPeerRangeStart < hbmRangeEnd)))
         {
             NV_PRINTF(LEVEL_ERROR,
                       "GPU %d doesn't have a unique fabric address\n",
@@ -330,8 +392,8 @@ knvlinkCheckNvswitchP2pConfig_IMPL
     }
     else
     {
-        if (knvlinkGetUniqueFabricBaseAddress(pGpu, pKernelNvlink) !=
-            NVLINK_INVALID_FABRIC_ADDR)
+        // Sanity check for HBM address
+        if (hbmRangeStart != NVLINK_INVALID_FABRIC_ADDR)
         {
             NV_PRINTF(LEVEL_ERROR,
                       "non-NVSwitch GPU %d has a valid fabric address\n",
@@ -339,6 +401,11 @@ knvlinkCheckNvswitchP2pConfig_IMPL
 
             return NV_FALSE;
         }
+    }
+
+    if (memmgrIsLocalEgmEnabled(pMemoryManager))
+    {
+        return _knvlinkCheckNvswitchEgmAddressSanity(pGpu, pKernelNvlink, pPeerGpu);
     }
 
     return NV_TRUE;
@@ -594,7 +661,10 @@ knvlinkUpdateCurrentConfig_IMPL
         status = kceFindFirstInstance(pGpu, &pKCe);
         if (status == NV_OK)
         {
-            status = kceTopLevelPceLceMappingsUpdate(pGpu, pKCe);
+        KernelCE *pKCeIter = NULL;
+        KCE_ITER_SHIM_BEGIN(pGpu, pKCeIter)
+            status = kceTopLevelPceLceMappingsUpdate(pGpu, pKCeIter);
+        KCE_ITER_END;
             if (status != NV_OK)
             {
                 NV_PRINTF(LEVEL_ERROR, "Failed to update PCE-LCE mappings\n");
@@ -619,21 +689,21 @@ const static NVLINK_INBAND_MSG_CALLBACK nvlink_inband_callbacks[] =
         .messageType = NVLINK_INBAND_MSG_TYPE_GPU_PROBE_RSP,
         .pCallback = gpuFabricProbeReceiveKernelCallback,
         .wqItemFlags = OS_QUEUE_WORKITEM_FLAGS_LOCK_SEMA |
-                       OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_SUBDEVICE_RW
+                       OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_SUBDEVICE
     },
 
     {
         .messageType = NVLINK_INBAND_MSG_TYPE_MC_TEAM_SETUP_RSP,
         .pCallback = memorymulticastfabricTeamSetupResponseCallback,
         .wqItemFlags = OS_QUEUE_WORKITEM_FLAGS_LOCK_SEMA |
-                       OS_QUEUE_WORKITEM_FLAGS_LOCK_GPUS_RW
+                       OS_QUEUE_WORKITEM_FLAGS_LOCK_GPUS
     },
 
     {
         .messageType = NVLINK_INBAND_MSG_TYPE_GPU_PROBE_UPDATE_REQ,
         .pCallback = gpuFabricProbeReceiveUpdateKernelCallback,
         .wqItemFlags = OS_QUEUE_WORKITEM_FLAGS_LOCK_SEMA |
-                       OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_SUBDEVICE_RW
+                       OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_SUBDEVICE
     }
 };
 
@@ -973,25 +1043,33 @@ knvlinkGetPeersNvlinkMaskFromHshub_IMPL
     NvU32     peerLinkMask = 0;
     NvU32     i;
 
-    NV2080_CTRL_NVLINK_GET_LINK_AND_CLOCK_INFO_PARAMS params;
+    NV2080_CTRL_NVLINK_GET_LINK_AND_CLOCK_INFO_PARAMS *pParams;
 
-    portMemSet(&params, 0, sizeof(params));
-    params.linkMask = pKernelNvlink->enabledLinks;
+    pParams = portMemAllocStackOrHeap(sizeof(*pParams));
+    if (pParams == NULL)
+    {
+        return 0;
+    }
+
+    portMemSet(pParams, 0, sizeof(*pParams));
+    pParams->linkMask = pKernelNvlink->enabledLinks;
 
     status = knvlinkExecGspRmRpc(pGpu, pKernelNvlink,
                                  NV2080_CTRL_CMD_NVLINK_GET_LINK_AND_CLOCK_INFO,
-                                 (void *)&params, sizeof(params));
+                                 pParams, sizeof(*pParams));
     if (status != NV_OK)
-        return 0;
+        goto cleanup;
 
     // Scan enabled links for peer connections
     FOR_EACH_INDEX_IN_MASK(32, i, pKernelNvlink->enabledLinks)
     {
-        if (params.linkInfo[i].bLinkConnectedToPeer)
+        if (pParams->linkInfo[i].bLinkConnectedToPeer)
             peerLinkMask |= NVBIT(i);
     }
     FOR_EACH_INDEX_IN_MASK_END;
 
+cleanup:
+    portMemFreeStackOrHeap(pParams);
     return peerLinkMask;
 }
 
@@ -1237,6 +1315,12 @@ knvlinkSetPowerFeatures_IMPL
                                            (pKernelNvlink->bDisableL2Mode ? NV_FALSE : NV_TRUE));
             }
 
+            break;
+        }
+        case NVLINK_VERSION_50:
+        {
+            pKernelNvlink->setProperty(pKernelNvlink, PDB_PROP_KNVLINK_L2_POWER_STATE_ENABLED,
+                                        (pKernelNvlink->bDisableL2Mode ? NV_FALSE : NV_TRUE));
             break;
         }
         default:
@@ -1666,6 +1750,7 @@ knvlinkUpdatePostRxDetectLinkMask_IMPL
 )
 {
     NV_STATUS status = NV_OK;
+    NvU32 i;
 
     NV2080_CTRL_NVLINK_GET_LINK_MASK_POST_RX_DET_PARAMS params;
 
@@ -1681,6 +1766,12 @@ knvlinkUpdatePostRxDetectLinkMask_IMPL
     }
 
     pKernelNvlink->postRxDetLinkMask = params.postRxDetLinkMask;
+
+    FOR_EACH_INDEX_IN_MASK(32, i, pKernelNvlink->enabledLinks)
+    {
+        pKernelNvlink->nvlinkLinks[i].laneRxdetStatusMask = params.laneRxdetStatusMask[i];
+    }
+    FOR_EACH_INDEX_IN_MASK_END;
 
     return NV_OK;
 }
@@ -1711,7 +1802,7 @@ knvlinkCopyNvlinkDeviceInfo_IMPL
 
     if (status == NV_ERR_NOT_SUPPORTED)
     {
-        NV_PRINTF(LEVEL_WARNING, "NVLink is unavailable\n");
+        NV_PRINTF(LEVEL_INFO, "NVLink is unavailable\n");
         return status;
     }
     else if (status != NV_OK)
@@ -1919,8 +2010,6 @@ knvlinkSyncLaneShutdownProps_IMPL
 
     portMemSet(&params, 0, sizeof(params));
 
-    params.bLaneShutdownEnabled  =
-        pKernelNvlink->getProperty(pKernelNvlink, PDB_PROP_KNVLINK_LANE_SHUTDOWN_ENABLED);
     params.bLaneShutdownOnUnload =
         pKernelNvlink->getProperty(pKernelNvlink, PDB_PROP_KNVLINK_LANE_SHUTDOWN_ON_UNLOAD);
 
@@ -2064,7 +2153,7 @@ knvlinkFatalErrorRecovery_IMPL
     status = osQueueWorkItemWithFlags(pGpu, knvlinkFatalErrorRecovery_WORKITEM, NULL,
                                       (OS_QUEUE_WORKITEM_FLAGS_LOCK_SEMA |
                                         OS_QUEUE_WORKITEM_FLAGS_LOCK_API_RW |
-                                        OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_SUBDEVICE_RW));
+                                        OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_SUBDEVICE));
 
      return status;
 }

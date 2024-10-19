@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2006-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2006-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -60,8 +60,12 @@ typedef NVXXXX_CTRL_XXX_INFO NV2080_CTRL_GPU_INFO;
 
 /* valid gpu info index values */
 
+#define NV2080_CTRL_GPU_INFO_INDEX_INDEX                   23:0
 
 
+
+#define NV2080_CTRL_GPU_INFO_INDEX_ECID_LO32                           (0x00000001U)
+#define NV2080_CTRL_GPU_INFO_INDEX_ECID_HI32                           (0x00000002U)
 #define NV2080_CTRL_GPU_INFO_INDEX_MINOR_REVISION_EXT                  (0x00000004U)
 
 
@@ -69,6 +73,7 @@ typedef NVXXXX_CTRL_XXX_INFO NV2080_CTRL_GPU_INFO;
 #define NV2080_CTRL_GPU_INFO_INDEX_NETLIST_REV1                        (0x00000013U)
 
 
+#define NV2080_CTRL_GPU_INFO_INDEX_ECID_EXTENDED                       (0x0000001bU)
 #define NV2080_CTRL_GPU_INFO_INDEX_SYSMEM_ACCESS                       (0x0000001fU)
 
 
@@ -100,8 +105,6 @@ typedef NVXXXX_CTRL_XXX_INFO NV2080_CTRL_GPU_INFO;
 
 #define NV2080_CTRL_GPU_INFO_INDEX_GPU_LOCAL_EGM_CAPABILITY            (0x0000003aU)
 #define NV2080_CTRL_GPU_INFO_INDEX_GPU_SELF_HOSTED_CAPABILITY          (0x0000003bU)
-
-
 #define NV2080_CTRL_GPU_INFO_INDEX_CMP_SKU                             (0x0000003cU)
 #define NV2080_CTRL_GPU_INFO_INDEX_DMABUF_CAPABILITY                   (0x0000003dU)
 
@@ -111,6 +114,11 @@ typedef NVXXXX_CTRL_XXX_INFO NV2080_CTRL_GPU_INFO;
 
 
 #define NV2080_CTRL_GPU_INFO_MAX_LIST_SIZE                             (0x00000041U)
+
+#define NV2080_CTRL_GPU_INFO_INDEX_GROUP_ID                30:24
+
+
+#define NV2080_CTRL_GPU_INFO_INDEX_RESERVED                31:31
 
 /* valid minor revision extended values */
 #define NV2080_CTRL_GPU_INFO_MINOR_REVISION_EXT_NONE                   (0x00000000U)
@@ -201,6 +209,7 @@ typedef NVXXXX_CTRL_XXX_INFO NV2080_CTRL_GPU_INFO;
 #define NV2080_CTRL_GPU_INFO_INDEX_GPU_DEBUGGING_CAPABILITY_ENABLED    (0x00000001U)
 
 
+
 /* valid local EGM supported values */
 #define NV2080_CTRL_GPU_INFO_INDEX_GPU_LOCAL_EGM_CAPABILITY_NO         (0x00000000U)
 #define NV2080_CTRL_GPU_INFO_INDEX_GPU_LOCAL_EGM_CAPABILITY_YES        (0x00000001U)
@@ -209,8 +218,6 @@ typedef NVXXXX_CTRL_XXX_INFO NV2080_CTRL_GPU_INFO;
 /* valid self hosted values */
 #define NV2080_CTRL_GPU_INFO_INDEX_GPU_SELF_HOSTED_CAPABILITY_NO       (0x00000000U)
 #define NV2080_CTRL_GPU_INFO_INDEX_GPU_SELF_HOSTED_CAPABILITY_YES      (0x00000001U)
-
-
 
 /* valid CMP (Crypto Mining Processor) SKU values */
 #define NV2080_CTRL_GPU_INFO_INDEX_CMP_SKU_NO                          (0x00000000U)
@@ -748,7 +755,7 @@ typedef struct NV2080_CTRL_GPU_GET_ENGINES_PARAMS {
 #define NV2080_CTRL_CMD_GPU_GET_ENGINES_V2 (0x20800170U) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_GPU_INTERFACE_ID << 8) | NV2080_CTRL_GPU_GET_ENGINES_V2_PARAMS_MESSAGE_ID" */
 
 /* Must match NV2080_ENGINE_TYPE_LAST from cl2080.h */
-#define NV2080_GPU_MAX_ENGINES_LIST_SIZE   0x40U
+#define NV2080_GPU_MAX_ENGINES_LIST_SIZE   0x54U
 
 #define NV2080_CTRL_GPU_GET_ENGINES_V2_PARAMS_MESSAGE_ID (0x70U)
 
@@ -1121,7 +1128,7 @@ typedef struct NV2080_CTRL_GPU_QUERY_ECC_INTR_PARAMS {
 #define NV2080_CTRL_CMD_GPU_QUERY_ECC_STATUS                   (0x2080012fU) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_GPU_INTERFACE_ID << 8) | NV2080_CTRL_GPU_QUERY_ECC_STATUS_PARAMS_MESSAGE_ID" */
 
 
-#define NV2080_CTRL_GPU_ECC_UNIT_COUNT                         (0x00000019U)
+#define NV2080_CTRL_GPU_ECC_UNIT_COUNT                         (0x0000001FU)
 
 
 
@@ -3805,8 +3812,6 @@ typedef struct NV2080_CTRL_GPU_SET_EGM_GPA_FABRIC_BASE_ADDR_PARAMS {
     NV_DECLARE_ALIGNED(NvU64 egmGpaFabricBaseAddr, 8);
 } NV2080_CTRL_GPU_SET_EGM_GPA_FABRIC_BASE_ADDR_PARAMS;
 
-
-
 /*
  * NV2080_CTRL_CMD_GPU_GET_ENGINE_LOAD_TIMES
  *
@@ -3931,6 +3936,9 @@ typedef struct NV2080_CTRL_GPU_EXEC_REG_OPS_NOPTRS_PARAMS {
  * [out] busPeerId
  *   Bus peer ID. For an invalid or a non-existent peer this field
  *   has the value NV0000_CTRL_SYSTEM_GET_P2P_CAPS_INVALID_PEER.
+ * [out] busEgmPeerId
+ *   Bus EGM peer ID. For an invalid or a non-existent peer this field
+ *   has the value NV0000_CTRL_SYSTEM_GET_P2P_CAPS_INVALID_PEER.
  */
 #define NV2080_GET_P2P_CAPS_UUID_LEN         16U
 
@@ -3942,6 +3950,7 @@ typedef struct NV2080_CTRL_GPU_P2P_PEER_CAPS_PEER_INFO {
     NvU32 p2pOptimalWriteCEs;
     NvU8  p2pCapsStatus[NV0000_CTRL_P2P_CAPS_INDEX_TABLE_SIZE];
     NvU32 busPeerId;
+    NvU32 busEgmPeerId;
 } NV2080_CTRL_GPU_P2P_PEER_CAPS_PEER_INFO;
 
 /*!
@@ -4317,6 +4326,36 @@ typedef struct NV2080_CTRL_GPU_GET_CONSTRUCTED_FALCON_INFO_PARAMS {
     NvU32                                   numConstructedFalcons;
     NV2080_CTRL_GPU_CONSTRUCTED_FALCON_INFO constructedFalconsTable[NV2080_CTRL_GPU_MAX_CONSTRUCTED_FALCONS];
 } NV2080_CTRL_GPU_GET_CONSTRUCTED_FALCON_INFO_PARAMS;
+
+/*
+ * NV2080_CTRL_CMD_GPU_GET_VF_CAPS 
+ *
+ * This command will return the MSIX capabilities for virtual function
+ * Parameters:
+ * 
+ * gfid [IN]
+ *   The GPU function identifier for a given VF BDF
+ *
+ * vfMsixCap [out]
+ *   This field returns the VF MSIX cap values
+ *
+ * Possible status values returned are:
+ *   NV_OK
+ */
+typedef struct NV2080_VF_MSIX_CAPS {
+    NvU32 msix_header;
+    NvU32 msix_table;
+    NvU32 msix_pba;
+} NV2080_VF_MSIX_CAPS;
+
+#define NV2080_CTRL_CMD_GPU_GET_VF_CAPS (0x208001b1) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_GPU_INTERFACE_ID << 8) | NV2080_CTRL_GPU_GET_VF_CAPS_PARAMS_MESSAGE_ID" */
+
+#define NV2080_CTRL_GPU_GET_VF_CAPS_PARAMS_MESSAGE_ID (0xB1U)
+
+typedef struct NV2080_CTRL_GPU_GET_VF_CAPS_PARAMS {
+    NvU32               gfid;
+    NV2080_VF_MSIX_CAPS vfMsixCap;
+} NV2080_CTRL_GPU_GET_VF_CAPS_PARAMS;
 
 /*
  * NV2080_CTRL_GPU_GET_FIPS_STATUS

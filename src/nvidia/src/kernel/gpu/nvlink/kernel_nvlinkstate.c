@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2020-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2020-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -620,6 +620,7 @@ knvlinkStateLoad_IMPL
     }
 
     if (!knvlinkIsForcedConfig(pGpu, pKernelNvlink) && pKernelNvlink->bEnableAli &&
+        (pKernelNvlink->ipVerNvlink < NVLINK_VERSION_50) &&
         (!pKernelNvlink->getProperty(pKernelNvlink, PDB_PROP_KNVLINK_MINION_GFW_BOOT) ||
           pKernelNvlink->getProperty(pKernelNvlink,
                                      PDB_PROP_KNVLINK_MINION_FORCE_ALI_TRAINING)))
@@ -675,6 +676,8 @@ knvlinkStateLoad_IMPL
     FOR_EACH_INDEX_IN_MASK_END;
 
     listInit(&pKernelNvlink->faultUpLinks, portMemAllocatorGetGlobalNonPaged());
+
+    knvlinkDumpCallbackRegister_HAL(pGpu, pKernelNvlink);
 
 knvlinkStateLoad_end:
 
@@ -987,10 +990,6 @@ _knvlinkPurgeState
     {
         if ((pKernelNvlink->nvlinkLinks[linkId].pTmrEvent != NULL) && (pTmr != NULL))
         {
-            if (tmrEventOnList(pTmr, pKernelNvlink->nvlinkLinks[linkId].pTmrEvent))
-            {
-                 tmrEventCancel(pTmr, pKernelNvlink->nvlinkLinks[linkId].pTmrEvent);
-            }
             tmrEventDestroy(pTmr, pKernelNvlink->nvlinkLinks[linkId].pTmrEvent);
             pKernelNvlink->nvlinkLinks[linkId].pTmrEvent = NULL;
         }
@@ -1144,6 +1143,24 @@ knvlinkSetDegradedMode_IMPL
     }
 
     return;
+}
+
+/*!
+ * @brief Gets degraded mode for current GPU
+ *
+ * @param[in] pGpu           OBJGPU pointer
+ * @param[in] pKernelNvlink  KernelNvlink pointer
+ *
+ * @return Current NVLink degraded mode
+ */
+NvBool
+knvlinkGetDegradedMode_IMPL
+(
+    OBJGPU       *pGpu,
+    KernelNvlink *pKernelNvlink
+)
+{
+    return pKernelNvlink->bIsGpuDegraded;
 }
 
 void

@@ -1,5 +1,5 @@
 /*******************************************************************************
-    Copyright (c) 2015-2023 NVIDIA Corporation
+    Copyright (c) 2015-2024 NVIDIA Corporation
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"), to
@@ -46,6 +46,9 @@
 // HOPPER_*
 #include "clc8b5.h"
 #include "clc86f.h"
+// BLACKWELL_*
+#include "clc96f.h"
+#include "clc9b5.h"
 // ARCHITECTURE_*
 #include "ctrl2080mc.h"
 
@@ -96,7 +99,7 @@ typedef struct
 {
     NvU64 base;
     NvU64 size;
-    NvU32 page_size;
+    NvU64 page_size;
     NvU32 depth;
     uvm_membar_t membar;
 } fake_tlb_invalidate_t;
@@ -153,7 +156,7 @@ static void fake_tlb_invalidate_va(uvm_push_t *push,
                                    NvU32 depth,
                                    NvU64 base,
                                    NvU64 size,
-                                   NvU32 page_size,
+                                   NvU64 page_size,
                                    uvm_membar_t membar)
 {
     if (!g_fake_tlb_invals_tracking_enabled)
@@ -249,7 +252,11 @@ static bool assert_last_invalidate_all(NvU32 expected_depth, bool expected_memba
 }
 
 static bool assert_invalidate_range_specific(fake_tlb_invalidate_t *inval,
-        NvU64 base, NvU64 size, NvU32 page_size, NvU32 expected_depth, bool expected_membar)
+                                             NvU64 base,
+                                             NvU64 size,
+                                             NvU64 page_size,
+                                             NvU32 expected_depth,
+                                             bool expected_membar)
 {
     UVM_ASSERT(g_fake_tlb_invals_tracking_enabled);
 
@@ -271,7 +278,7 @@ static bool assert_invalidate_range_specific(fake_tlb_invalidate_t *inval,
         return false;
     }
     if (inval->page_size != page_size && inval->base != 0 && inval->size != -1) {
-        UVM_TEST_PRINT("Expected page size %u, got %u instead\n", page_size, inval->page_size);
+        UVM_TEST_PRINT("Expected page size %llu, got %llu instead\n", page_size, inval->page_size);
         return false;
     }
 
@@ -280,7 +287,7 @@ static bool assert_invalidate_range_specific(fake_tlb_invalidate_t *inval,
 
 static bool assert_invalidate_range(NvU64 base,
                                     NvU64 size,
-                                    NvU32 page_size,
+                                    NvU64 page_size,
                                     bool allow_inval_all,
                                     NvU32 range_depth,
                                     NvU32 all_depth,
@@ -325,7 +332,7 @@ static NV_STATUS test_page_tree_init_kernel(uvm_gpu_t *gpu, NvU32 big_page_size,
 }
 
 static NV_STATUS test_page_tree_get_ptes(uvm_page_tree_t *tree,
-                                         NvU32 page_size,
+                                         NvU64 page_size,
                                          NvU64 start,
                                          NvLength size,
                                          uvm_page_table_range_t *range)
@@ -341,7 +348,7 @@ static NV_STATUS test_page_tree_get_ptes(uvm_page_tree_t *tree,
 }
 
 static NV_STATUS test_page_tree_get_entry(uvm_page_tree_t *tree,
-                                          NvU32 page_size,
+                                          NvU64 page_size,
                                           NvU64 start,
                                           uvm_page_table_range_t *single)
 {
@@ -355,14 +362,14 @@ static NV_STATUS test_page_tree_get_entry(uvm_page_tree_t *tree,
 }
 
 static NV_STATUS test_page_tree_alloc_table(uvm_page_tree_t *tree,
-                                            NvU32 page_size,
+                                            NvU64 page_size,
                                             uvm_page_table_range_t *single,
                                             uvm_page_table_range_t *children)
 {
     return uvm_page_tree_alloc_table(tree, page_size, UVM_PMM_ALLOC_FLAGS_NONE, single, children);
 }
 
-static bool assert_entry_no_invalidate(uvm_page_tree_t *tree, NvU32 page_size, NvU64 start)
+static bool assert_entry_no_invalidate(uvm_page_tree_t *tree, NvU64 page_size, NvU64 start)
 {
     uvm_page_table_range_t entry;
     bool result = true;
@@ -378,7 +385,7 @@ static bool assert_entry_no_invalidate(uvm_page_tree_t *tree, NvU32 page_size, N
     return assert_no_invalidate() && result;
 }
 
-static bool assert_entry_invalidate(uvm_page_tree_t *tree, NvU32 page_size, NvU64 start, NvU32 depth, bool membar)
+static bool assert_entry_invalidate(uvm_page_tree_t *tree, NvU64 page_size, NvU64 start, NvU32 depth, bool membar)
 {
     uvm_page_table_range_t entry;
     bool result = true;
@@ -668,6 +675,77 @@ static NV_STATUS get_single_page_512m(uvm_gpu_t *gpu)
     return NV_OK;
 }
 
+static NV_STATUS alloc_256g_memory(uvm_gpu_t *gpu)
+{
+    uvm_page_tree_t tree;
+    uvm_page_table_range_t range;
+
+    NvLength size = 256 * UVM_SIZE_1GB;
+    MEM_NV_CHECK_RET(test_page_tree_init(gpu, BIG_PAGE_SIZE_PASCAL, &tree), NV_OK);
+    MEM_NV_CHECK_RET(test_page_tree_get_ptes(&tree, UVM_PAGE_SIZE_256G, 0, size, &range), NV_OK);
+    TEST_CHECK_RET(range.entry_count == 1);
+    TEST_CHECK_RET(range.table->depth == 2);
+    TEST_CHECK_RET(range.start_index == 0);
+    TEST_CHECK_RET(range.page_size == UVM_PAGE_SIZE_256G);
+    TEST_CHECK_RET(tree.root->ref_count == 1);
+    TEST_CHECK_RET(tree.root->entries[0]->ref_count == 1);
+    TEST_CHECK_RET(tree.root->entries[0]->entries[0]->ref_count == 1);
+    TEST_CHECK_RET(range.table == tree.root->entries[0]->entries[0]);
+    uvm_page_tree_put_ptes(&tree, &range);
+    UVM_ASSERT(tree.root->ref_count == 0);
+    uvm_page_tree_deinit(&tree);
+
+    return NV_OK;
+}
+
+static NV_STATUS alloc_adjacent_256g_memory(uvm_gpu_t *gpu)
+{
+    uvm_page_tree_t tree;
+    uvm_page_table_range_t range1;
+    uvm_page_table_range_t range2;
+
+    NvLength size = 256 * UVM_SIZE_1GB;
+    MEM_NV_CHECK_RET(test_page_tree_init(gpu, BIG_PAGE_SIZE_PASCAL, &tree), NV_OK);
+    MEM_NV_CHECK_RET(test_page_tree_get_ptes(&tree, UVM_PAGE_SIZE_256G, size, size, &range1), NV_OK);
+    TEST_CHECK_RET(range1.entry_count == 1);
+
+    MEM_NV_CHECK_RET(test_page_tree_get_ptes(&tree, UVM_PAGE_SIZE_256G, 0, size, &range2), NV_OK);
+    TEST_CHECK_RET(range2.entry_count == 1);
+    TEST_CHECK_RET(range1.table == range2.table);
+    TEST_CHECK_RET(range1.table == tree.root->entries[0]->entries[0]);
+    TEST_CHECK_RET(range1.start_index == 1);
+    TEST_CHECK_RET(range2.start_index == 0);
+
+    uvm_page_tree_put_ptes(&tree, &range1);
+    uvm_page_tree_put_ptes(&tree, &range2);
+    uvm_page_tree_deinit(&tree);
+
+    return NV_OK;
+}
+
+static NV_STATUS get_single_page_256g(uvm_gpu_t *gpu)
+{
+    uvm_page_tree_t tree;
+    uvm_page_table_range_t range;
+
+    // use a start address not at the beginning of a PDE2 entry's range
+    NvU64 start = 3 * 256 * UVM_SIZE_1GB;
+    NvLength size = 256 * UVM_SIZE_1GB;
+
+    MEM_NV_CHECK_RET(test_page_tree_init(gpu, BIG_PAGE_SIZE_PASCAL, &tree), NV_OK);
+    MEM_NV_CHECK_RET(test_page_tree_get_ptes(&tree, UVM_PAGE_SIZE_256G, start, size, &range), NV_OK);
+
+    TEST_CHECK_RET(range.entry_count == 1);
+    TEST_CHECK_RET(range.table->depth == 2);
+    TEST_CHECK_RET(range.page_size == UVM_PAGE_SIZE_256G);
+
+    uvm_page_tree_put_ptes(&tree, &range);
+    TEST_CHECK_RET(tree.root->ref_count == 0);
+    uvm_page_tree_deinit(&tree);
+
+    return NV_OK;
+}
+
 static NV_STATUS get_entire_table_4k(uvm_gpu_t *gpu)
 {
     uvm_page_tree_t tree;
@@ -707,6 +785,29 @@ static NV_STATUS get_entire_table_512m(uvm_gpu_t *gpu)
     TEST_CHECK_RET(range.entry_count == 512);
     TEST_CHECK_RET(range.table->depth == 2);
     TEST_CHECK_RET(range.page_size == UVM_PAGE_SIZE_512M);
+    TEST_CHECK_RET(tree.root->ref_count == 1);
+
+    uvm_page_tree_put_ptes(&tree, &range);
+    uvm_page_tree_deinit(&tree);
+
+    return NV_OK;
+}
+
+static NV_STATUS get_entire_table_256g(uvm_gpu_t *gpu)
+{
+    uvm_page_tree_t tree;
+    uvm_page_table_range_t range;
+
+    NvU64 start = 1UL << 48;
+    NvLength size = 512UL * UVM_PAGE_SIZE_256G;
+
+    MEM_NV_CHECK_RET(test_page_tree_init_kernel(gpu, BIG_PAGE_SIZE_PASCAL, &tree), NV_OK);
+    MEM_NV_CHECK_RET(test_page_tree_get_ptes(&tree, UVM_PAGE_SIZE_256G, start, size, &range), NV_OK);
+
+    TEST_CHECK_RET(range.table == tree.root->entries[0]->entries[2]);
+    TEST_CHECK_RET(range.entry_count == 512);
+    TEST_CHECK_RET(range.table->depth == 2);
+    TEST_CHECK_RET(range.page_size == UVM_PAGE_SIZE_256G);
     TEST_CHECK_RET(tree.root->ref_count == 1);
 
     uvm_page_tree_put_ptes(&tree, &range);
@@ -801,6 +902,43 @@ static NV_STATUS split_2m_from_512m(uvm_gpu_t *gpu)
     return NV_OK;
 }
 
+static NV_STATUS split_512m_from_256g(uvm_gpu_t *gpu)
+{
+    uvm_page_tree_t tree;
+    uvm_page_table_range_t range_256g;
+    uvm_page_table_range_t range_adj;
+    uvm_page_table_range_t range_512m;
+
+    NvU64 start = 1UL << 48;
+    NvLength size = UVM_PAGE_SIZE_256G;
+
+    MEM_NV_CHECK_RET(test_page_tree_init_kernel(gpu, BIG_PAGE_SIZE_PASCAL, &tree), NV_OK);
+    MEM_NV_CHECK_RET(test_page_tree_get_ptes(&tree, UVM_PAGE_SIZE_256G, start, size, &range_256g), NV_OK);
+    MEM_NV_CHECK_RET(test_page_tree_get_ptes(&tree, UVM_PAGE_SIZE_256G, start + size, size, &range_adj), NV_OK);
+
+    TEST_CHECK_RET(range_256g.entry_count == 1);
+    TEST_CHECK_RET(range_256g.table->depth == 2);
+    TEST_CHECK_RET(range_adj.entry_count == 1);
+    TEST_CHECK_RET(range_adj.table->depth == 2);
+
+    // Need to release the 256G page so that the reference count is right.
+    uvm_page_tree_put_ptes(&tree, &range_256g);
+    MEM_NV_CHECK_RET(test_page_tree_get_ptes(&tree, UVM_PAGE_SIZE_512M, start, size, &range_512m), NV_OK);
+
+    TEST_CHECK_RET(range_512m.entry_count == 512);
+    TEST_CHECK_RET(range_512m.table->depth == 3);
+    TEST_CHECK_RET(range_512m.table == tree.root->entries[0]->entries[2]->entries[0]);
+    TEST_CHECK_RET(range_512m.start_index == 0);
+
+    // Free everything
+    uvm_page_tree_put_ptes(&tree, &range_adj);
+    uvm_page_tree_put_ptes(&tree, &range_512m);
+
+    uvm_page_tree_deinit(&tree);
+
+    return NV_OK;
+}
+
 static NV_STATUS get_512mb_range(uvm_gpu_t *gpu)
 {
     uvm_page_tree_t tree;
@@ -830,6 +968,25 @@ static NV_STATUS get_2gb_range(uvm_gpu_t *gpu)
 
     MEM_NV_CHECK_RET(test_page_tree_init(gpu, BIG_PAGE_SIZE_PASCAL, &tree), NV_OK);
     MEM_NV_CHECK_RET(test_page_tree_get_ptes(&tree, UVM_PAGE_SIZE_512M, start, size, &range), NV_OK);
+    TEST_CHECK_RET(range.entry_count == 4);
+    TEST_CHECK_RET(range.table->depth == 2);
+    TEST_CHECK_RET(range.start_index == 4);
+    uvm_page_tree_put_ptes(&tree, &range);
+    uvm_page_tree_deinit(&tree);
+
+    return NV_OK;
+}
+
+static NV_STATUS get_1tb_range(uvm_gpu_t *gpu)
+{
+    uvm_page_tree_t tree;
+    uvm_page_table_range_t range;
+
+    NvU64 start = UVM_SIZE_1TB;
+    NvU64 size = start;
+
+    MEM_NV_CHECK_RET(test_page_tree_init(gpu, BIG_PAGE_SIZE_PASCAL, &tree), NV_OK);
+    MEM_NV_CHECK_RET(test_page_tree_get_ptes(&tree, UVM_PAGE_SIZE_256G, start, size, &range), NV_OK);
     TEST_CHECK_RET(range.entry_count == 4);
     TEST_CHECK_RET(range.table->depth == 2);
     TEST_CHECK_RET(range.start_index == 4);
@@ -932,8 +1089,8 @@ static NV_STATUS split_and_free(uvm_gpu_t *gpu)
 
 static NV_STATUS check_sizes(uvm_gpu_t *gpu)
 {
-    NvU32 user_sizes = UVM_PAGE_SIZE_2M;
-    NvU32 kernel_sizes = UVM_PAGE_SIZE_4K | 256;
+    NvU64 user_sizes = UVM_PAGE_SIZE_2M;
+    NvU64 kernel_sizes = UVM_PAGE_SIZE_4K | 256;
 
     if (UVM_PAGE_SIZE_64K >= PAGE_SIZE)
         user_sizes |= UVM_PAGE_SIZE_64K;
@@ -1036,7 +1193,7 @@ static NV_STATUS fast_split_double_backoff(uvm_gpu_t *gpu)
     return NV_OK;
 }
 
-static NV_STATUS test_tlb_invalidates(uvm_gpu_t *gpu)
+static NV_STATUS test_tlb_invalidates_gmmu_v2(uvm_gpu_t *gpu)
 {
     NV_STATUS status = NV_OK;
     uvm_page_tree_t tree;
@@ -1099,11 +1256,80 @@ static NV_STATUS test_tlb_invalidates(uvm_gpu_t *gpu)
     return status;
 }
 
+static NV_STATUS test_tlb_invalidates_gmmu_v3(uvm_gpu_t *gpu)
+{
+    NV_STATUS status = NV_OK;
+    uvm_page_tree_t tree;
+    uvm_page_table_range_t entries[6];
+    int i;
+
+    // Depth 5
+    NvU64 extent_pte = UVM_PAGE_SIZE_2M;
+
+    // Depth 4
+    NvU64 extent_pde0 = extent_pte * (1ull << 8);
+
+    // Depth 3
+    NvU64 extent_pde1 = extent_pde0 * (1ull << 9);
+
+    // Depth 2
+    NvU64 extent_pde2 = extent_pde1 * (1ull << 9);
+
+    // Depth 1
+    NvU64 extent_pde3 = extent_pde2 * (1ull << 9);
+
+    MEM_NV_CHECK_RET(test_page_tree_init_kernel(gpu, BIG_PAGE_SIZE_PASCAL, &tree), NV_OK);
+
+    fake_tlb_invals_enable();
+
+    TEST_CHECK_RET(assert_entry_invalidate(&tree, UVM_PAGE_SIZE_4K, 0, 0, true));
+    TEST_CHECK_RET(assert_entry_invalidate(&tree, UVM_PAGE_SIZE_4K, 0, 0, true));
+
+    TEST_CHECK_RET(test_page_tree_get_entry(&tree, UVM_PAGE_SIZE_4K, 0, &entries[0]) == NV_OK);
+    TEST_CHECK_RET(assert_and_reset_last_invalidate(0, false));
+
+    TEST_CHECK_RET(assert_entry_no_invalidate(&tree, UVM_PAGE_SIZE_4K, extent_pte - UVM_PAGE_SIZE_4K));
+
+    TEST_CHECK_RET(assert_entry_invalidate(&tree, UVM_PAGE_SIZE_64K, 0, 4, true));
+
+    TEST_CHECK_RET(test_page_tree_get_entry(&tree, UVM_PAGE_SIZE_64K, 0, &entries[1]) == NV_OK);
+    TEST_CHECK_RET(assert_and_reset_last_invalidate(4, false));
+
+    TEST_CHECK_RET(test_page_tree_get_entry(&tree, UVM_PAGE_SIZE_4K, extent_pde0, &entries[2]) == NV_OK);
+    TEST_CHECK_RET(assert_and_reset_last_invalidate(3, false));
+
+    TEST_CHECK_RET(test_page_tree_get_entry(&tree, UVM_PAGE_SIZE_4K, extent_pde1, &entries[3]) == NV_OK);
+    TEST_CHECK_RET(assert_and_reset_last_invalidate(2, false));
+
+    TEST_CHECK_RET(test_page_tree_get_entry(&tree, UVM_PAGE_SIZE_4K, extent_pde2, &entries[4]) == NV_OK);
+    TEST_CHECK_RET(assert_and_reset_last_invalidate(1, false));
+
+    TEST_CHECK_RET(test_page_tree_get_entry(&tree, UVM_PAGE_SIZE_4K, extent_pde3, &entries[5]) == NV_OK);
+    TEST_CHECK_RET(assert_and_reset_last_invalidate(0, false));
+
+    for (i = 5; i > 1; --i) {
+        uvm_page_tree_put_ptes(&tree, &entries[i]);
+        TEST_CHECK_RET(assert_and_reset_last_invalidate(5 - i, true));
+    }
+
+    uvm_page_tree_put_ptes(&tree, &entries[0]);
+    TEST_CHECK_RET(assert_and_reset_last_invalidate(4, true));
+
+    uvm_page_tree_put_ptes(&tree, &entries[1]);
+    TEST_CHECK_RET(assert_and_reset_last_invalidate(0, true));
+
+    fake_tlb_invals_disable();
+
+    uvm_page_tree_deinit(&tree);
+
+    return status;
+}
+
 static NV_STATUS test_tlb_batch_invalidates_case(uvm_page_tree_t *tree,
                                                  NvU64 base,
                                                  NvU64 size,
-                                                 NvU32 min_page_size,
-                                                 NvU32 max_page_size)
+                                                 NvU64 min_page_size,
+                                                 NvU64 max_page_size)
 {
     NV_STATUS status = NV_OK;
     uvm_push_t push;
@@ -1125,7 +1351,7 @@ static NV_STATUS test_tlb_batch_invalidates_case(uvm_page_tree_t *tree,
         uvm_tlb_batch_begin(tree, &batch);
 
         for (j = 0; j < i; ++j) {
-            NvU32 used_max_page_size = (j & 1) ? max_page_size : min_page_size;
+            NvU64 used_max_page_size = (j & 1) ? max_page_size : min_page_size;
             NvU32 expected_range_depth = tree->hal->page_table_depth(used_max_page_size);
             expected_inval_all_depth = min(expected_inval_all_depth, expected_range_depth);
             uvm_tlb_batch_invalidate(&batch,
@@ -1139,7 +1365,7 @@ static NV_STATUS test_tlb_batch_invalidates_case(uvm_page_tree_t *tree,
         uvm_tlb_batch_end(&batch, &push, UVM_MEMBAR_NONE);
 
         for (j = 0; j < i; ++j) {
-            NvU32 used_max_page_size = (j & 1) ? max_page_size : min_page_size;
+            NvU64 used_max_page_size = (j & 1) ? max_page_size : min_page_size;
             NvU32 expected_range_depth = tree->hal->page_table_depth(used_max_page_size);
             bool allow_inval_all = (total_pages > gpu->parent->tlb_batch.max_pages) ||
                                    !gpu->parent->tlb_batch.va_invalidate_supported ||
@@ -1161,7 +1387,7 @@ static NV_STATUS test_tlb_batch_invalidates_case(uvm_page_tree_t *tree,
     return status;
 }
 
-static NV_STATUS test_tlb_batch_invalidates(uvm_gpu_t *gpu, const NvU32 *page_sizes, const NvU32 page_sizes_count)
+static NV_STATUS test_tlb_batch_invalidates(uvm_gpu_t *gpu, const NvU64 *page_sizes, const NvU32 page_sizes_count)
 {
     NV_STATUS status = NV_OK;
     uvm_page_tree_t tree;
@@ -1177,8 +1403,8 @@ static NV_STATUS test_tlb_batch_invalidates(uvm_gpu_t *gpu, const NvU32 *page_si
     for (min_index = 0; min_index < page_sizes_count; ++min_index) {
         for (max_index = min_index; max_index < page_sizes_count; ++max_index) {
             for (size_index = 0; size_index < ARRAY_SIZE(sizes_in_max_pages); ++size_index) {
-                NvU32 min_page_size = page_sizes[min_index];
-                NvU32 max_page_size = page_sizes[max_index];
+                NvU64 min_page_size = page_sizes[min_index];
+                NvU64 max_page_size = page_sizes[max_index];
                 NvU64 size = (NvU64)sizes_in_max_pages[size_index] * max_page_size;
 
                 TEST_CHECK_GOTO(test_tlb_batch_invalidates_case(&tree,
@@ -1282,7 +1508,7 @@ static NV_STATUS test_range_vec_clear_ptes(uvm_page_table_range_vec_t *range_vec
 static NV_STATUS test_range_vec_create(uvm_page_tree_t *tree,
                                        NvU64 start,
                                        NvU64 size,
-                                       NvU32 page_size,
+                                       NvU64 page_size,
                                        uvm_page_table_range_vec_t **range_vec_out)
 {
     uvm_page_table_range_vec_t *range_vec;
@@ -1303,7 +1529,7 @@ static NV_STATUS test_range_vec_create(uvm_page_tree_t *tree,
 // Test page table range vector APIs.
 // Notably the test leaks the page_tree and range_vec on error as it's hard to
 // clean up on failure and the destructors would likely assert.
-static NV_STATUS test_range_vec(uvm_gpu_t *gpu, NvU32 big_page_size, NvU32 page_size)
+static NV_STATUS test_range_vec(uvm_gpu_t *gpu, NvU32 big_page_size, NvU64 page_size)
 {
     NV_STATUS status = NV_OK;
     uvm_page_tree_t tree;
@@ -1511,7 +1737,7 @@ static uvm_mmu_page_table_alloc_t fake_table_alloc(uvm_aperture_t aperture, NvU6
 // Queries the supported page sizes of the GPU(uvm_gpu_t) and fills the
 // page_sizes array up to MAX_NUM_PAGE_SIZE. Returns the number of elements in
 // page_sizes;
-size_t get_page_sizes(uvm_gpu_t *gpu, NvU32 *page_sizes)
+static size_t get_page_sizes(uvm_gpu_t *gpu, NvU64 *page_sizes)
 {
     unsigned long page_size_log2;
     unsigned long page_sizes_bitvec;
@@ -1524,7 +1750,7 @@ size_t get_page_sizes(uvm_gpu_t *gpu, NvU32 *page_sizes)
     page_sizes_bitvec = hal->page_sizes();
 
     for_each_set_bit(page_size_log2, &page_sizes_bitvec, BITS_PER_LONG) {
-        NvU32 page_size = (NvU32)(1ULL << page_size_log2);
+        NvU64 page_size = 1ULL << page_size_log2;
         UVM_ASSERT(count < MAX_NUM_PAGE_SIZES);
         page_sizes[count++] = page_size;
     }
@@ -1568,18 +1794,24 @@ static NV_STATUS entry_test_page_size_hopper(uvm_gpu_t *gpu, size_t page_size)
     return NV_OK;
 }
 
+static NV_STATUS entry_test_page_size_blackwell(uvm_gpu_t *gpu, size_t page_size)
+{
+    return entry_test_page_size_hopper(gpu, page_size);
+}
+
 typedef NV_STATUS (*entry_test_page_size_func)(uvm_gpu_t *gpu, size_t page_size);
 
 static NV_STATUS entry_test_maxwell(uvm_gpu_t *gpu)
 {
-    static const NvU32 big_page_sizes[] = {UVM_PAGE_SIZE_64K, UVM_PAGE_SIZE_128K};
+    static const NvU64 big_page_sizes[] = {UVM_PAGE_SIZE_64K, UVM_PAGE_SIZE_128K};
     NvU64 pde_bits;
     uvm_mmu_page_table_alloc_t *phys_allocs[2];
     uvm_mmu_page_table_alloc_t alloc_sys = fake_table_alloc(UVM_APERTURE_SYS, 0x9999999000LL);
     uvm_mmu_page_table_alloc_t alloc_vid = fake_table_alloc(UVM_APERTURE_VID, 0x1BBBBBB000LL);
     uvm_mmu_mode_hal_t *hal;
     uvm_page_directory_t dir;
-    NvU32 i, j, big_page_size, page_size;
+    NvU64 big_page_size, page_size;
+    NvU32 i, j;
 
     dir.depth = 0;
 
@@ -1663,7 +1895,7 @@ static NV_STATUS entry_test_maxwell(uvm_gpu_t *gpu)
 
 static NV_STATUS entry_test_pascal(uvm_gpu_t *gpu, entry_test_page_size_func entry_test_page_size)
 {
-    NvU32 page_sizes[MAX_NUM_PAGE_SIZES];
+    NvU64 page_sizes[MAX_NUM_PAGE_SIZES];
     NvU64 pde_bits[2];
     size_t i, num_page_sizes;
     uvm_mmu_page_table_alloc_t *phys_allocs[2] = {NULL, NULL};
@@ -1759,7 +1991,7 @@ static NV_STATUS entry_test_pascal(uvm_gpu_t *gpu, entry_test_page_size_func ent
 
 static NV_STATUS entry_test_volta(uvm_gpu_t *gpu, entry_test_page_size_func entry_test_page_size)
 {
-    NvU32 page_sizes[MAX_NUM_PAGE_SIZES];
+    NvU64 page_sizes[MAX_NUM_PAGE_SIZES];
     NvU64 pde_bits[2];
     size_t i, num_page_sizes;
     uvm_mmu_page_table_alloc_t *phys_allocs[2] = {NULL, NULL};
@@ -1833,7 +2065,7 @@ static NV_STATUS entry_test_volta(uvm_gpu_t *gpu, entry_test_page_size_func entr
 
 static NV_STATUS entry_test_ampere(uvm_gpu_t *gpu, entry_test_page_size_func entry_test_page_size)
 {
-    NvU32 page_sizes[MAX_NUM_PAGE_SIZES];
+    NvU64 page_sizes[MAX_NUM_PAGE_SIZES];
     NvU32 i, num_page_sizes;
 
     num_page_sizes = get_page_sizes(gpu, page_sizes);
@@ -1847,7 +2079,7 @@ static NV_STATUS entry_test_ampere(uvm_gpu_t *gpu, entry_test_page_size_func ent
 static NV_STATUS entry_test_hopper(uvm_gpu_t *gpu, entry_test_page_size_func entry_test_page_size)
 {
     NV_STATUS status = NV_OK;
-    NvU32 page_sizes[MAX_NUM_PAGE_SIZES];
+    NvU64 page_sizes[MAX_NUM_PAGE_SIZES];
     NvU64 pde_bits[2];
     uvm_page_directory_t *dirs[5];
     size_t i, num_page_sizes;
@@ -2045,6 +2277,11 @@ cleanup:
     return status;
 }
 
+static NV_STATUS entry_test_blackwell(uvm_gpu_t *gpu, entry_test_page_size_func entry_test_page_size)
+{
+    return entry_test_ampere(gpu, entry_test_page_size_blackwell);
+}
+
 static NV_STATUS alloc_4k_maxwell(uvm_gpu_t *gpu)
 {
     uvm_page_tree_t tree;
@@ -2082,7 +2319,7 @@ static NV_STATUS alloc_4k_maxwell(uvm_gpu_t *gpu)
     return NV_OK;
 }
 
-static NV_STATUS shrink_test(uvm_gpu_t *gpu, NvU32 big_page_size, NvU32 page_size)
+static NV_STATUS shrink_test(uvm_gpu_t *gpu, NvU32 big_page_size, NvU64 page_size)
 {
     uvm_page_tree_t tree;
     uvm_page_table_range_t range;
@@ -2134,7 +2371,7 @@ static NV_STATUS shrink_test(uvm_gpu_t *gpu, NvU32 big_page_size, NvU32 page_siz
     return NV_OK;
 }
 
-static NV_STATUS get_upper_test(uvm_gpu_t *gpu, NvU32 big_page_size, NvU32 page_size)
+static NV_STATUS get_upper_test(uvm_gpu_t *gpu, NvU32 big_page_size, NvU64 page_size)
 {
     uvm_page_tree_t tree;
     uvm_page_table_range_t range, upper_range;
@@ -2287,11 +2524,19 @@ static NV_STATUS fake_gpu_init_hopper(uvm_gpu_t *fake_gpu)
                          fake_gpu);
 }
 
+static NV_STATUS fake_gpu_init_blackwell(uvm_gpu_t *fake_gpu)
+{
+    return fake_gpu_init(BLACKWELL_CHANNEL_GPFIFO_A,
+                         BLACKWELL_DMA_COPY_A,
+                         NV2080_CTRL_MC_ARCH_INFO_ARCHITECTURE_GB100,
+                         fake_gpu);
+}
+
 static NV_STATUS maxwell_test_page_tree(uvm_gpu_t *maxwell)
 {
     // create a fake Maxwell GPU for this test.
-    static const NvU32 big_page_sizes[] = {UVM_PAGE_SIZE_64K, UVM_PAGE_SIZE_128K};
-    NvU32 i, j, big_page_size, page_size;
+    static const NvU64 big_page_sizes[] = {UVM_PAGE_SIZE_64K, UVM_PAGE_SIZE_128K};
+    NvU64 i, j, big_page_size, page_size;
 
     TEST_CHECK_RET(fake_gpu_init_maxwell(maxwell) == NV_OK);
 
@@ -2320,7 +2565,7 @@ static NV_STATUS pascal_test_page_tree(uvm_gpu_t *pascal)
     // create a fake Pascal GPU for this test.
     NvU32 tlb_batch_saved_max_pages;
     NvU32 i;
-    NvU32 page_sizes[MAX_NUM_PAGE_SIZES];
+    NvU64 page_sizes[MAX_NUM_PAGE_SIZES];
     size_t num_page_sizes;
 
     TEST_CHECK_RET(fake_gpu_init_pascal(pascal) == NV_OK);
@@ -2346,7 +2591,7 @@ static NV_STATUS pascal_test_page_tree(uvm_gpu_t *pascal)
     MEM_NV_CHECK_RET(check_sizes(pascal), NV_OK);
     MEM_NV_CHECK_RET(fast_split_normal(pascal), NV_OK);
     MEM_NV_CHECK_RET(fast_split_double_backoff(pascal), NV_OK);
-    MEM_NV_CHECK_RET(test_tlb_invalidates(pascal), NV_OK);
+    MEM_NV_CHECK_RET(test_tlb_invalidates_gmmu_v2(pascal), NV_OK);
     MEM_NV_CHECK_RET(test_tlb_batch_invalidates(pascal, page_sizes, num_page_sizes), NV_OK);
 
     // Run the test again with a bigger limit on max pages
@@ -2381,7 +2626,7 @@ static NV_STATUS volta_test_page_tree(uvm_gpu_t *volta)
 static NV_STATUS ampere_test_page_tree(uvm_gpu_t *ampere)
 {
     NvU32 i, tlb_batch_saved_max_pages;
-    NvU32 page_sizes[MAX_NUM_PAGE_SIZES];
+    NvU64 page_sizes[MAX_NUM_PAGE_SIZES];
     size_t num_page_sizes;
 
     TEST_CHECK_RET(fake_gpu_init_ampere(ampere) == NV_OK);
@@ -2402,7 +2647,7 @@ static NV_STATUS ampere_test_page_tree(uvm_gpu_t *ampere)
     MEM_NV_CHECK_RET(entry_test_ampere(ampere, entry_test_page_size_ampere), NV_OK);
 
     // TLB invalidate
-    MEM_NV_CHECK_RET(test_tlb_invalidates(ampere), NV_OK);
+    MEM_NV_CHECK_RET(test_tlb_invalidates_gmmu_v2(ampere), NV_OK);
 
     // TLB batch invalidate
     MEM_NV_CHECK_RET(test_tlb_batch_invalidates(ampere, page_sizes, num_page_sizes), NV_OK);
@@ -2433,6 +2678,55 @@ static NV_STATUS hopper_test_page_tree(uvm_gpu_t *hopper)
 
     MEM_NV_CHECK_RET(entry_test_hopper(hopper, entry_test_page_size_hopper), NV_OK);
     MEM_NV_CHECK_RET(alloc_64k_memory_57b_va(hopper), NV_OK);
+
+    return NV_OK;
+}
+
+static NV_STATUS blackwell_test_page_tree(uvm_gpu_t *blackwell)
+{
+    NvU32 i, tlb_batch_saved_max_pages;
+    NvU64 page_sizes[MAX_NUM_PAGE_SIZES];
+    size_t num_page_sizes;
+
+    TEST_CHECK_RET(fake_gpu_init_blackwell(blackwell) == NV_OK);
+
+    num_page_sizes = get_page_sizes(blackwell, page_sizes);
+    UVM_ASSERT(num_page_sizes > 0);
+
+    MEM_NV_CHECK_RET(alloc_256g_memory(blackwell), NV_OK);
+    MEM_NV_CHECK_RET(alloc_adjacent_256g_memory(blackwell), NV_OK);
+    MEM_NV_CHECK_RET(get_single_page_256g(blackwell), NV_OK);
+    MEM_NV_CHECK_RET(get_entire_table_256g(blackwell), NV_OK);
+
+    // Although there is no support for the 256GM page size for managed memory,
+    // we run tests that split a 256G page into 512x512M pages because UVM
+    // handles the PTEs for all supported page sizes.
+    MEM_NV_CHECK_RET(split_512m_from_256g(blackwell), NV_OK);
+    MEM_NV_CHECK_RET(get_1tb_range(blackwell), NV_OK);
+    MEM_NV_CHECK_RET(entry_test_blackwell(blackwell, entry_test_page_size_blackwell), NV_OK);
+
+    // TLB invalidate
+    MEM_NV_CHECK_RET(test_tlb_invalidates_gmmu_v3(blackwell), NV_OK);
+
+    // TLB batch invalidate
+    MEM_NV_CHECK_RET(test_tlb_batch_invalidates(blackwell, page_sizes, num_page_sizes), NV_OK);
+
+    // Run the test again with a bigger limit on max pages
+    tlb_batch_saved_max_pages = blackwell->parent->tlb_batch.max_pages;
+    blackwell->parent->tlb_batch.max_pages = 1024 * 1024;
+    MEM_NV_CHECK_RET(test_tlb_batch_invalidates(blackwell, page_sizes, num_page_sizes), NV_OK);
+    blackwell->parent->tlb_batch.max_pages = tlb_batch_saved_max_pages;
+
+    // And with per VA invalidates disabled
+    blackwell->parent->tlb_batch.va_invalidate_supported = false;
+    MEM_NV_CHECK_RET(test_tlb_batch_invalidates(blackwell, page_sizes, num_page_sizes), NV_OK);
+    blackwell->parent->tlb_batch.va_invalidate_supported = true;
+
+    for (i = 0; i < num_page_sizes; i++) {
+        MEM_NV_CHECK_RET(shrink_test(blackwell, BIG_PAGE_SIZE_PASCAL, page_sizes[i]), NV_OK);
+        MEM_NV_CHECK_RET(get_upper_test(blackwell, BIG_PAGE_SIZE_PASCAL, page_sizes[i]), NV_OK);
+        MEM_NV_CHECK_RET(test_range_vec(blackwell, BIG_PAGE_SIZE_PASCAL, page_sizes[i]), NV_OK);
+    }
 
     return NV_OK;
 }
@@ -2477,6 +2771,7 @@ NV_STATUS uvm_test_page_tree(UVM_TEST_PAGE_TREE_PARAMS *params, struct file *fil
     TEST_NV_CHECK_GOTO(volta_test_page_tree(gpu), done);
     TEST_NV_CHECK_GOTO(ampere_test_page_tree(gpu), done);
     TEST_NV_CHECK_GOTO(hopper_test_page_tree(gpu), done);
+    TEST_NV_CHECK_GOTO(blackwell_test_page_tree(gpu), done);
 
 done:
     fake_tlb_invals_free();

@@ -28,6 +28,7 @@ NV_HEADER_PRESENCE_TESTS = \
   drm/drm_device.h \
   drm/drm_mode_config.h \
   drm/drm_modeset_lock.h \
+  drm/drm_property.h \
   dt-bindings/interconnect/tegra_icc_id.h \
   generated/autoconf.h \
   generated/compile.h \
@@ -52,6 +53,7 @@ NV_HEADER_PRESENCE_TESTS = \
   linux/dma-resv.h \
   soc/tegra/chip-id.h \
   soc/tegra/fuse.h \
+  soc/tegra/fuse-helper.h \
   soc/tegra/tegra_bpmp.h \
   video/nv_internal.h \
   linux/platform/tegra/dce/dce-client-ipc.h \

@@ -227,8 +227,6 @@ void nvInitFlipEvoHwState(
     pFlipState->hdrInfoFrame.eotf = pHeadState->hdrInfoFrameOverride.eotf;
     pFlipState->hdrInfoFrame.staticMetadata =
         pHeadState->hdrInfoFrameOverride.staticMetadata;
-
-    pFlipState->colorimetry = pHeadState->colorimetry;
 }
 
 
@@ -543,8 +541,8 @@ static NvBool UpdateLayerFlipEvoHwStateHDRStaticMetadata(
 {
     if (pParams->layer[layer].hdr.specified) {
         if (pParams->layer[layer].hdr.enabled) {
-            // Don't allow enabling HDR on a layer that doesn't support it.
-            if (!pDevEvo->caps.layerCaps[layer].supportsHDR) {
+            // Don't allow enabling HDR on a layer that doesn't support ICtCp.
+            if (!pDevEvo->caps.layerCaps[layer].supportsICtCp) {
                 return FALSE;
             }
 
@@ -553,8 +551,8 @@ static NvBool UpdateLayerFlipEvoHwStateHDRStaticMetadata(
         }
         pHwState->hdrStaticMetadata.enabled = pParams->layer[layer].hdr.enabled;
 
-        // Only mark dirty if layer supports HDR, otherwise this is a no-op.
-        if (pDevEvo->caps.layerCaps[layer].supportsHDR) {
+        // Only mark dirty if layer supports ICtCp, otherwise this is a no-op.
+        if (pDevEvo->caps.layerCaps[layer].supportsICtCp) {
             pFlipState->dirty.hdrStaticMetadata = TRUE;
         }
     }
@@ -1008,11 +1006,6 @@ NvBool nvUpdateFlipEvoHwState(
         pFlipState->tf = pParams->tf.val;
     }
 
-    if (pParams->colorimetry.specified) {
-        pFlipState->dirty.colorimetry = TRUE;
-        pFlipState->colorimetry = pParams->colorimetry.val;
-    }
-
     if (pParams->hdrInfoFrame.specified) {
         pFlipState->dirty.hdrStaticMetadata = TRUE;
 
@@ -1280,7 +1273,7 @@ ValidateHDR(const NVDevEvoRec *pDevEvo,
     NvU32 layer;
 
     for (layer = 0; layer < pDevEvo->head[head].numLayers; layer++) {
-        if (pDevEvo->caps.layerCaps[layer].supportsHDR) {
+        if (pDevEvo->caps.layerCaps[layer].supportsICtCp) {
             layerSupportedCount++;
         }
 
@@ -1298,7 +1291,7 @@ ValidateHDR(const NVDevEvoRec *pDevEvo,
             }
 
             // Already checked in UpdateLayerFlipEvoHwStateHDRStaticMetadata()
-            nvAssert(pDevEvo->caps.layerCaps[layer].supportsHDR);
+            nvAssert(pDevEvo->caps.layerCaps[layer].supportsICtCp);
         }
     }
 
@@ -1667,11 +1660,6 @@ static void UpdateHDR(NVDevEvoPtr pDevEvo,
             }
         }
 
-        dirty = TRUE;
-    }
-
-    if (pFlipState->dirty.colorimetry) {
-        pHeadState->colorimetry = pFlipState->colorimetry;
         dirty = TRUE;
     }
 

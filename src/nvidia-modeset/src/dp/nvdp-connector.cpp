@@ -109,10 +109,11 @@ void nvDPNotifyLongPulse(NVConnectorEvoPtr pConnectorEvo,
 
     pNVDpLibConnector->plugged = connected;
 
-    if (connected && !nvAssignSOREvo(pConnectorEvo->pDispEvo,
-                                     nvDpyIdToNvU32(pConnectorEvo->displayId),
-                                     FALSE /* b2Heads1Or */,
-                                     0 /* sorExcludeMask */)) {
+    if (!pNVDpLibConnector->linkHandoffEnabled &&
+            connected && !nvAssignSOREvo(pConnectorEvo,
+                                         nvDpyIdToNvU32(pConnectorEvo->displayId),
+                                         FALSE /* b2Heads1Or */,
+                                         0 /* sorExcludeMask */)) {
         // DPLib takes care of skipping LT on unassigned SOR Display. 
     }
 
@@ -467,14 +468,30 @@ static NvBool ConstructDpLibIsModesetPossibleParamsOneHead(
     }
 
     pParams->head[head].pDscParams->bCheckWithDsc = true;
-    pParams->head[head].pDscParams->forceDsc = pModeValidationParams->forceDsc ?
-        DisplayPort::DSC_FORCE_ENABLE :
-        DisplayPort::DSC_DEFAULT;
+    pParams->head[head].pDscParams->forceDsc = DisplayPort::DSC_DEFAULT;
+    switch (pModeValidationParams->dscMode) {
+        case NVKMS_DSC_MODE_FORCE_ENABLE:
+            pParams->head[head].pDscParams->forceDsc =
+                DisplayPort::DSC_FORCE_ENABLE;
+            break;
+        case NVKMS_DSC_MODE_FORCE_DISABLE:
+            pParams->head[head].pDscParams->forceDsc =
+                DisplayPort::DSC_FORCE_DISABLE;
+            break;
+        default:
+            pParams->head[head].pDscParams->forceDsc =
+                DisplayPort::DSC_DEFAULT;
+            break;
+    }
+
     /*
      * 2Heads1Or requires either YUV420 or DSC; if b2Heads1Or is enabled
      * but YUV420 is not, force DSC.
      */
     if (b2Heads1Or && (pTimings->yuv420Mode != NV_YUV420_MODE_HW)) {
+        if (pModeValidationParams->dscMode == NVKMS_DSC_MODE_FORCE_DISABLE) {
+            goto failed;
+        }
         pParams->head[head].pDscParams->forceDsc = DisplayPort::DSC_FORCE_ENABLE;
     }
 
@@ -592,8 +609,7 @@ done:
 
 NvBool nvDPValidateModeForDpyEvo(
     const NVDpyEvoRec *pDpyEvo,
-    const enum NvKmsDpyAttributeCurrentColorSpaceValue colorSpace,
-    const enum NvKmsDpyAttributeColorBpcValue colorBpc,
+    const NVDpyAttributeColor *pDpyColor,
     const struct NvKmsModeValidationParams *pModeValidationParams,
     const NVHwModeTimingsEvo *pTimings,
     const NvBool b2Heads1Or,
@@ -617,8 +633,8 @@ NvBool nvDPValidateModeForDpyEvo(
 
     pParams->head[head].displayId = 0;
     pParams->head[head].dpyIdList = nvAddDpyIdToEmptyDpyIdList(pDpyEvo->id);
-    pParams->head[head].colorSpace = colorSpace;
-    pParams->head[head].colorBpc = colorBpc;
+    pParams->head[head].colorSpace = pDpyColor->format;
+    pParams->head[head].colorBpc = pDpyColor->bpc;
     pParams->head[head].pModeValidationParams = pModeValidationParams;
     pParams->head[head].pTimings = pTimings;
     pParams->head[head].b2Heads1Or = b2Heads1Or;
@@ -863,16 +879,18 @@ static NvU32 GetFirmwareHead(NVConnectorEvoPtr pConnectorEvo)
 /*!
  * Determine whether an active connector shares an OR with this connector.
  */
-static bool ConnectorIsSharedWithActiveOR(NVConnectorEvoPtr pConnectorEvo)
+static bool IsDDCPartnerActive(NVDPLibConnectorPtr pNVDpLibConnector)
 {
+    NVConnectorEvoRec *pConnectorEvo =
+                       pNVDpLibConnector->pConnectorEvo;
     NVDispEvoPtr pDispEvo = pConnectorEvo->pDispEvo;
     NVConnectorEvoPtr pOtherConnectorEvo;
 
     FOR_ALL_EVO_CONNECTORS(pOtherConnectorEvo, pDispEvo) {
         if (pOtherConnectorEvo != pConnectorEvo &&
             nvIsConnectorActiveEvo(pOtherConnectorEvo) &&
-            (pOtherConnectorEvo->or.primary == pConnectorEvo->or.primary)) {
-            nvAssert(pOtherConnectorEvo->or.primary != NV_INVALID_OR);
+            nvDpyIdIsInDpyIdList(pOtherConnectorEvo->displayId,
+                pConnectorEvo->ddcPartnerDpyIdsList)) {
             return true;
         }
     }
@@ -887,10 +905,12 @@ NvBool nvDPResume(NVDPLibConnectorPtr pNVDpLibConnector, NvBool plugged)
     NVDispEvoPtr pDispEvo = pConnectorEvo->pDispEvo;
     DisplayPort::Connector *c = pNVDpLibConnector->connector;
     const unsigned int firmwareHead = GetFirmwareHead(pConnectorEvo);
-    const bool firmwareLinkHandsOff = ConnectorIsSharedWithActiveOR(pConnectorEvo);
     bool dpyIdIsDynamic = false;
     /* By default allow MST */
     bool allowMST = true;
+
+    pNVDpLibConnector->linkHandoffEnabled =
+                            IsDDCPartnerActive(pNVDpLibConnector);
 
     if (firmwareHead != NV_INVALID_HEAD) {
         NVDpyId firmwareDpyId = nvInvalidDpyId();
@@ -920,7 +940,7 @@ NvBool nvDPResume(NVDPLibConnectorPtr pNVDpLibConnector, NvBool plugged)
 
     pNVDpLibConnector->plugged = plugged;
     if (plugged && !pNVDpLibConnector->headInFirmware) {
-        NvBool ret = nvAssignSOREvo(pDispEvo,
+        NvBool ret = nvAssignSOREvo(pConnectorEvo,
                                     nvDpyIdToNvU32(pConnectorEvo->displayId),
                                     FALSE /* b2Heads1Or */,
                                     0 /* sorExcludeMask */);
@@ -931,7 +951,7 @@ NvBool nvDPResume(NVDPLibConnectorPtr pNVDpLibConnector, NvBool plugged)
         }
     }
 
-    c->resume(firmwareLinkHandsOff,
+    c->resume(pNVDpLibConnector->linkHandoffEnabled,
               pNVDpLibConnector->headInFirmware,
               plugged,
               false /* isUefiSystem */,
@@ -1092,4 +1112,15 @@ enum NVDpLinkMode nvDPGetActiveLinkMode(NVDPLibConnectorPtr pDpLibConnector)
     }
     return linkConfig.multistream ? NV_DP_LINK_MODE_MST :
                 NV_DP_LINK_MODE_SST;
+}
+
+void nvDPSetLinkHandoff(NVDPLibConnectorPtr pDpLibConnector, NvBool enable)
+{
+    if (enable) {
+        pDpLibConnector->connector->enableLinkHandsOff();
+        pDpLibConnector->linkHandoffEnabled = TRUE;
+    } else {
+        pDpLibConnector->linkHandoffEnabled = FALSE;
+        pDpLibConnector->connector->releaseLinkHandsOff();
+    }
 }

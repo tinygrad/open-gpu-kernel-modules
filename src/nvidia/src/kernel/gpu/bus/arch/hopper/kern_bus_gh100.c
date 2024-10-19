@@ -38,6 +38,7 @@
 #include "vgpu/rpc.h"
 #include "virtualization/hypervisor/hypervisor.h"
 #include "os/os.h"
+#include "containers/eheap_old.h"
 
 #include "mem_mgr/mem_multicast_fabric.h"
 
@@ -50,7 +51,7 @@
 #include "published/hopper/gh100/dev_mmu.h"
 #include "ctrl/ctrl2080/ctrl2080fla.h" // NV2080_CTRL_CMD_FLA_SETUP_INSTANCE_MEM_BLOCK
 
-#include "nvRmReg.h"
+#include "nvrm_registry.h"
 
  // Defines for P2P
 #define HOPPER_WRITE_MAILBOX_SIZE            ((NvU64)64 * 1024)
@@ -59,7 +60,8 @@
      HOPPER_WRITE_MAILBOX_SIZE)
 
 // RM reserved memory region is mapped separately as it is not added to the kernel
-#define COHERENT_CPU_MAPPING_RM_RESV_REGION   COHERENT_CPU_MAPPING_REGION_1
+#define COHERENT_CPU_MAPPING_RM_RESV_REGION             COHERENT_CPU_MAPPING_REGION_1
+#define COHERENT_CPU_MAPPING_RM_KERNEL_ONLINED_REGION   COHERENT_CPU_MAPPING_REGION_0
 
 /*!
  * @brief Tear Down BAR1 Mailbox
@@ -641,6 +643,65 @@ kbusTeardownBar2CpuAperture_GH100
     return NV_OK;
 }
 
+NV_STATUS
+kbusAllocP2PMailboxBar1_GH100
+(
+    OBJGPU    *pGpu,
+    KernelBus *pKernelBus,
+    NvU32      gfid,
+    NvU64      vaRangeMax
+)
+{
+    OBJGPU           *pParentGpu;
+    NvU64             vaAllocMax;
+    NV_STATUS         status = NV_OK;
+
+    VAS_ALLOC_FLAGS flags = {0};
+
+    pParentGpu  = gpumgrGetParentGPU(pGpu);
+
+    if (!gpumgrIsParentGPU(pGpu))
+    {
+        flags.bFixedAddressAllocate = NV_TRUE;
+        pKernelBus->p2pPcie.writeMailboxBar1Addr = GPU_GET_KERNEL_BUS(pParentGpu)->p2pPcie.writeMailboxBar1Addr;
+    }
+
+    pKernelBus->p2pPcie.writeMailboxTotalSize =
+        HOPPER_WRITE_MAILBOX_SIZE * P2P_MAX_NUM_PEERS;
+    vaAllocMax = NV_MIN(vaRangeMax,
+        HOPPER_MAX_WRITE_MAILBOX_ADDR(pGpu) + HOPPER_WRITE_MAILBOX_SIZE - 1);
+
+    status = vaspaceAlloc(pKernelBus->bar1[gfid].pVAS,
+                          pKernelBus->p2pPcie.writeMailboxTotalSize,
+                          HOPPER_WRITE_MAILBOX_SIZE,
+                          0, vaAllocMax,
+                          0,
+                          flags,
+                          &pKernelBus->p2pPcie.writeMailboxBar1Addr);
+    if (status != NV_OK)
+    {
+        NV_PRINTF(LEVEL_ERROR,
+                  "cannot allocate vaspace for P2P write mailboxes (0x%x)\n",
+                  status);
+        goto kbusAllocP2PMailboxBar1_failed;
+    }
+
+    NV_ASSERT(GPU_GET_KERNEL_BUS(pParentGpu)->p2pPcie.writeMailboxBar1Addr == pKernelBus->p2pPcie.writeMailboxBar1Addr);
+
+    NV_PRINTF(LEVEL_INFO,
+              "[GPU%u] P2P write mailboxes allocated at BAR1 addr = 0x%llx\n",
+              gpuGetInstance(pGpu), pKernelBus->p2pPcie.writeMailboxBar1Addr);
+
+kbusAllocP2PMailboxBar1_failed:
+    if (status != NV_OK)
+    {
+        pKernelBus->p2pPcie.writeMailboxBar1Addr  = PCIE_P2P_INVALID_WRITE_MAILBOX_ADDR;
+        pKernelBus->p2pPcie.writeMailboxTotalSize = 0;
+    }
+
+    return status;
+}
+
 //
 // Returns the P2P mailbox attributes such as:
 // - pMailboxAreaSize: total size
@@ -765,7 +826,7 @@ kbusCreateP2PMapping_GH100
 
     if (FLD_TEST_DRF(_P2PAPI, _ATTRIBUTES, _CONNECTION_TYPE, _PCIE_BAR1, attributes))
     {
-        return kbusCreateP2PMappingForBar1P2P_HAL(pGpu0, pKernelBus0, pGpu1, pKernelBus1, attributes);
+        return kbusCreateP2PMappingForBar1P2P_GH100(pGpu0, pKernelBus0, pGpu1, pKernelBus1, attributes);
     }
 
     if (FLD_TEST_DRF(_P2PAPI, _ATTRIBUTES, _CONNECTION_TYPE, _PCIE, attributes))
@@ -816,7 +877,7 @@ kbusRemoveP2PMapping_GH100
 
     if (FLD_TEST_DRF(_P2PAPI, _ATTRIBUTES, _CONNECTION_TYPE, _PCIE_BAR1, attributes))
     {
-        return kbusRemoveP2PMappingForBar1P2P_HAL(pGpu0, pKernelBus0, pGpu1, pKernelBus1, attributes);
+        return kbusRemoveP2PMappingForBar1P2P_GH100(pGpu0, pKernelBus0, pGpu1, pKernelBus1, attributes);
     }
 
     if (FLD_TEST_DRF(_P2PAPI, _ATTRIBUTES, _CONNECTION_TYPE, _PCIE, attributes))
@@ -1104,6 +1165,167 @@ busVerifyCoherentLink_failed:
 
     return status;
 
+}
+
+/**
+ * Determine if memory described in memdesc is within a specific fb region
+ *
+ * @param[in] pKernelBus    Kernel bus pointer
+ * @param[in] pMemDesc      Pointer to memdesc describing memory range
+ * @param[in] offset        Offset from base address to check
+ * @param[in] region        Fb region to test against
+ *
+ * @return  Whether or not described memory range is within fb region.
+ */
+static NvBool
+_kbusMemoryIsInFbRegion
+(
+    KernelBus           *pKernelBus,
+    MEMORY_DESCRIPTOR   *pMemDesc,
+    NvU64                offset,
+    NvU8                 region
+)
+{
+    RmPhysAddr startAddr = memdescGetPhysAddr(pMemDesc, FORCE_VMMU_TRANSLATION(pMemDesc, AT_GPU), offset);
+    RmPhysAddr rangeStart;
+    RmPhysAddr rangeEnd;
+
+    NV_ASSERT_OR_RETURN(region < pKernelBus->coherentCpuMapping.nrMapping, NV_FALSE);
+
+    rangeStart = pKernelBus->coherentCpuMapping.physAddr[region];
+    rangeEnd = pKernelBus->coherentCpuMapping.physAddr[region] +
+               pKernelBus->coherentCpuMapping.size[region] - 1;
+
+    return (rangeStart <= startAddr) && (startAddr <= rangeEnd);
+}
+
+/**
+ * Helper function to map coherent cpu mapping.
+ *
+ * @param[in]  pGpu       Pointer to GPU
+ * @param[in]  pKernelBus Kernel bus pointer
+ * @param[in]  pMemDesc   Pointer to memdesc that is to be mapped
+ * @param[in]  offset     Offset from base address given in memdesc
+ * @param[in]  length     Length of memory to map
+ * @param[in]  protect    Protection flags
+ * @param[out] ppAddress  Virtual address of mapping
+ * @param[out] ppPriv     Private data to be retained for unmapping
+ *
+ * @return NV_OK or errors if failed to map
+ */
+NV_STATUS
+kbusMapCoherentCpuMapping_GH100
+(
+    OBJGPU                *pGpu,
+    KernelBus             *pKernelBus,
+    MEMORY_DESCRIPTOR     *pMemDesc,
+    NvU64                  offset,
+    NvU64                  length,
+    NvU32                  protect,
+    NvP64                 *ppAddress,
+    NvP64                 *ppPriv
+)
+{
+    NvU8       regionIndex  = COHERENT_CPU_MAPPING_RM_KERNEL_ONLINED_REGION;
+    RmPhysAddr regionOffset = 0;
+    RmPhysAddr startAddr    = memdescGetPhysAddr(pMemDesc, FORCE_VMMU_TRANSLATION(pMemDesc, AT_GPU), offset);
+    NvU8       i            = 0;
+
+    //
+    // VGPU does not online memory, yet has multiple regions, so we need to use
+    // static mapping for the "onlined" region.
+    //
+    if (!hypervisorIsVgxHyper())
+    {
+        if (_kbusMemoryIsInFbRegion(pKernelBus, pMemDesc, offset, COHERENT_CPU_MAPPING_RM_KERNEL_ONLINED_REGION))
+        {
+            return osMapSystemMemory(pMemDesc, offset, length, NV_TRUE, protect, ppAddress, ppPriv);
+        }
+        regionIndex = COHERENT_CPU_MAPPING_RM_RESV_REGION;
+    }
+
+    NV_ASSERT_OR_RETURN(memdescGetContiguity(pMemDesc, AT_CPU), NV_ERR_NOT_SUPPORTED);
+    for (i = regionIndex; i < pKernelBus->coherentCpuMapping.nrMapping; ++i)
+    {
+        if (_kbusMemoryIsInFbRegion(pKernelBus, pMemDesc, offset, i))
+        {
+            NV_ASSERT_OR_RETURN(
+                pKernelBus->coherentCpuMapping.pCpuMapping[i] != NvP64_NULL, NV_ERR_INVALID_STATE);
+
+            // Get the offset of the region
+            regionOffset = startAddr - pKernelBus->coherentCpuMapping.physAddr[i];
+            pKernelBus->coherentCpuMapping.refcnt[i]++;
+            *ppAddress = (NvU8 *)NvP64_VALUE(
+                ((NvUPtr)pKernelBus->coherentCpuMapping.pCpuMapping[i] +
+                 (NvUPtr)regionOffset));
+            return NV_OK;
+        }
+    }
+
+    NV_ASSERT_FAILED("No mappings found");
+    return NV_ERR_INVALID_ARGUMENT;
+}
+
+/**
+ * Helper function to unmap coherent cpu mapping
+ *
+ * @param[in] pGpu       Pointer to GPU
+ * @param[in] pKernelBus Kernel bus pointer
+ * @param[in] pMemDesc   Pointer to memdesc
+ * @param[in] pAddress   Virtual address to unmap
+ * @param[in] pPriv      Private data to be passed for unmapping
+ *
+ * @return void
+ */
+void
+kbusUnmapCoherentCpuMapping_GH100
+(
+    OBJGPU              *pGpu,
+    KernelBus           *pKernelBus,
+    PMEMORY_DESCRIPTOR   pMemDesc,
+    NvP64                pAddress,
+    NvP64                pPriv
+)
+{
+    NvU8 regionIndex = COHERENT_CPU_MAPPING_RM_KERNEL_ONLINED_REGION;
+    NvU8 i           = 0;
+
+    //
+    // VGPU does not online memory, yet has multiple regions, so we need to use
+    // static mapping for the "onlined" region.
+    //
+    if (!hypervisorIsVgxHyper())
+    {
+        if (_kbusMemoryIsInFbRegion(pKernelBus, pMemDesc, 0, COHERENT_CPU_MAPPING_RM_KERNEL_ONLINED_REGION))
+        {
+            kbusFlush_HAL(pGpu, GPU_GET_KERNEL_BUS(pGpu), BUS_FLUSH_VIDEO_MEMORY);
+            osUnmapSystemMemory(pMemDesc, NV_TRUE, 0, pAddress, pPriv);
+            kbusFlush_HAL(pGpu, GPU_GET_KERNEL_BUS(pGpu), BUS_FLUSH_VIDEO_MEMORY);
+            return;
+        }
+        regionIndex = COHERENT_CPU_MAPPING_RM_RESV_REGION;
+    }
+
+    NV_ASSERT_OR_RETURN_VOID(memdescGetContiguity(pMemDesc, AT_CPU));
+    for (i = regionIndex; i < pKernelBus->coherentCpuMapping.nrMapping; ++i)
+    {
+        if (_kbusMemoryIsInFbRegion(pKernelBus, pMemDesc, 0, i))
+        {
+            NV_ASSERT_OR_RETURN_VOID(pKernelBus->coherentCpuMapping.refcnt[i] != 0);
+            pKernelBus->coherentCpuMapping.refcnt[i]--;
+            break;
+        }
+    }
+
+    if (i == pKernelBus->coherentCpuMapping.nrMapping)
+    {
+        NV_ASSERT_FAILED("No mappings found");
+    }
+
+    // Flush the memory since caller writes to the FB
+    kbusFlush_HAL(pGpu, GPU_GET_KERNEL_BUS(pGpu), BUS_FLUSH_VIDEO_MEMORY);
+
+    return;
 }
 
 /**
@@ -1448,7 +1670,7 @@ kbusCreateP2PMappingForBar1P2P_GH100
         return NV_ERR_NOT_SUPPORTED;
     }
 
-    if (!kbusIsPcieBar1P2PMappingSupported_HAL(pGpu0, pKernelBus0, pGpu1, pKernelBus1))
+    if (!kbusIsPcieBar1P2PMappingSupported_GH100(pGpu0, pKernelBus0, pGpu1, pKernelBus1))
     {
         return NV_ERR_NOT_SUPPORTED;
     }
@@ -1831,12 +2053,12 @@ kbusEnableStaticBar1Mapping_GH100
 
     // Deploy the static mapping.
     NV_ASSERT_OK_OR_GOTO(status,
-                         kbusMapFbAperture_HAL(pGpu, pKernelBus, pMemDesc, 0,
-                             &bar1Offset, &bar1MapSize,
-                             BUS_MAP_FB_FLAGS_MAP_UNICAST |
-                             BUS_MAP_FB_FLAGS_MAP_OFFSET_FIXED,
-                             NV01_NULL_OBJECT),
-                         cleanup_mem);
+        kbusMapFbApertureSingle(pGpu, pKernelBus, pMemDesc, 0,
+            &bar1Offset, &bar1MapSize,
+            BUS_MAP_FB_FLAGS_MAP_UNICAST |
+            BUS_MAP_FB_FLAGS_MAP_OFFSET_FIXED,
+            NV01_NULL_OBJECT),
+        cleanup_mem);
 
     if(bar1Offset != 0)
     {
@@ -1871,16 +2093,16 @@ kbusEnableStaticBar1Mapping_GH100
     pKernelBus->bar1[gfid].staticBar1.pDmaMemDesc = pDmaMemDesc;
     pKernelBus->bar1[gfid].staticBar1.size = bar1MapSize;
 
-    NV_PRINTF(LEVEL_INFO, "Static bar1 mapped offset 0x%llx size 0x%llx\n",
-                           bar1Offset, bar1MapSize);
+    NV_PRINTF(LEVEL_ERROR, "Static bar1 mapped offset 0x%llx size 0x%llx bar1BusAddr 0x%llx\n",
+                           bar1Offset, bar1MapSize, bar1BusAddr);
 
     return NV_OK;
 
 cleanup_bus_map:
-    NV_ASSERT_OK(kbusUnmapFbAperture_HAL(pGpu, pKernelBus,
-                                         pMemDesc, bar1Offset, bar1MapSize,
-                                         BUS_MAP_FB_FLAGS_MAP_UNICAST |
-                                         BUS_MAP_FB_FLAGS_MAP_OFFSET_FIXED));
+    NV_ASSERT_OK(kbusUnmapFbApertureSingle(pGpu, pKernelBus,
+                                           pMemDesc, bar1Offset, bar1MapSize,
+                                           BUS_MAP_FB_FLAGS_MAP_UNICAST |
+                                           BUS_MAP_FB_FLAGS_MAP_OFFSET_FIXED));
 
 cleanup_mem:
     NV_PRINTF(LEVEL_ERROR, "Failed to create the static bar1 mapping offset"
@@ -1918,12 +2140,13 @@ kbusDisableStaticBar1Mapping_GH100
 
     pKernelBus->bar1[gfid].bStaticBar1Enabled = NV_FALSE;
 
-    NV_ASSERT_OK(kbusUnmapFbAperture_HAL(pGpu, pKernelBus,
-                     pKernelBus->bar1[gfid].staticBar1.pVidMemDesc,
-                     0,
-                     pKernelBus->bar1[gfid].staticBar1.size,
-                     BUS_MAP_FB_FLAGS_MAP_UNICAST |
-                     BUS_MAP_FB_FLAGS_MAP_OFFSET_FIXED));
+    NV_ASSERT_OK(
+        kbusUnmapFbApertureSingle(pGpu, pKernelBus,
+            pKernelBus->bar1[gfid].staticBar1.pVidMemDesc,
+            0,
+            pKernelBus->bar1[gfid].staticBar1.size,
+            BUS_MAP_FB_FLAGS_MAP_UNICAST |
+            BUS_MAP_FB_FLAGS_MAP_OFFSET_FIXED));
 
     memdescDestroy(pKernelBus->bar1[gfid].staticBar1.pVidMemDesc);
     pKernelBus->bar1[gfid].staticBar1.pVidMemDesc = NULL;
@@ -2499,6 +2722,17 @@ kbusGetEgmPeerId_GH100
                   "NVLINK P2P not set up between GPU%u and GPU%u\n",
                   gpuGetInstance(pLocalGpu), gpuPeerInst);
         return BUS_INVALID_PEER;
+    }
+
+    //
+    // For Nvswitch connected systems, AAS (Alternate Address Space) is set by Nvswitch itself
+    // based on the EGM fabric address range and so there is no need for a separate peer id
+    // in the Nvswitch case.
+    //
+    if (GPU_IS_NVSWITCH_DETECTED(pLocalGpu))
+    {
+        LOWESTBITIDX_32(peerMask);
+        return peerMask;
     }
 
     FOR_EACH_INDEX_IN_MASK(32, peerId, peerMask)

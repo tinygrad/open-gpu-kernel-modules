@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -34,7 +34,7 @@
  * @param[in]  pKernelBif  Kernel BIF object pointer
  */
 void
-kbifInitDmaCaps_VGPUSTUB
+kbifInitDmaCaps_VF
 (
     OBJGPU    *pGpu,
     KernelBif *pKernelBif
@@ -60,7 +60,7 @@ kbifInitDmaCaps_VGPUSTUB
  * @return     NV_OK
  */
 NV_STATUS
-subdeviceCtrlCmdBifGetStaticInfo_VGPUSTUB
+subdeviceCtrlCmdBifGetStaticInfo_VF
 (
     Subdevice                                       *pSubdevice,
     NV2080_CTRL_INTERNAL_BIF_GET_STATIC_INFO_PARAMS *pParams
@@ -92,11 +92,19 @@ subdeviceCtrlCmdBusGetPcieReqAtomicsCaps_VF
     NV2080_CTRL_CMD_BUS_GET_PCIE_REQ_ATOMICS_CAPS_PARAMS *pParams
 )
 {
-    OBJGPU *pGpu = GPU_RES_GET_GPU(pSubdevice);
-    VGPU_STATIC_INFO *pVSI = GPU_GET_STATIC_INFO(pGpu);
+    // Atomics not supported in VF. See bug 3497203.
+    pParams->atomicsCaps = 0x0;
+    return NV_OK;
+}
 
-    portMemCopy(pParams, sizeof(*pParams),
-                &pVSI->busGetPcieReqAtomicsCaps, sizeof(pVSI->busGetPcieReqAtomicsCaps));
-
+NV_STATUS
+subdeviceCtrlCmdBusGetPcieCplAtomicsCaps_VF
+(
+    Subdevice                                            *pSubdevice,
+    NV2080_CTRL_CMD_BUS_GET_PCIE_CPL_ATOMICS_CAPS_PARAMS *pParams
+)
+{
+    // Atomics not supported in VF. See bug 3497203.
+    pParams->atomicsCaps = 0x0;
     return NV_OK;
 }

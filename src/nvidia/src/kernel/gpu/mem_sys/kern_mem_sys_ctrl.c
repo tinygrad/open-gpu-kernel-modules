@@ -60,9 +60,14 @@ kmemsysGetFbInfos_VF(OBJGPU *pGpu, KernelMemorySystem *pKernelMemorySystem, RsCl
                 data = nvPopCount64(pVSI->fbioMask);
                 break;
             }
-            case NV2080_CTRL_FB_INFO_INDEX_PARTITION_MASK:
+            case NV2080_CTRL_FB_INFO_INDEX_PARTITION_MASK_0:
             {
-                data = pVSI->fbioMask;
+                data = NvU64_LO32((NvU64)pVSI->fbioMask);
+                break;
+            }
+            case NV2080_CTRL_FB_INFO_INDEX_PARTITION_MASK_1:
+            {
+                data = NvU64_HI32((NvU64)pVSI->fbioMask);
                 break;
             }
             case NV2080_CTRL_FB_INFO_INDEX_FBP_MASK:
@@ -90,9 +95,14 @@ kmemsysGetFbInfos_VF(OBJGPU *pGpu, KernelMemorySystem *pKernelMemorySystem, RsCl
                 data = pVSI->ltsCount;
                 break;
             }
-            case NV2080_CTRL_FB_INFO_INDEX_LTC_MASK:
+            case NV2080_CTRL_FB_INFO_INDEX_LTC_MASK_0:
             {
-                data = pVSI->ltcMask;
+                data = NvU64_LO32((NvU64)pVSI->ltcMask);
+                break;
+            }
+            case NV2080_CTRL_FB_INFO_INDEX_LTC_MASK_1:
+            {
+                data = NvU64_HI32((NvU64)pVSI->ltcMask);
                 break;
             }
             case NV2080_CTRL_FB_INFO_INDEX_L2CACHE_SIZE:
@@ -1522,23 +1532,7 @@ subdeviceCtrlCmdFbGetGpuCacheInfo_IMPL
     return status;
 }
 
-NV_STATUS subdeviceCtrlCmdMemSysGetStaticConfig_IMPL
-(
-    Subdevice *pSubdevice,
-    NV2080_CTRL_INTERNAL_MEMSYS_GET_STATIC_CONFIG_PARAMS *pParams
-)
-{
-    OBJGPU   *pGpu = GPU_RES_GET_GPU(pSubdevice);
-    const MEMORY_SYSTEM_STATIC_CONFIG *pConfig =
-        kmemsysGetStaticConfig(pGpu, GPU_GET_KERNEL_MEMORY_SYSTEM(pGpu));
-
-    NV_CHECK_OR_RETURN(LEVEL_ERROR, pConfig != NULL, NV_ERR_INVALID_STATE);
-    portMemCopy(pParams, sizeof(*pParams), pConfig, sizeof(*pConfig));
-
-    return NV_OK;
-}
-
-NV_STATUS subdeviceCtrlCmdMemSysGetStaticConfig_VGPUSTUB
+NV_STATUS subdeviceCtrlCmdMemSysGetStaticConfig_VF
 (
     Subdevice *pSubdevice,
     NV2080_CTRL_INTERNAL_MEMSYS_GET_STATIC_CONFIG_PARAMS *pParams
@@ -1553,4 +1547,70 @@ NV_STATUS subdeviceCtrlCmdMemSysGetStaticConfig_VGPUSTUB
                 &pVSI->memsysStaticConfig, sizeof(pVSI->memsysStaticConfig));
 
     return NV_OK;
+}
+
+NV_STATUS
+subdeviceCtrlCmdFbGetDynamicOfflinedPages_VF
+(
+    Subdevice *pSubdevice,
+    NV2080_CTRL_FB_GET_DYNAMIC_OFFLINED_PAGES_PARAMS *pParams
+)
+{
+    OBJGPU *pGpu = GPU_RES_GET_GPU(pSubdevice);
+    VGPU_STATIC_INFO *pVSI = GPU_GET_STATIC_INFO(pGpu);
+    NvU32 i = pParams->baseIndex / NV2080_CTRL_FB_DYNAMIC_BLACKLIST_MAX_ENTRIES;
+
+    NV_ASSERT_OR_RETURN(pVSI != NULL, NV_ERR_INVALID_STATE);
+
+    if (i >= MAX_ITERATIONS_DYNAMIC_BLACKLIST)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    pParams->validEntries = pVSI->fbDynamicBlacklistedPages[i].validEntries;
+    if (pParams->validEntries > NV2080_CTRL_FB_DYNAMIC_BLACKLIST_MAX_ENTRIES)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    portMemCopy(&pParams->offlined,
+                pParams->validEntries * sizeof(NV2080_CTRL_FB_DYNAMIC_OFFLINED_ADDRESS_INFO),
+                &pVSI->fbDynamicBlacklistedPages[i].offlined,
+                pParams->validEntries * sizeof(NV2080_CTRL_FB_DYNAMIC_OFFLINED_ADDRESS_INFO));
+    pParams->bMore = pVSI->fbDynamicBlacklistedPages[i].bMore;
+
+    return NV_OK;
+}
+
+NV_STATUS
+subdeviceCtrlCmdFbGetLTCInfoForFBP_VF
+(
+    Subdevice *pSubdevice,
+    NV2080_CTRL_FB_GET_LTC_INFO_FOR_FBP_PARAMS *pParams
+)
+{
+    OBJGPU *pGpu = GPU_RES_GET_GPU(pSubdevice);
+    VGPU_STATIC_INFO *pVSI = GPU_GET_STATIC_INFO(pGpu);
+
+    NV_ASSERT_OR_RETURN(pVSI != NULL, NV_ERR_INVALID_STATE);
+
+    if (pParams->fbpIndex >= MAX_FBPS)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    pParams->ltcCount = pVSI->fbLtcInfoForFbp[pParams->fbpIndex].ltcCount;
+    pParams->ltcMask = pVSI->fbLtcInfoForFbp[pParams->fbpIndex].ltcMask;
+
+    return NV_OK;
+}
+
+NV_STATUS
+subdeviceCtrlCmdFbGetOfflinedPages_VF
+(
+    Subdevice *pSubdevice,
+    NV2080_CTRL_FB_GET_OFFLINED_PAGES_PARAMS *pOfflinedParams
+)
+{
+    return NV_ERR_NOT_SUPPORTED;
 }

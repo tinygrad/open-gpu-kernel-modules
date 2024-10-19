@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -53,6 +53,7 @@
 #include "gpu/subdevice/subdevice.h"
 #include "gpu/bus/kern_bus.h"
 #include "platform/sli/sli.h"
+#include "containers/eheap_old.h"
 
 /*!
  * @brief Allocate mapping.
@@ -1194,9 +1195,7 @@ dmaPageArrayGetPhysAddr
 
     if (pPageArray->bOsFormat)
     {
-        OBJSYS *pSys = SYS_GET_INSTANCE();
-        OBJOS *pOS = SYS_GET_OS(pSys);
-        addr = pOS->osPageArrayGetPhysAddr(pPageArray->pOsGpuInfo,
+        addr = osPageArrayGetPhysAddr(pPageArray->pOsGpuInfo,
             pPageArray->pData, pPageArray->startIndex + pageIndex);
     }
     else
@@ -1206,8 +1205,6 @@ dmaPageArrayGetPhysAddr
             addr = pPteArray[pPageArray->startIndex + pageIndex];
         }
     }
-
-    addr |= pPageArray->orMask;
 
     return addr;
 }

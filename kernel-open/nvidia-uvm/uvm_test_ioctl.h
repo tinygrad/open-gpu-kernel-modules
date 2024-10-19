@@ -1,5 +1,5 @@
 /*******************************************************************************
-    Copyright (c) 2015-2022 NVidia Corporation
+    Copyright (c) 2015-2024 NVidia Corporation
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"), to
@@ -191,7 +191,7 @@ typedef struct
     NvU32                           read_duplication;                                   // Out (UVM_TEST_READ_DUPLICATION_POLICY)
     NvProcessorUuid                 preferred_location;                                 // Out
     NvS32                           preferred_cpu_nid;                                  // Out
-    NvProcessorUuid                 accessed_by[UVM_MAX_PROCESSORS_V2];                 // Out
+    NvProcessorUuid                 accessed_by[UVM_MAX_PROCESSORS];                    // Out
     NvU32                           accessed_by_count;                                  // Out
     NvU32                           type;                                               // Out (UVM_TEST_VA_RANGE_TYPE)
     union
@@ -552,9 +552,9 @@ typedef struct
 // If user_pages_allocation_retry_force_count is non-0 then the next count user
 // memory allocations under the VA block will be forced to do allocation-retry.
 //
-// If cpu_pages_allocation_error_count is not zero, the subsequent operations
-// that need to allocate CPU pages will fail with NV_ERR_NO_MEMORY for
-// cpu_pages_allocation_error_count times. If cpu_pages_allocation_error_count
+// If cpu_chunk_allocation_error_count is not zero, the subsequent operations
+// that need to allocate CPU chunks will fail with NV_ERR_NO_MEMORY for
+// cpu_chunk_allocation_error_count times. If cpu_chunk_allocation_error_count
 // is equal to ~0U, the count is infinite.
 //
 // If eviction_failure is NV_TRUE, the next eviction attempt from the VA block
@@ -591,10 +591,10 @@ typedef struct
     NvU64     lookup_address NV_ALIGN_BYTES(8);         // In
     NvU32     page_table_allocation_retry_force_count;  // In
     NvU32     user_pages_allocation_retry_force_count;  // In
-    NvU32     cpu_chunk_allocation_size_mask;           // In
+    NvU64     cpu_chunk_allocation_size_mask;           // In
     NvS32     cpu_chunk_allocation_target_id;           // In
     NvS32     cpu_chunk_allocation_actual_id;           // In
-    NvU32     cpu_pages_allocation_error_count;         // In
+    NvU32     cpu_chunk_allocation_error_count;         // In
     NvBool    eviction_error;                           // In
     NvBool    populate_error;                           // In
     NV_STATUS rmStatus;                                 // Out
@@ -624,7 +624,7 @@ typedef struct
 
     // Array of processors which have a resident copy of the page containing
     // lookup_address.
-    NvProcessorUuid                 resident_on[UVM_MAX_PROCESSORS_V2];                 // Out
+    NvProcessorUuid                 resident_on[UVM_MAX_PROCESSORS];                    // Out
     NvU32                           resident_on_count;                                  // Out
 
     // If the memory is resident on the CPU, the NUMA node on which the page
@@ -635,24 +635,24 @@ typedef struct
     // system-page-sized portion of this allocation which contains
     // lookup_address is guaranteed to be resident on the corresponding
     // processor.
-    NvU32                           resident_physical_size[UVM_MAX_PROCESSORS_V2];      // Out
+    NvU32                           resident_physical_size[UVM_MAX_PROCESSORS];         // Out
 
     // The physical address of the physical allocation backing lookup_address.
-    NvU64                           resident_physical_address[UVM_MAX_PROCESSORS_V2] NV_ALIGN_BYTES(8); // Out
+    NvU64                           resident_physical_address[UVM_MAX_PROCESSORS] NV_ALIGN_BYTES(8); // Out
 
     // Array of processors which have a virtual mapping covering lookup_address.
-    NvProcessorUuid                 mapped_on[UVM_MAX_PROCESSORS_V2];                   // Out
-    NvU32                           mapping_type[UVM_MAX_PROCESSORS_V2];                // Out
-    NvU64                           mapping_physical_address[UVM_MAX_PROCESSORS_V2] NV_ALIGN_BYTES(8); // Out
+    NvProcessorUuid                 mapped_on[UVM_MAX_PROCESSORS];                      // Out
+    NvU32                           mapping_type[UVM_MAX_PROCESSORS];                   // Out
+    NvU64                           mapping_physical_address[UVM_MAX_PROCESSORS] NV_ALIGN_BYTES(8); // Out
     NvU32                           mapped_on_count;                                    // Out
 
     // The size of the virtual mapping covering lookup_address on each
     // mapped_on processor.
-    NvU32                           page_size[UVM_MAX_PROCESSORS_V2];                   // Out
+    NvU64                           page_size[UVM_MAX_PROCESSORS];                      // Out
 
     // Array of processors which have physical memory populated that would back
     // lookup_address if it was resident.
-    NvProcessorUuid                 populated_on[UVM_MAX_PROCESSORS_V2];                // Out
+    NvProcessorUuid                 populated_on[UVM_MAX_PROCESSORS];                   // Out
     NvU32                           populated_on_count;                                 // Out
 
     NV_STATUS rmStatus;                                                                 // Out
@@ -879,7 +879,7 @@ typedef struct
 typedef struct
 {
     NvProcessorUuid                 gpu_uuid;                                           // In
-    NvU32                           page_size;
+    NvU64                           page_size;
     NvBool                          contiguous;
     NvU64                           num_pages                        NV_ALIGN_BYTES(8); // In
     NvU64                           phys_begin                       NV_ALIGN_BYTES(8); // In
@@ -1065,12 +1065,6 @@ typedef struct
     NV_STATUS                       rmStatus;                                           // Out
 } UVM_TEST_PMM_REVERSE_MAP_PARAMS;
 
-#define UVM_TEST_PMM_INDIRECT_PEERS                      UVM_TEST_IOCTL_BASE(66)
-typedef struct
-{
-    NV_STATUS                       rmStatus;                                           // Out
-} UVM_TEST_PMM_INDIRECT_PEERS_PARAMS;
-
 // Calls uvm_va_space_mm_retain on a VA space, operates on the mm, optionally
 // sleeps for a while, then releases the va_space_mm and returns. The idea is to
 // simulate retaining a va_space_mm from a thread like the GPU fault handler
@@ -1210,8 +1204,6 @@ typedef struct
 typedef struct
 {
     NvProcessorUuid                 gpu_uuid;                                           // In
-    NvHandle                        client;                                             // In
-    NvHandle                        smc_part_ref;                                       // In
 
     NV_STATUS                       rmStatus;                                           // Out
 } UVM_TEST_NUMA_CHECK_AFFINITY_PARAMS;
@@ -1387,7 +1379,7 @@ typedef struct
 #define UVM_TEST_GET_CPU_CHUNK_ALLOC_SIZES               UVM_TEST_IOCTL_BASE(91)
 typedef struct
 {
-    NvU32                           alloc_size_mask;                                    // Out
+    NvU64                           alloc_size_mask;                                    // Out
     NvU32                           rmStatus;                                           // Out
 } UVM_TEST_GET_CPU_CHUNK_ALLOC_SIZES_PARAMS;
 

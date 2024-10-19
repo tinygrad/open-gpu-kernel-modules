@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2006-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2006-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -156,11 +156,35 @@
  *   NV2080_CTRL_FB_INFO_INDEX_EFFECTIVE_BW
  *     This index is deprecated, and returns zero value.
  *   NV2080_CTRL_FB_INFO_INDEX_PARTITION_MASK
+ *   NV2080_CTRL_FB_INFO_INDEX_PARTITION_MASK_0
+ *   NV2080_CTRL_FB_INFO_INDEX_PARTITION_MASK_1
  *     This index is used to request the mask of currently active partitions.
- *     Each  active partition has an ID that's equivalent to the corresponding
+ *     Each active partition has an ID that's equivalent to the corresponding
  *     bit position in the mask.
  *     This an SMC aware attribute, thus necessary partition subscription is
  *     required if the device is partitioned.
+ *     This value is moving from 32bits to 64bits, so PARTITION_MASK
+ *     (though kept for backwards compatibility on older chips), on newer chips
+ *     will be replaced by:
+ *     PARTITION_MASK_0 for the lower 32bits
+ *     PARTITION_MASK_1 for the upper 32bits
+ *     Note that PARTITION_MASK and PARTITION_MASK_0 are handled the same, and
+ *     use the same enum value.
+ *   NV2080_CTRL_FB_INFO_INDEX_LTC_MASK
+ *   NV2080_CTRL_FB_INFO_INDEX_LTC_MASK_0
+ *   NV2080_CTRL_FB_INFO_INDEX_LTC_MASK_1
+ *     This index is used to request the mask of currently active LTCs.
+ *     Each active LTC has an ID that's equivalent to the corresponding
+ *     bit position in the mask.
+ *     This an SMC aware attribute, thus necessary partition subscription is
+ *     required if the device is partitioned.
+ *     This value is moving from 32bits to 64bits, so LTC_MASK
+ *     (though kept for backwards compatibility on older chips), on newer chips
+ *     will be replaced by:
+ *     LTC_MASK_0 for the lower 32bits
+ *     LTC_MASK_1 for the upper 32bits
+ *     Note that LTC_MASK and LTC_MASK_0 are handled the same, and
+ *     use the same enum value.
  *   NV2080_CTRL_FB_INFO_INDEX_VISTA_RESERVED_HEAP_SIZE
  *     This index is used to request the amount of total RAM in kilobytes
  *     reserved for internal RM allocations on Vista.  This will need to
@@ -332,9 +356,13 @@ typedef NVXXXX_CTRL_XXX_INFO NV2080_CTRL_FB_INFO;
 #define NV2080_CTRL_FB_INFO_INDEX_PROTECTED_MEM_SIZE_FREE_KB       (0x00000034U)
 #define NV2080_CTRL_FB_INFO_INDEX_ECC_STATUS_SIZE                  (0x00000035U)
 #define NV2080_CTRL_FB_INFO_INDEX_IS_ZERO_FB                       (0x00000036U)
-#define NV2080_CTRL_FB_INFO_MAX_LIST_SIZE                          (0x00000037U)
+#define NV2080_CTRL_FB_INFO_INDEX_PARTITION_MASK_0                 (NV2080_CTRL_FB_INFO_INDEX_PARTITION_MASK)
+#define NV2080_CTRL_FB_INFO_INDEX_PARTITION_MASK_1                 (0x00000037U)
+#define NV2080_CTRL_FB_INFO_INDEX_LTC_MASK_0                       (NV2080_CTRL_FB_INFO_INDEX_LTC_MASK)
+#define NV2080_CTRL_FB_INFO_INDEX_LTC_MASK_1                       (0x00000038U)
+#define NV2080_CTRL_FB_INFO_MAX_LIST_SIZE                          (0x00000039U)
 
-#define NV2080_CTRL_FB_INFO_INDEX_MAX                              (0x36U) /* finn: Evaluated from "(NV2080_CTRL_FB_INFO_MAX_LIST_SIZE - 1)" */
+#define NV2080_CTRL_FB_INFO_INDEX_MAX                              (0x38U) /* finn: Evaluated from "(NV2080_CTRL_FB_INFO_MAX_LIST_SIZE - 1)" */
 
 /* valid fb RAM type values */
 #define NV2080_CTRL_FB_INFO_RAM_TYPE_UNKNOWN                       (0x00000000U)
@@ -2151,7 +2179,7 @@ typedef struct NV2080_CTRL_FB_FS_INFO_INVALID_QUERY_PARAMS {
  */
 typedef struct NV2080_CTRL_FB_FS_INFO_FBP_MASK_PARAMS {
     /*!
-     * [IN]: swizzId
+     * [in]: swizzId
      * PartitionID associated with a created smc partition. Currently used only for a
      * device monitoring client to get the physical values of the FB. The client needs to pass
      * 'NV2080_CTRL_GPU_PARTITION_ID_INVALID' explicitly if it wants RM to ignore the swizzId.
@@ -2160,7 +2188,7 @@ typedef struct NV2080_CTRL_FB_FS_INFO_FBP_MASK_PARAMS {
      */
     NvU32 swizzId;
     /*!
-     * [OUT]: physical/local fbp mask.
+     * [out]: physical/local fbp mask.
      */
     NV_DECLARE_ALIGNED(NvU64 fbpEnMask, 8);
 } NV2080_CTRL_FB_FS_INFO_FBP_MASK_PARAMS;
@@ -2170,11 +2198,11 @@ typedef struct NV2080_CTRL_FB_FS_INFO_FBP_MASK_PARAMS {
  */
 typedef struct NV2080_CTRL_FB_FS_INFO_LTC_MASK_PARAMS {
     /*!
-     * [IN]: physical/local FB partition index.
+     * [in]: physical/local FB partition index.
      */
     NvU32 fbpIndex;
     /*!
-     * [OUT]: physical/local ltc mask.
+     * [out]: physical/local ltc mask.
      */
     NvU32 ltcEnMask;
 } NV2080_CTRL_FB_FS_INFO_LTC_MASK_PARAMS;
@@ -2184,11 +2212,11 @@ typedef struct NV2080_CTRL_FB_FS_INFO_LTC_MASK_PARAMS {
  */
 typedef struct NV2080_CTRL_FB_FS_INFO_LTS_MASK_PARAMS {
     /*!
-     * [IN]: physical/local FB partition index.
+     * [in]: physical/local FB partition index.
      */
     NvU32 fbpIndex;
     /*!
-     * [OUT]: physical/local lts mask.
+     * [out]: physical/local lts mask.
      * Note that lts bits are flattened out for all ltc with in a fbp.
      */
     NvU32 ltsEnMask;
@@ -2199,11 +2227,11 @@ typedef struct NV2080_CTRL_FB_FS_INFO_LTS_MASK_PARAMS {
  */
 typedef struct NV2080_CTRL_FB_FS_INFO_FBPA_MASK_PARAMS {
     /*!
-     * [IN]: physical/local FB partition index.
+     * [in]: physical/local FB partition index.
      */
     NvU32 fbpIndex;
     /*!
-     * [OUT]: physical/local FBPA mask.
+     * [out]: physical/local FBPA mask.
      */
     NvU32 fbpaEnMask;
 } NV2080_CTRL_FB_FS_INFO_FBPA_MASK_PARAMS;
@@ -2213,11 +2241,11 @@ typedef struct NV2080_CTRL_FB_FS_INFO_FBPA_MASK_PARAMS {
  */
 typedef struct NV2080_CTRL_FB_FS_INFO_FBPA_SUBP_MASK_PARAMS {
     /*!
-     * [IN]: physical/local FB partition index.
+     * [in]: physical/local FB partition index.
      */
     NvU32 fbpIndex;
     /*!
-     * [OUT]: physical/local FBPA-SubPartition mask.
+     * [out]: physical/local FBPA-SubPartition mask.
      */
     NvU32 fbpaSubpEnMask;
 } NV2080_CTRL_FB_FS_INFO_FBPA_SUBP_MASK_PARAMS;
@@ -2227,11 +2255,11 @@ typedef struct NV2080_CTRL_FB_FS_INFO_FBPA_SUBP_MASK_PARAMS {
  */
 typedef struct NV2080_CTRL_FB_FS_INFO_FBP_LOGICAL_MAP_PARAMS {
     /*!
-     * [IN]: physical/local FB partition index.
+     * [in]: physical/local FB partition index.
      */
     NvU32 fbpIndex;
     /*!
-     * [OUT]: Logical/local FBP index
+     * [out]: Logical/local FBP index
      */
     NvU32 fbpLogicalIndex;
 } NV2080_CTRL_FB_FS_INFO_FBP_LOGICAL_MAP_PARAMS;
@@ -2241,11 +2269,11 @@ typedef struct NV2080_CTRL_FB_FS_INFO_FBP_LOGICAL_MAP_PARAMS {
  */
 typedef struct NV2080_CTRL_FB_FS_INFO_ROP_MASK_PARAMS {
     /*!
-     * [IN]: physical/local FB partition index.
+     * [in]: physical/local FB partition index.
      */
     NvU32 fbpIndex;
     /*!
-     * [OUT]: physical/local ROP mask.
+     * [out]: physical/local ROP mask.
      */
     NvU32 ropEnMask;
 } NV2080_CTRL_FB_FS_INFO_ROP_MASK_PARAMS;
@@ -2255,16 +2283,16 @@ typedef struct NV2080_CTRL_FB_FS_INFO_ROP_MASK_PARAMS {
  */
 typedef struct NV2080_CTRL_FB_FS_INFO_PROFILER_MON_LTC_MASK_PARAMS {
     /*!
-     * [IN]: Physical FB partition index.
+     * [in]: Physical FB partition index.
      */
     NvU32 fbpIndex;
     /*!
-     * [IN]: swizzId
+     * [in]: swizzId
      * PartitionID associated with a created smc partition.
      */
     NvU32 swizzId;
     /*!
-     * [OUT]: physical ltc mask.
+     * [out]: physical ltc mask.
      */
     NvU32 ltcEnMask;
 } NV2080_CTRL_FB_FS_INFO_PROFILER_MON_LTC_MASK_PARAMS;
@@ -2274,16 +2302,16 @@ typedef struct NV2080_CTRL_FB_FS_INFO_PROFILER_MON_LTC_MASK_PARAMS {
  */
 typedef struct NV2080_CTRL_FB_FS_INFO_PROFILER_MON_LTS_MASK_PARAMS {
     /*!
-     * [IN]: Physical FB partition index.
+     * [in]: Physical FB partition index.
      */
     NvU32 fbpIndex;
     /*!
-     * [IN]: swizzId
+     * [in]: swizzId
      * PartitionID associated with a created smc partition.
      */
     NvU32 swizzId;
     /*!
-     * [OUT]: physical lts mask.
+     * [out]: physical lts mask.
      */
     NvU32 ltsEnMask;
 } NV2080_CTRL_FB_FS_INFO_PROFILER_MON_LTS_MASK_PARAMS;
@@ -2293,16 +2321,16 @@ typedef struct NV2080_CTRL_FB_FS_INFO_PROFILER_MON_LTS_MASK_PARAMS {
  */
 typedef struct NV2080_CTRL_FB_FS_INFO_PROFILER_MON_FBPA_MASK_PARAMS {
     /*!
-     * [IN]: Physical FB partition index.
+     * [in]: Physical FB partition index.
      */
     NvU32 fbpIndex;
     /*!
-     * [IN]: swizzId
+     * [in]: swizzId
      * PartitionID associated with a created smc partition.
      */
     NvU32 swizzId;
     /*!
-     * [OUT]: physical fbpa mask.
+     * [out]: physical fbpa mask.
      */
     NvU32 fbpaEnMask;
 } NV2080_CTRL_FB_FS_INFO_PROFILER_MON_FBPA_MASK_PARAMS;
@@ -2312,16 +2340,16 @@ typedef struct NV2080_CTRL_FB_FS_INFO_PROFILER_MON_FBPA_MASK_PARAMS {
  */
 typedef struct NV2080_CTRL_FB_FS_INFO_PROFILER_MON_ROP_MASK_PARAMS {
     /*!
-     * [IN]: Physical FB partition index.
+     * [in]: Physical FB partition index.
      */
     NvU32 fbpIndex;
     /*!
-     * [IN]: swizzId
+     * [in]: swizzId
      * PartitionID associated with a created smc partition.
      */
     NvU32 swizzId;
     /*!
-     * [OUT]: physical rop mask.
+     * [out]: physical rop mask.
      */
     NvU32 ropEnMask;
 } NV2080_CTRL_FB_FS_INFO_PROFILER_MON_ROP_MASK_PARAMS;
@@ -2331,11 +2359,11 @@ typedef struct NV2080_CTRL_FB_FS_INFO_PROFILER_MON_ROP_MASK_PARAMS {
  */
 typedef struct NV2080_CTRL_FB_FS_INFO_PROFILER_MON_FBPA_SUBP_MASK_PARAMS {
     /*!
-     * [IN]: Physical FB partition index.
+     * [in]: Physical FB partition index.
      */
     NvU32 fbpIndex;
     /*!
-     * [IN]: swizzId
+     * [in]: swizzId
      * PartitionID associated with a created smc partition. Currently used only for a
      * device monitoring client to get the physical values of the FB. The client needs to pass
      * 'NV2080_CTRL_GPU_PARTITION_ID_INVALID' explicitly if it wants RM to ignore the swizzId.
@@ -2344,7 +2372,7 @@ typedef struct NV2080_CTRL_FB_FS_INFO_PROFILER_MON_FBPA_SUBP_MASK_PARAMS {
      */
     NvU32 swizzId;
     /*!
-     * [OUT]: physical FBPA_SubPartition mask associated with requested partition.
+     * [out]: physical FBPA_SubPartition mask associated with requested partition.
      */
     NV_DECLARE_ALIGNED(NvU64 fbpaSubpEnMask, 8);
 } NV2080_CTRL_FB_FS_INFO_PROFILER_MON_FBPA_SUBP_MASK_PARAMS;
@@ -2354,11 +2382,11 @@ typedef struct NV2080_CTRL_FB_FS_INFO_PROFILER_MON_FBPA_SUBP_MASK_PARAMS {
  */
 typedef struct NV2080_CTRL_SYSL2_FS_INFO_SYSLTC_MASK_PARAMS {
     /*!
-     * [IN]: physical/local sys Id.
+     * [in]: physical/local sys Id.
      */
     NvU32 sysIdx;
     /*!
-     * [OUT]: physical/local sysltc mask.
+     * [out]: physical/local sysltc mask.
      */
     NvU32 sysl2LtcEnMask;
 } NV2080_CTRL_SYSL2_FS_INFO_SYSLTC_MASK_PARAMS;
@@ -2368,31 +2396,66 @@ typedef struct NV2080_CTRL_SYSL2_FS_INFO_SYSLTC_MASK_PARAMS {
  */
 typedef struct NV2080_CTRL_FB_FS_INFO_PAC_MASK_PARAMS {
     /*!
-     * [IN]: physical/local FB partition index.
+     * [in]: physical/local FB partition index.
      */
     NvU32 fbpIndex;
     /*!
-     * [OUT]: physical/local PAC mask.
+     * [out]: physical/local PAC mask.
      */
     NvU32 pacEnMask;
 } NV2080_CTRL_FB_FS_INFO_PAC_MASK_PARAMS;
 
+/*!
+ * Structure holding the in/out params for NV2080_CTRL_FB_FS_INFO_LOGICAL_LTC_MASK.
+ */
+typedef struct NV2080_CTRL_FB_FS_INFO_LOGICAL_LTC_MASK_PARAMS {
+    /*!
+     * [in]: physical/local FB partition index.
+     */
+    NvU32 fbpIndex;
+    /*!
+     * [out]: logical/local ltc mask.
+     */
+    NV_DECLARE_ALIGNED(NvU64 logicalLtcEnMask, 8);
+} NV2080_CTRL_FB_FS_INFO_LOGICAL_LTC_MASK_PARAMS;
+
+/*!
+ * Structure holding the in/out params for NV2080_CTRL_FB_FS_INFO_PROFILER_MON_LOGICAL_LTC_MASK.
+ */
+typedef struct NV2080_CTRL_FB_FS_INFO_PROFILER_MON_LOGICAL_LTC_MASK_PARAMS {
+    /*!
+     * [in]: Physical FB partition index.
+     */
+    NvU32 fbpIndex;
+    /*!
+     * [in]: swizzId
+     * PartitionID associated with a created smc partition.
+     */
+    NvU32 swizzId;
+    /*!
+     * [out]: logical ltc mask.
+     */
+    NV_DECLARE_ALIGNED(NvU64 logicalLtcEnMask, 8);
+} NV2080_CTRL_FB_FS_INFO_PROFILER_MON_LOGICAL_LTC_MASK_PARAMS;
+
 // Possible values for queryType
-#define NV2080_CTRL_FB_FS_INFO_INVALID_QUERY               0x0U
-#define NV2080_CTRL_FB_FS_INFO_FBP_MASK                    0x1U
-#define NV2080_CTRL_FB_FS_INFO_LTC_MASK                    0x2U
-#define NV2080_CTRL_FB_FS_INFO_LTS_MASK                    0x3U
-#define NV2080_CTRL_FB_FS_INFO_FBPA_MASK                   0x4U
-#define NV2080_CTRL_FB_FS_INFO_ROP_MASK                    0x5U
-#define NV2080_CTRL_FB_FS_INFO_PROFILER_MON_LTC_MASK       0x6U
-#define NV2080_CTRL_FB_FS_INFO_PROFILER_MON_LTS_MASK       0x7U
-#define NV2080_CTRL_FB_FS_INFO_PROFILER_MON_FBPA_MASK      0x8U
-#define NV2080_CTRL_FB_FS_INFO_PROFILER_MON_ROP_MASK       0x9U
-#define NV2080_CTRL_FB_FS_INFO_FBPA_SUBP_MASK              0xAU
-#define NV2080_CTRL_FB_FS_INFO_PROFILER_MON_FBPA_SUBP_MASK 0xBU
-#define NV2080_CTRL_FB_FS_INFO_FBP_LOGICAL_MAP             0xCU
-#define NV2080_CTRL_SYSL2_FS_INFO_SYSLTC_MASK              0xDU
-#define NV2080_CTRL_FB_FS_INFO_PAC_MASK                    0xEU
+#define NV2080_CTRL_FB_FS_INFO_INVALID_QUERY                 0x0U
+#define NV2080_CTRL_FB_FS_INFO_FBP_MASK                      0x1U
+#define NV2080_CTRL_FB_FS_INFO_LTC_MASK                      0x2U
+#define NV2080_CTRL_FB_FS_INFO_LTS_MASK                      0x3U
+#define NV2080_CTRL_FB_FS_INFO_FBPA_MASK                     0x4U
+#define NV2080_CTRL_FB_FS_INFO_ROP_MASK                      0x5U
+#define NV2080_CTRL_FB_FS_INFO_PROFILER_MON_LTC_MASK         0x6U
+#define NV2080_CTRL_FB_FS_INFO_PROFILER_MON_LTS_MASK         0x7U
+#define NV2080_CTRL_FB_FS_INFO_PROFILER_MON_FBPA_MASK        0x8U
+#define NV2080_CTRL_FB_FS_INFO_PROFILER_MON_ROP_MASK         0x9U
+#define NV2080_CTRL_FB_FS_INFO_FBPA_SUBP_MASK                0xAU
+#define NV2080_CTRL_FB_FS_INFO_PROFILER_MON_FBPA_SUBP_MASK   0xBU
+#define NV2080_CTRL_FB_FS_INFO_FBP_LOGICAL_MAP               0xCU
+#define NV2080_CTRL_SYSL2_FS_INFO_SYSLTC_MASK                0xDU
+#define NV2080_CTRL_FB_FS_INFO_PAC_MASK                      0xEU
+#define NV2080_CTRL_FB_FS_INFO_LOGICAL_LTC_MASK              0xFU
+#define NV2080_CTRL_FB_FS_INFO_PROFILER_MON_LOGICAL_LTC_MASK 0x10U
 
 typedef struct NV2080_CTRL_FB_FS_INFO_QUERY {
     NvU16 queryType;
@@ -2414,6 +2477,8 @@ typedef struct NV2080_CTRL_FB_FS_INFO_QUERY {
         NV2080_CTRL_FB_FS_INFO_FBP_LOGICAL_MAP_PARAMS        fbpLogicalMap;
         NV2080_CTRL_SYSL2_FS_INFO_SYSLTC_MASK_PARAMS         sysl2Ltc;
         NV2080_CTRL_FB_FS_INFO_PAC_MASK_PARAMS               pac;
+        NV_DECLARE_ALIGNED(NV2080_CTRL_FB_FS_INFO_LOGICAL_LTC_MASK_PARAMS logicalLtc, 8);
+        NV_DECLARE_ALIGNED(NV2080_CTRL_FB_FS_INFO_PROFILER_MON_LOGICAL_LTC_MASK_PARAMS dmLogicalLtc, 8);
     } queryParams;
 } NV2080_CTRL_FB_FS_INFO_QUERY;
 
@@ -2760,6 +2825,30 @@ typedef struct NV2080_CTRL_CMD_FB_STATS_ENTRY {
     //! Free memory (reserved but not allocated)
     NV_DECLARE_ALIGNED(NvU64 freeSize, 8);
 } NV2080_CTRL_CMD_FB_STATS_ENTRY;
+
+/*
+ * NV2080_CTRL_CMD_GMMU_COMMIT_TLB_INVALIDATE
+ *
+ * This control command is used by clients to commit TLB invalidates
+ *
+ * gfid[OUT]
+ *     - Specifices GPU function ID.
+ *
+ * invalidateAll[OUT]
+ *     - Specifies whether to invalidate all using boolean
+ *
+ * @returns Possible status values returned are:
+ *   NV_OK
+ *   NV_ERR_NOT_SUPPORTED
+ *
+ */
+#define NV2080_CTRL_CMD_GMMU_COMMIT_TLB_INVALIDATE (0x20801353U) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_FB_INTERFACE_ID << 8) | NV2080_CTRL_GMMU_COMMIT_TLB_INVALIDATE_PARAMS_MESSAGE_ID" */
+#define NV2080_CTRL_GMMU_COMMIT_TLB_INVALIDATE_PARAMS_MESSAGE_ID (0x53U)
+
+typedef struct NV2080_CTRL_GMMU_COMMIT_TLB_INVALIDATE_PARAMS {
+    NvU32  gfid;
+    NvBool invalidateAll;
+} NV2080_CTRL_GMMU_COMMIT_TLB_INVALIDATE_PARAMS;
 
 typedef struct NV2080_CTRL_CMD_FB_STATS_OWNER_INFO {
     //! Total allocated size for this owner

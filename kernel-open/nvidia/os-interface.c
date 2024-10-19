@@ -1061,7 +1061,15 @@ NV_STATUS NV_API_CALL os_flush_user_cache(void)
 
 void NV_API_CALL os_flush_cpu_write_combine_buffer(void)
 {
-    wmb();
+#if defined(NVCPU_X86_64)
+    asm volatile("sfence" ::: "memory");
+#elif defined(NVCPU_PPC64LE)
+    __asm__ __volatile__ ("sync" : : : "memory");
+#elif defined(NVCPU_AARCH64)
+    asm volatile("dsb st" : : : "memory");
+#else
+    mb();
+#endif
 }
 
 // override initial debug level from registry
@@ -1315,6 +1323,16 @@ NV_STATUS NV_API_CALL os_get_version_info(os_version_info * pOsVersionInfo)
 #endif
 
     return status;
+}
+
+NV_STATUS NV_API_CALL os_get_is_openrm(NvBool *bIsOpenRm)
+{
+#if defined(NVCPU_X86_64) || defined(NVCPU_AARCH64)
+    *bIsOpenRm = NV_TRUE;
+    return NV_OK;
+#else // defined(NVCPU_X86_64) || defined(NVCPU_AARCH64)
+    return NV_ERR_NOT_SUPPORTED;
+#endif // defined(NVCPU_X86_64) || defined(NVCPU_AARCH64)
 }
 
 NvBool NV_API_CALL os_is_xen_dom0(void)

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2012-2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2012-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -26,7 +26,7 @@
 #include "gpu/uvm/uvm.h"
 #include "gpu/uvm/access_cntr_buffer.h"
 #include "gpu/mem_sys/kern_mem_sys.h"
-#include "nvRmReg.h"
+#include "nvrm_registry.h"
 #include "rmapi/control.h"
 #include "rmapi/rmapi_utils.h"
 #include "kernel/gpu/intr/engine_idx.h"
@@ -128,8 +128,6 @@ uvmStateInitUnlocked_IMPL(OBJGPU *pGpu, OBJUVM *pUvm)
     pUvm->pRmApi = rmapiGetInterface(RMAPI_GPU_LOCK_INTERNAL);
     status = rmapiutilAllocClientAndDeviceHandles(pUvm->pRmApi, pGpu, &pUvm->hClient,
                                                   NULL, &pUvm->hSubdevice);
-
-    pUvm->accessCounterBufferCount = 1;
 
     pUvm->pAccessCounterBuffers = portMemAllocNonPaged(sizeof (*pUvm->pAccessCounterBuffers) * pUvm->accessCounterBufferCount);
     NV_ASSERT_OR_RETURN(pUvm->pAccessCounterBuffers != NULL, NV_ERR_NO_MEMORY);

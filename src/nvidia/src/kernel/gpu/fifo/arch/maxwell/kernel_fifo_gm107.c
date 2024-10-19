@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -29,7 +29,7 @@
 #include "gpu/mem_mgr/mem_mgr.h"
 #include "gpu/mmu/kern_gmmu.h"
 
-#include "nvRmReg.h"
+#include "nvrm_registry.h"
 
 #include "vgpu/rpc.h"
 #include "gpu/bus/kern_bus.h"
@@ -637,7 +637,7 @@ kfifoConvertInstToKernelChannel_GM107
 
     memdescDescribe(&instMemDesc, instAperture, pInst->address, NV_RAMIN_ALLOC_SIZE);
 
-    kfifoGetChannelIterator(pGpu, pKernelFifo, &chanIt);
+    kfifoGetChannelIterator(pGpu, pKernelFifo, &chanIt, INVALID_RUNLIST_ID);
     while (kfifoGetNextKernelChannel(pGpu, pKernelFifo, &chanIt, &pKernelChannel) == NV_OK)
     {
         NV_ASSERT_OR_ELSE(pKernelChannel != NULL, continue);
@@ -1285,7 +1285,7 @@ kfifoPreAllocUserD_GM107
         else if ((bCoherentCpuMapping &&
                  memdescGetAddressSpace(pUserdInfo->userdPhysDesc[currentGpuInst]) == ADDR_SYSMEM &&
                  !kbusIsReflectedMappingAccessAllowed(pKernelBus)) ||
-                 pGpu->getProperty(pGpu, PDB_PROP_GPU_BAR1_BAR2_DISABLED))
+                 kbusIsBar1Disabled(pKernelBus))
         {
             NV_PRINTF(LEVEL_INFO, "Mapping USERD with coherent link (USERD in SYSMEM).\n");
 
@@ -1306,9 +1306,9 @@ kfifoPreAllocUserD_GM107
                 goto fail;
             }
             // Now BAR1 map it
-            status = kbusMapFbAperture_HAL(pGpu, pKernelBus, pUserdInfo->userdPhysDesc[currentGpuInst], 0,
-                                           &pUserdInfo->userdBar1MapStartOffset,
-                                           &temp, mapFlags | BUS_MAP_FB_FLAGS_PRE_INIT, NULL);
+            status = kbusMapFbApertureSingle(pGpu, pKernelBus, pUserdInfo->userdPhysDesc[currentGpuInst], 0,
+                                             &pUserdInfo->userdBar1MapStartOffset,
+                                             &temp, mapFlags | BUS_MAP_FB_FLAGS_PRE_INIT, NULL);
 
             if (status != NV_OK)
             {
@@ -1329,21 +1329,25 @@ kfifoPreAllocUserD_GM107
         if (bCoherentCpuMapping &&
             (memdescGetAddressSpace(pUserdInfo->userdPhysDesc[currentGpuInst]) == ADDR_FBMEM))
         {
-            pUserdInfo->userdBar1CpuPtr = kbusMapCoherentCpuMapping_HAL(pGpu, pKernelBus,
-                                             pUserdInfo->userdPhysDesc[currentGpuInst]);
-            status = pUserdInfo->userdBar1CpuPtr == NULL ? NV_ERR_GENERIC : NV_OK;
+            status = kbusMapCoherentCpuMapping_HAL(pGpu, pKernelBus,
+                                                   pUserdInfo->userdPhysDesc[currentGpuInst],
+                                                   0,
+                                                   pUserdInfo->userdBar1MapSize,
+                                                   NV_PROTECT_READ_WRITE,
+                                                   (void**)&pUserdInfo->userdBar1CpuPtr,
+                                                   (void**)&pUserdInfo->userdBar1Priv);
         }
         else if ((bCoherentCpuMapping &&
                  memdescGetAddressSpace(pUserdInfo->userdPhysDesc[currentGpuInst]) == ADDR_SYSMEM &&
                  !kbusIsReflectedMappingAccessAllowed(pKernelBus)) ||
-                 pGpu->getProperty(pGpu, PDB_PROP_GPU_BAR1_BAR2_DISABLED))
+                 kbusIsBar1Disabled(pKernelBus))
         {
             status = osMapPciMemoryKernelOld(pGpu,
                                              pUserdInfo->userdBar1MapStartOffset,
                                              pUserdInfo->userdBar1MapSize,
                                              NV_PROTECT_READ_WRITE,
                                              (void**)&pUserdInfo->userdBar1CpuPtr,
-                                             NV_MEMORY_UNCACHED);
+                                             NV_MEMORY_CACHED);
         }
         else
         {
@@ -1423,7 +1427,9 @@ kfifoFreePreAllocUserD_GM107
         if (bCoherentCpuMapping)
         {
             kbusUnmapCoherentCpuMapping_HAL(pGpu, pKernelBus,
-                pUserdInfo->userdPhysDesc[currentGpuInst]);
+                pUserdInfo->userdPhysDesc[currentGpuInst],
+                pUserdInfo->userdBar1CpuPtr,
+                pUserdInfo->userdBar1Priv);
         }
         else
         {
@@ -1443,11 +1449,11 @@ kfifoFreePreAllocUserD_GM107
                 // Unmap in UC for each GPU with a pKernelFifo userd
                 // reference mapped through bar1
                 //
-                kbusUnmapFbAperture_HAL(pGpu, pKernelBus,
-                                        pUserdInfo->userdPhysDesc[currentGpuInst],
-                                        pUserdInfo->userdBar1MapStartOffset,
-                                        pUserdInfo->userdBar1MapSize,
-                                        BUS_MAP_FB_FLAGS_MAP_UNICAST | BUS_MAP_FB_FLAGS_PRE_INIT);
+                kbusUnmapFbApertureSingle(pGpu, pKernelBus,
+                                          pUserdInfo->userdPhysDesc[currentGpuInst],
+                                          pUserdInfo->userdBar1MapStartOffset,
+                                          pUserdInfo->userdBar1MapSize,
+                                          BUS_MAP_FB_FLAGS_MAP_UNICAST | BUS_MAP_FB_FLAGS_PRE_INIT);
                 pUserdInfo->userdBar1RefMask &= (~NVBIT(pGpu->gpuInstance));
             }
 

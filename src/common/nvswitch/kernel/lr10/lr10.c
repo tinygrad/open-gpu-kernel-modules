@@ -2288,6 +2288,13 @@ nvswitch_ctrl_get_routing_id_lr10
     NvU32 gsize;
     NvU32 ram_size;
 
+    if (nvswitch_is_tnvl_mode_locked(device))
+    {
+        NVSWITCH_PRINT(device, ERROR,
+            "%s(%d): Security locked\n", __FUNCTION__, __LINE__);
+        return -NVL_ERR_INSUFFICIENT_PERMISSIONS;
+    }
+
     if (!NVSWITCH_IS_LINK_ENG_VALID_LR10(device, NPORT, params->portNum))
     {
         NVSWITCH_PRINT(device, ERROR,
@@ -2419,6 +2426,14 @@ nvswitch_ctrl_set_routing_id_valid_lr10
     NvU32 ram_address = p->firstIndex;
     NvU32 i;
     NvU32 ram_size;
+    NvlStatus retval;
+
+    if (nvswitch_is_tnvl_mode_locked(device))
+    {
+        NVSWITCH_PRINT(device, ERROR,
+            "%s(%d): Security locked\n", __FUNCTION__, __LINE__);
+        return -NVL_ERR_INSUFFICIENT_PERMISSIONS;
+    }
 
     if (!NVSWITCH_IS_LINK_ENG_VALID_LR10(device, NPORT, p->portNum))
     {
@@ -2439,6 +2454,15 @@ nvswitch_ctrl_set_routing_id_valid_lr10
             0, ram_size - 1,
             NVSWITCH_ROUTING_ID_ENTRIES_MAX);
         return -NVL_BAD_ARGS;
+    }
+
+    // Stop traffic on the port
+    retval = nvswitch_soe_issue_ingress_stop(device, p->portNum, NV_TRUE);
+    if (retval != NVL_SUCCESS)
+    {
+        NVSWITCH_PRINT(device, ERROR,
+            "Failed to stop traffic on nport %d\n", p->portNum);
+        return retval;
     }
 
     // Select RID RAM and disable Auto Increment.
@@ -2472,6 +2496,14 @@ nvswitch_ctrl_set_routing_id_valid_lr10
         NVSWITCH_LINK_WR32_LR10(device, p->portNum, NPORT, _INGRESS, _RIDTABDATA0, rid_tab_data0);
     }
 
+    // Allow traffic on the port
+    retval = nvswitch_soe_issue_ingress_stop(device, p->portNum, NV_FALSE);
+    if (retval != NVL_SUCCESS)
+    {
+        NVSWITCH_PRINT(device, ERROR,
+            "Failed to restart traffic on nport %d\n", p->portNum);
+        return retval;
+    }
     return NVL_SUCCESS;
 }
 
@@ -2485,6 +2517,13 @@ nvswitch_ctrl_set_routing_id_lr10
     NvU32 i, j;
     NvlStatus retval = NVL_SUCCESS;
     NvU32 ram_size;
+
+    if (nvswitch_is_tnvl_mode_locked(device))
+    {
+        NVSWITCH_PRINT(device, ERROR,
+            "%s(%d): Security locked\n", __FUNCTION__, __LINE__);
+        return -NVL_ERR_INSUFFICIENT_PERMISSIONS;
+    }
 
     if (!NVSWITCH_IS_LINK_ENG_VALID_LR10(device, NPORT, p->portNum))
     {
@@ -2543,7 +2582,25 @@ nvswitch_ctrl_set_routing_id_lr10
         }
     }
 
+    // Stop traffic on the port
+    retval = nvswitch_soe_issue_ingress_stop(device, p->portNum, NV_TRUE);
+    if (retval != NVL_SUCCESS)
+    {
+        NVSWITCH_PRINT(device, ERROR,
+            "Failed to stop traffic on nport %d\n", p->portNum);
+        return retval;
+    }
+
     _nvswitch_set_routing_id_lr10(device, p->portNum, p->firstIndex, p->numEntries, p->routingId);
+
+    // Allow traffic on the port
+    retval = nvswitch_soe_issue_ingress_stop(device, p->portNum, NV_FALSE);
+    if (retval != NVL_SUCCESS)
+    {
+        NVSWITCH_PRINT(device, ERROR,
+            "Failed to restart traffic on nport %d\n", p->portNum);
+        return retval;
+    }
 
     return retval;
 }
@@ -2645,6 +2702,13 @@ nvswitch_ctrl_set_routing_lan_lr10
     NvlStatus retval = NVL_SUCCESS;
     NvU32 ram_size;
 
+    if (nvswitch_is_tnvl_mode_locked(device))
+    {
+        NVSWITCH_PRINT(device, ERROR,
+            "%s(%d): Security locked\n", __FUNCTION__, __LINE__);
+        return -NVL_ERR_INSUFFICIENT_PERMISSIONS;
+    }
+
     if (!NVSWITCH_IS_LINK_ENG_VALID_LR10(device, NPORT, p->portNum))
     {
         NVSWITCH_PRINT(device, ERROR,
@@ -2702,7 +2766,25 @@ nvswitch_ctrl_set_routing_lan_lr10
         }
     }
 
+    // Stop traffic on the port
+    retval = nvswitch_soe_issue_ingress_stop(device, p->portNum, NV_TRUE);
+    if (retval != NVL_SUCCESS)
+    {
+        NVSWITCH_PRINT(device, ERROR,
+            "Failed to stop traffic on nport %d\n", p->portNum);
+        return retval;
+    }
+
     _nvswitch_set_routing_lan_lr10(device, p->portNum, p->firstIndex, p->numEntries, p->routingLan);
+
+    // Allow traffic on the port
+    retval = nvswitch_soe_issue_ingress_stop(device, p->portNum, NV_FALSE);
+    if (retval != NVL_SUCCESS)
+    {
+        NVSWITCH_PRINT(device, ERROR,
+            "Failed to restart traffic on nport %d\n", p->portNum);
+        return retval;
+    }
 
     return retval;
 }
@@ -2721,6 +2803,13 @@ nvswitch_ctrl_get_routing_lan_lr10
     NvU32 rlan_tab_data[NVSWITCH_NUM_RLANTABDATA_REGS_LR10]; // 6 RLAN tables
     NvU32 rlan_count;
     NvU32 ram_size;
+
+    if (nvswitch_is_tnvl_mode_locked(device))
+    {
+        NVSWITCH_PRINT(device, ERROR,
+            "%s(%d): Security locked\n", __FUNCTION__, __LINE__);
+        return -NVL_ERR_INSUFFICIENT_PERMISSIONS;
+    }
 
     if (!NVSWITCH_IS_LINK_ENG_VALID_LR10(device, NPORT, params->portNum))
     {
@@ -2907,6 +2996,14 @@ nvswitch_ctrl_set_routing_lan_valid_lr10
     NvU32 ram_address = p->firstIndex;
     NvU32 i;
     NvU32 ram_size;
+    NvlStatus retval;
+
+    if (nvswitch_is_tnvl_mode_locked(device))
+    {
+        NVSWITCH_PRINT(device, ERROR,
+            "%s(%d): Security locked\n", __FUNCTION__, __LINE__);
+        return -NVL_ERR_INSUFFICIENT_PERMISSIONS;
+    }
 
     if (!NVSWITCH_IS_LINK_ENG_VALID_LR10(device, NPORT, p->portNum))
     {
@@ -2927,6 +3024,15 @@ nvswitch_ctrl_set_routing_lan_valid_lr10
             0, ram_size - 1,
             NVSWITCH_ROUTING_LAN_ENTRIES_MAX);
         return -NVL_BAD_ARGS;
+    }
+
+    // Stop traffic on the port
+    retval = nvswitch_soe_issue_ingress_stop(device, p->portNum, NV_TRUE);
+    if (retval != NVL_SUCCESS)
+    {
+        NVSWITCH_PRINT(device, ERROR,
+            "Failed to stop traffic on nport %d\n", p->portNum);
+        return retval;
     }
 
     // Select RLAN RAM and disable Auto Increament.
@@ -2957,6 +3063,15 @@ nvswitch_ctrl_set_routing_lan_valid_lr10
         NVSWITCH_LINK_WR32_LR10(device, p->portNum, NPORT, _INGRESS, _RLANTABDATA4, rlan_tab_data[4]);
         NVSWITCH_LINK_WR32_LR10(device, p->portNum, NPORT, _INGRESS, _RLANTABDATA5, rlan_tab_data[5]);
         NVSWITCH_LINK_WR32_LR10(device, p->portNum, NPORT, _INGRESS, _RLANTABDATA0, rlan_tab_data[0]);
+    }
+
+    // Allow traffic on the port
+    retval = nvswitch_soe_issue_ingress_stop(device, p->portNum, NV_FALSE);
+    if (retval != NVL_SUCCESS)
+    {
+        NVSWITCH_PRINT(device, ERROR,
+            "Failed to restart traffic on nport %d\n", p->portNum);
+        return retval;
     }
 
     return NVL_SUCCESS;
@@ -3720,6 +3835,9 @@ nvswitch_initialize_device_state_lr10
         (NvU64)device->regkeys.link_enable_mask) &
         ((~0ULL) >> (64 - NVSWITCH_LINK_COUNT(device))));
 
+    // Detect TNVL mode
+    nvswitch_detect_tnvl_mode(device);
+
     if (nvswitch_is_soe_supported(device))
     {
         retval = nvswitch_init_soe(device);
@@ -4072,7 +4190,9 @@ nvswitch_ctrl_get_nvlink_status_lr10
         }
         else
         {
-            nvlink_lib_discover_and_get_remote_conn_info(link, &conn_info, NVLINK_STATE_CHANGE_SYNC);
+            nvlink_lib_discover_and_get_remote_conn_info(link, &conn_info,
+                                                         NVLINK_STATE_CHANGE_SYNC,
+                                                         NV_FALSE);
         }
 
         // Set NVLINK per-link caps
@@ -8108,7 +8228,77 @@ nvswitch_fsprpc_get_caps_lr10
     NVSWITCH_FSPRPC_GET_CAPS_PARAMS *params
 )
 {
+    return -NVL_ERR_NOT_SUPPORTED;
+}
+
+NvlStatus
+nvswitch_detect_tnvl_mode_lr10
+(
+    nvswitch_device *device
+)
+{
     return -NVL_ERR_NOT_SUPPORTED; 
+}
+
+NvBool
+nvswitch_is_tnvl_mode_enabled_lr10
+(
+    nvswitch_device *device
+)
+{
+    return NV_FALSE;
+}
+
+NvBool
+nvswitch_is_tnvl_mode_locked_lr10
+(
+    nvswitch_device *device
+)
+{
+    return NV_FALSE;
+}
+
+NvlStatus
+nvswitch_tnvl_get_attestation_certificate_chain_lr10
+(
+    nvswitch_device *device,
+    NVSWITCH_GET_ATTESTATION_CERTIFICATE_CHAIN_PARAMS *params
+)
+{
+    // Not supported in LR10
+    return -NVL_ERR_NOT_SUPPORTED;
+}
+
+NvlStatus
+nvswitch_tnvl_get_attestation_report_lr10
+(
+    nvswitch_device *device,
+    NVSWITCH_GET_ATTESTATION_REPORT_PARAMS *params
+)
+{
+    // Not supported in LR10
+    return -NVL_ERR_NOT_SUPPORTED;
+}
+
+NvlStatus
+nvswitch_tnvl_send_fsp_lock_config_lr10
+(
+    nvswitch_device *device
+)
+{
+    // Not supported in LR10
+    return -NVL_ERR_NOT_SUPPORTED;
+}
+
+NvlStatus
+nvswitch_tnvl_get_status_lr10
+(
+    nvswitch_device *device,
+    NVSWITCH_GET_TNVL_STATUS_PARAMS *params
+)
+{
+    // Not supported in LR10
+    return -NVL_ERR_NOT_SUPPORTED;
 }
 
 //

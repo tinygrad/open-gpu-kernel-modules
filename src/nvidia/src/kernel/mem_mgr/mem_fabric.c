@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -215,10 +215,10 @@ _memoryFabricAttachMem
         return NV_ERR_NOT_SUPPORTED;
     }
 
-    if (gpuIsCCFeatureEnabled(pGpu))
+    if (gpuIsCCFeatureEnabled(pGpu) && !gpuIsCCMultiGpuProtectedPcieModeEnabled(pGpu))
     {
         NV_PRINTF(LEVEL_ERROR,
-                  "Unsupported when Confidential Computing is enabled\n");
+                  "Unsupported when Confidential Computing is enabled in SPT\n");
         return NV_ERR_NOT_SUPPORTED;
     }
 
@@ -559,6 +559,7 @@ memoryfabricConstruct_IMPL
     }
 
     if (
+        (pAllocParams->pageSize != NV_MEMORY_FABRIC_PAGE_SIZE_256G) &&
         (pAllocParams->pageSize != NV_MEMORY_FABRIC_PAGE_SIZE_512M) &&
         (pAllocParams->pageSize != NV_MEMORY_FABRIC_PAGE_SIZE_2M))
     {

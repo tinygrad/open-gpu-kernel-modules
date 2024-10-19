@@ -4183,7 +4183,7 @@ typedef struct tagNVT_HDMI_LLC_DATA
 
 typedef struct tagNVT_NVDA_VSDB_PAYLOAD
 {
-    NvU8    opcode;                     // Nvidia specific opcode - please refer to VRR monitor spec v5
+    NvU8    opcode;                     // Nvidia specific opcode - please refer to VRR monitor spec v17
     NvU8    vrrMinRefreshRate;          // Minimum refresh rate supported by this monitor 
 } NVT_NVDA_VSDB_PAYLOAD;
 
@@ -5806,6 +5806,9 @@ NvU32 NvTiming_IsTimingExactEqual(const NVT_TIMING *pT1, const NVT_TIMING *pT2);
 NvU32 NvTiming_IsTimingExactEqualEx(const NVT_TIMING *pT1, const NVT_TIMING *pT2);
 NvU32 NvTiming_IsTimingRelaxedEqual(const NVT_TIMING *pT1, const NVT_TIMING *pT2);
 NvU16 NvTiming_MaxFrameWidth(NvU16 HVisible, NvU16 rep);
+
+NvU32 NvTiming_GetVrrFmin(const NVT_EDID_INFO *pEdidInfo, const NVT_DISPLAYID_2_0_INFO *pDisplayIdInfo,
+                          NvU32 nominalRefreshRateHz, NVT_PROTOCOL sinkProtocol);
 
 // Establish timing enumeration
 NVT_STATUS NvTiming_EnumEST(NvU32 index, NVT_TIMING *pT);

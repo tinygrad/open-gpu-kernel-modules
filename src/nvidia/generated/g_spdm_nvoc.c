@@ -98,6 +98,7 @@ __nvoc_ctor_Spdm_exit:
     return status;
 }
 
+// Vtable initialization
 static void __nvoc_init_funcTable_Spdm_1(Spdm *pThis, RmHalspecOwner *pRmhalspecowner) {
     ChipHal *chipHal = &pRmhalspecowner->chipHal;
     const unsigned long chipHal_HalVarIdx = (unsigned long)chipHal->__nvoc_HalVarIdx;
@@ -106,8 +107,8 @@ static void __nvoc_init_funcTable_Spdm_1(Spdm *pThis, RmHalspecOwner *pRmhalspec
     PORT_UNREFERENCED_VARIABLE(chipHal);
     PORT_UNREFERENCED_VARIABLE(chipHal_HalVarIdx);
 
-    // Hal function -- spdmGetCertChains
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x10000000UL) )) /* ChipHal: GH100 */ 
+    // spdmGetCertChains -- halified (2 hals) body
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xd0000000UL) )) /* ChipHal: GH100 | GB100 | GB102 */ 
     {
         pThis->__spdmGetCertChains__ = &spdmGetCertChains_GH100;
     }
@@ -117,8 +118,8 @@ static void __nvoc_init_funcTable_Spdm_1(Spdm *pThis, RmHalspecOwner *pRmhalspec
         pThis->__spdmGetCertChains__ = &spdmGetCertChains_46f6a7;
     }
 
-    // Hal function -- spdmGetAttestationReport
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x10000000UL) )) /* ChipHal: GH100 */ 
+    // spdmGetAttestationReport -- halified (2 hals) body
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xd0000000UL) )) /* ChipHal: GH100 | GB100 | GB102 */ 
     {
         pThis->__spdmGetAttestationReport__ = &spdmGetAttestationReport_GH100;
     }
@@ -128,8 +129,8 @@ static void __nvoc_init_funcTable_Spdm_1(Spdm *pThis, RmHalspecOwner *pRmhalspec
         pThis->__spdmGetAttestationReport__ = &spdmGetAttestationReport_46f6a7;
     }
 
-    // Hal function -- spdmCheckAndExecuteKeyUpdate
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x10000000UL) )) /* ChipHal: GH100 */ 
+    // spdmCheckAndExecuteKeyUpdate -- halified (2 hals) body
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xd0000000UL) )) /* ChipHal: GH100 | GB100 | GB102 */ 
     {
         pThis->__spdmCheckAndExecuteKeyUpdate__ = &spdmCheckAndExecuteKeyUpdate_GH100;
     }
@@ -139,8 +140,8 @@ static void __nvoc_init_funcTable_Spdm_1(Spdm *pThis, RmHalspecOwner *pRmhalspec
         pThis->__spdmCheckAndExecuteKeyUpdate__ = &spdmCheckAndExecuteKeyUpdate_46f6a7;
     }
 
-    // Hal function -- spdmSendInitRmDataCommand
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x10000000UL) )) /* ChipHal: GH100 */ 
+    // spdmSendInitRmDataCommand -- halified (2 hals) body
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xd0000000UL) )) /* ChipHal: GH100 | GB100 | GB102 */ 
     {
         pThis->__spdmSendInitRmDataCommand__ = &spdmSendInitRmDataCommand_GH100;
     }
@@ -150,8 +151,8 @@ static void __nvoc_init_funcTable_Spdm_1(Spdm *pThis, RmHalspecOwner *pRmhalspec
         pThis->__spdmSendInitRmDataCommand__ = &spdmSendInitRmDataCommand_46f6a7;
     }
 
-    // Hal function -- spdmRegisterForHeartbeats
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x10000000UL) )) /* ChipHal: GH100 */ 
+    // spdmRegisterForHeartbeats -- halified (2 hals) body
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xd0000000UL) )) /* ChipHal: GH100 | GB100 | GB102 */ 
     {
         pThis->__spdmRegisterForHeartbeats__ = &spdmRegisterForHeartbeats_GH100;
     }
@@ -161,8 +162,8 @@ static void __nvoc_init_funcTable_Spdm_1(Spdm *pThis, RmHalspecOwner *pRmhalspec
         pThis->__spdmRegisterForHeartbeats__ = &spdmRegisterForHeartbeats_46f6a7;
     }
 
-    // Hal function -- spdmUnregisterFromHeartbeats
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x10000000UL) )) /* ChipHal: GH100 */ 
+    // spdmUnregisterFromHeartbeats -- halified (2 hals) body
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xd0000000UL) )) /* ChipHal: GH100 | GB100 | GB102 */ 
     {
         pThis->__spdmUnregisterFromHeartbeats__ = &spdmUnregisterFromHeartbeats_GH100;
     }
@@ -172,8 +173,8 @@ static void __nvoc_init_funcTable_Spdm_1(Spdm *pThis, RmHalspecOwner *pRmhalspec
         pThis->__spdmUnregisterFromHeartbeats__ = &spdmUnregisterFromHeartbeats_46f6a7;
     }
 
-    // Hal function -- spdmDeviceInit
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x10000000UL) )) /* ChipHal: GH100 */ 
+    // spdmDeviceInit -- halified (2 hals) body
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xd0000000UL) )) /* ChipHal: GH100 | GB100 | GB102 */ 
     {
         pThis->__spdmDeviceInit__ = &spdmDeviceInit_GH100;
     }
@@ -183,8 +184,8 @@ static void __nvoc_init_funcTable_Spdm_1(Spdm *pThis, RmHalspecOwner *pRmhalspec
         pThis->__spdmDeviceInit__ = &spdmDeviceInit_46f6a7;
     }
 
-    // Hal function -- spdmDeviceDeinit
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x10000000UL) )) /* ChipHal: GH100 */ 
+    // spdmDeviceDeinit -- halified (2 hals) body
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xd0000000UL) )) /* ChipHal: GH100 | GB100 | GB102 */ 
     {
         pThis->__spdmDeviceDeinit__ = &spdmDeviceDeinit_GH100;
     }
@@ -194,8 +195,8 @@ static void __nvoc_init_funcTable_Spdm_1(Spdm *pThis, RmHalspecOwner *pRmhalspec
         pThis->__spdmDeviceDeinit__ = &spdmDeviceDeinit_46f6a7;
     }
 
-    // Hal function -- spdmDeviceSecuredSessionSupported
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x10000000UL) )) /* ChipHal: GH100 */ 
+    // spdmDeviceSecuredSessionSupported -- halified (2 hals) body
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xd0000000UL) )) /* ChipHal: GH100 | GB100 | GB102 */ 
     {
         pThis->__spdmDeviceSecuredSessionSupported__ = &spdmDeviceSecuredSessionSupported_GH100;
     }
@@ -205,8 +206,8 @@ static void __nvoc_init_funcTable_Spdm_1(Spdm *pThis, RmHalspecOwner *pRmhalspec
         pThis->__spdmDeviceSecuredSessionSupported__ = &spdmDeviceSecuredSessionSupported_46f6a7;
     }
 
-    // Hal function -- spdmCheckConnection
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x10000000UL) )) /* ChipHal: GH100 */ 
+    // spdmCheckConnection -- halified (2 hals) body
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xd0000000UL) )) /* ChipHal: GH100 | GB100 | GB102 */ 
     {
         pThis->__spdmCheckConnection__ = &spdmCheckConnection_GH100;
     }
@@ -216,8 +217,8 @@ static void __nvoc_init_funcTable_Spdm_1(Spdm *pThis, RmHalspecOwner *pRmhalspec
         pThis->__spdmCheckConnection__ = &spdmCheckConnection_46f6a7;
     }
 
-    // Hal function -- spdmMessageProcess
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x10000000UL) )) /* ChipHal: GH100 */ 
+    // spdmMessageProcess -- halified (2 hals) body
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xd0000000UL) )) /* ChipHal: GH100 | GB100 | GB102 */ 
     {
         pThis->__spdmMessageProcess__ = &spdmMessageProcess_GH100;
     }
@@ -227,8 +228,8 @@ static void __nvoc_init_funcTable_Spdm_1(Spdm *pThis, RmHalspecOwner *pRmhalspec
         pThis->__spdmMessageProcess__ = &spdmMessageProcess_46f6a7;
     }
 
-    // Hal function -- spdmGetCertificates
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x10000000UL) )) /* ChipHal: GH100 */ 
+    // spdmGetCertificates -- halified (2 hals) body
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xd0000000UL) )) /* ChipHal: GH100 | GB100 | GB102 */ 
     {
         pThis->__spdmGetCertificates__ = &spdmGetCertificates_GH100;
     }
@@ -238,8 +239,8 @@ static void __nvoc_init_funcTable_Spdm_1(Spdm *pThis, RmHalspecOwner *pRmhalspec
         pThis->__spdmGetCertificates__ = &spdmGetCertificates_46f6a7;
     }
 
-    // Hal function -- spdmGetReqEncapCertificates
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x10000000UL) )) /* ChipHal: GH100 */ 
+    // spdmGetReqEncapCertificates -- halified (2 hals) body
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xd0000000UL) )) /* ChipHal: GH100 | GB100 | GB102 */ 
     {
         pThis->__spdmGetReqEncapCertificates__ = &spdmGetReqEncapCertificates_GH100;
     }
@@ -248,9 +249,13 @@ static void __nvoc_init_funcTable_Spdm_1(Spdm *pThis, RmHalspecOwner *pRmhalspec
     {
         pThis->__spdmGetReqEncapCertificates__ = &spdmGetReqEncapCertificates_46f6a7;
     }
-}
+} // End __nvoc_init_funcTable_Spdm_1 with approximately 26 basic block(s).
 
+
+// Initialize vtable(s) for 13 virtual method(s).
 void __nvoc_init_funcTable_Spdm(Spdm *pThis, RmHalspecOwner *pRmhalspecowner) {
+
+    // Initialize vtable(s) with 13 per-object function pointer(s).
     __nvoc_init_funcTable_Spdm_1(pThis, pRmhalspecowner);
 }
 
