@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -30,7 +30,6 @@
 
 #define NVOC_KERN_GMMU_H_PRIVATE_ACCESS_ALLOWED
 
-#include "gpu/bif/kernel_bif.h"
 #include "gpu/mmu/kern_gmmu.h"
 #include "gpu/bus/kern_bus.h"
 #include "gpu/nvlink/kernel_nvlink.h"
@@ -42,7 +41,7 @@
 #include "os/os.h"
 #include "rmapi/rmapi.h"
 #include "gpu/gpu.h"
-#include "nvRmReg.h"
+#include "nvrm_registry.h"
 #include "vgpu/rpc.h"
 #include "kernel/gpu/intr/engine_idx.h"
 
@@ -105,6 +104,17 @@ kgmmuConstructEngine_IMPL(OBJGPU *pGpu, KernelGmmu *pKernelGmmu, ENGDESCRIPTOR e
 
     NV_ASSERT_OK_OR_RETURN(kgmmuFmtInit(pKernelGmmu));
 
+    //
+    // On vGPU, all hardware management is done by the host except for full SR-IOV.
+    // Thus, only do any further HW initialization on the host.
+    //
+    if (!(IS_VIRTUAL_WITHOUT_SRIOV(pGpu) ||
+          (IS_VIRTUAL_WITH_SRIOV(pGpu) && gpuIsWarBug200577889SriovHeavyEnabled(pGpu))))
+    {
+        // Init HAL specific features.
+        NV_ASSERT_OK_OR_RETURN(kgmmuFmtFamiliesInit_HAL(pGpu, pKernelGmmu));
+    }
+
     portMemSet(&pKernelGmmu->mmuFaultBuffer, 0, sizeof(pKernelGmmu->mmuFaultBuffer));
 
     // Default placement for PDEs is in vidmem.
@@ -133,17 +143,6 @@ _kgmmuInitStaticInfo
 {
     RM_API *pRmApi = GPU_GET_PHYSICAL_RMAPI(pGpu);
     NV_STATUS status;
-
-    //
-    // On vGPU, all hardware management is done by the host except for full SR-IOV.
-    // Thus, only do any further HW initialization on the host.
-    //
-    if (!(IS_VIRTUAL_WITHOUT_SRIOV(pGpu) ||
-          (IS_VIRTUAL_WITH_SRIOV(pGpu) && gpuIsWarBug200577889SriovHeavyEnabled(pGpu))))
-    {
-        // Init HAL specific features.
-        NV_ASSERT_OK_OR_RETURN(kgmmuFmtFamiliesInit_HAL(pGpu, pKernelGmmu));
-    }
 
     pKernelGmmu->pStaticInfo = portMemAllocNonPaged(sizeof(*pKernelGmmu->pStaticInfo));
     NV_CHECK_OR_RETURN(LEVEL_ERROR, pKernelGmmu->pStaticInfo != NULL, NV_ERR_INSUFFICIENT_RESOURCES);
@@ -175,14 +174,7 @@ NV_STATUS kgmmuStateInitLocked_IMPL
     KernelGmmu *pKernelGmmu
 )
 {
-    KernelBif *pKernelBif = GPU_GET_KERNEL_BIF(pGpu);
     NV_STATUS  status;
-
-    if (pKernelBif != NULL)
-    {
-        // This value shouldn't change after initialization, so cache it now
-        pKernelGmmu->sysmemBaseAddress = pKernelBif->dmaWindowStartAddress;
-    }
 
     status = _kgmmuInitStaticInfo(pGpu, pKernelGmmu);
     if (status != NV_OK)
@@ -200,6 +192,13 @@ NV_STATUS kgmmuStateInitLocked_IMPL
     if (!pKernelGmmu->getProperty(pKernelGmmu, PDB_PROP_KGMMU_FAULT_BUFFER_DISABLED))
     {
         NV_ASSERT_OK_OR_RETURN(kgmmuFaultBufferInit_HAL(pGpu, pKernelGmmu));
+    }
+
+    if (gpuIsSelfHosted(pGpu) &&
+        pGpu->getProperty(pGpu, PDB_PROP_GPU_COHERENT_CPU_MAPPING) &&
+        IsdBLACKWELL(pGpu))
+    {
+        pKernelGmmu->bBug4686457WAR = NV_TRUE;
     }
 
     return status;
@@ -278,15 +277,9 @@ kgmmuEnableComputePeerAddressing_IMPL
     OBJSYS    *pSys = SYS_GET_INSTANCE();
     NV_STATUS status = NV_OK;
     RM_API *pRmApi = GPU_GET_PHYSICAL_RMAPI(pGpu);
-    NvBool bComputePeerMode = NV_FALSE;
 
     if (pSys->getProperty(pSys, PDB_PROP_SYS_NVSWITCH_IS_PRESENT) ||
         kbusIsFlaSupported(pKernelBus))
-    {
-        bComputePeerMode = NV_TRUE;
-    }
-
-    if (bComputePeerMode)
     {
         status = kgmmuEnableNvlinkComputePeerAddressing_HAL(pKernelGmmu);
         if (status != NV_OK)
@@ -297,11 +290,14 @@ kgmmuEnableComputePeerAddressing_IMPL
             return status;
         }
 
-        status = pRmApi->Control(pRmApi,
-                                pGpu->hInternalClient,
-                                pGpu->hInternalSubdevice,
-                                NV2080_CTRL_CMD_INTERNAL_NVLINK_ENABLE_COMPUTE_PEER_ADDR,
-                                NULL, 0);
+        if (!IS_VIRTUAL(pGpu))
+        {
+            status = pRmApi->Control(pRmApi,
+                                    pGpu->hInternalClient,
+                                    pGpu->hInternalSubdevice,
+                                    NV2080_CTRL_CMD_INTERNAL_NVLINK_ENABLE_COMPUTE_PEER_ADDR,
+                                    NULL, 0);
+        }
     }
     return status;
 }
@@ -1609,6 +1605,7 @@ _kgmmuClientShadowFaultBufferPagesAllocate
         return status;
     }
 
+    memdescSetPageSize(pMemDesc, AT_GPU, RM_PAGE_SIZE_HUGE);
     memdescTagAlloc(status, NV_FB_ALLOC_RM_INTERNAL_OWNER_UNNAMED_TAG_33, 
                     pMemDesc);
     if (status != NV_OK)
@@ -1688,7 +1685,7 @@ kgmmuClientShadowFaultBufferRegister_IMPL
     NV_STATUS status = NV_OK;
     struct GMMU_FAULT_BUFFER *pFaultBuffer;
     GMMU_CLIENT_SHADOW_FAULT_BUFFER *pClientShadowFaultBuffer;
-    GMMU_SHADOW_FAULT_BUF *pQueue;
+    GMMU_SHADOW_FAULT_BUF *pQueue = NULL;
     MEMORY_DESCRIPTOR *pBufferMemDesc;
     RmPhysAddr shadowFaultBufferQueuePhysAddr;
     NvU32 queueCapacity, numBufferPages;
@@ -3156,4 +3153,22 @@ subdeviceCtrlCmdInternalGmmuUnregisterFaultBuffer_IMPL
                                  NV_FALSE);
     }
     return status;
+}
+
+NV_STATUS
+subdeviceCtrlCmdGmmuCommitTlbInvalidate_IMPL
+(
+    Subdevice *pSubdevice,
+    NV2080_CTRL_GMMU_COMMIT_TLB_INVALIDATE_PARAMS *pTlbInvalidateParams
+)
+{
+    OBJGPU *pGpu = GPU_RES_GET_GPU(pSubdevice);
+    KernelGmmu *pKernelGmmu = GPU_GET_KERNEL_GMMU(pGpu);
+    COMMIT_TLB_INVALIDATE_TEST_PARAMS params;
+
+    params.gfid = pTlbInvalidateParams->gfid;
+    params.invalidateAll = pTlbInvalidateParams->invalidateAll;
+
+    return kgmmuCommitInvalidateTlbTest_HAL(pGpu, pKernelGmmu, &params);
+
 }

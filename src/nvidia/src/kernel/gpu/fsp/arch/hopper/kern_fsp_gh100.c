@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -32,6 +32,10 @@
 #include "gpu/gsp/kernel_gsp.h"
 #include "gpu/mem_mgr/mem_mgr.h"
 #include "gpu/pmu/kern_pmu.h"
+#include "gpu/spdm/spdm.h"
+#include "fsp/nvdm_payload_cmd_response.h"
+#include "fsp/fsp_clock_boost_rpc.h"
+#include "fsp/fsp_caps_query_rpc.h"
 
 #include "published/hopper/gh100/dev_fsp_pri.h"
 #include "published/hopper/gh100/dev_fsp_addendum.h"
@@ -49,6 +53,29 @@
 
 #include "gpu/conf_compute/conf_compute.h"
 
+// Blocks are 64 DWORDS
+#define DWORDS_PER_EMEM_BLOCK 64U
+
+static void _kfspUpdateQueueHeadTail_GH100(OBJGPU *pGpu, KernelFsp *pKernelFsp,
+    NvU32 queueHead, NvU32 queueTail);
+
+static void _kfspGetQueueHeadTail_GH100(OBJGPU *pGpu, KernelFsp *pKernelFsp,
+    NvU32 *pQueueHead, NvU32 *pQueueTail);
+
+static void _kfspUpdateMsgQueueHeadTail_GH100(OBJGPU *pGpu, KernelFsp *pKernelFsp,
+    NvU32 queueHead, NvU32 queueTail);
+
+static void _kfspGetMsgQueueHeadTail_GH100(OBJGPU *pGpu, KernelFsp *pKernelFsp,
+    NvU32 *pQueueHead, NvU32 *pQueueTail);
+
+static NV_STATUS _kfspConfigEmemc_GH100(OBJGPU *pGpu, KernelFsp *pKernelFsp,
+    NvU32 offset, NvBool bAincw, NvBool bAincr);
+
+static NV_STATUS _kfspWriteToEmem_GH100(OBJGPU *pGpu, KernelFsp *pKernelFsp,
+    NvU8 *pBuffer, NvU32 size);
+
+static NvBool _kfspWaitBootCond_GH100(OBJGPU *pGpu, void *pArg);
+
 /*!
  * @brief Update command queue head and tail pointers
  *
@@ -57,8 +84,8 @@
  * @param[in] queueHead  Offset to write to command queue head
  * @param[in] queueTail  Offset to write to command queue tail
  */
-void
-kfspUpdateQueueHeadTail_GH100
+static void
+_kfspUpdateQueueHeadTail_GH100
 (
     OBJGPU    *pGpu,
     KernelFsp *pKernelFsp,
@@ -79,8 +106,8 @@ kfspUpdateQueueHeadTail_GH100
  * @param[out] pQueueHead Pointer where we write command queue head
  * @param[out] pQueueTail Pointer where we write command queue tail
  */
-void
-kfspGetQueueHeadTail_GH100
+static void
+_kfspGetQueueHeadTail_GH100
 (
     OBJGPU    *pGpu,
     KernelFsp *pKernelFsp,
@@ -100,8 +127,8 @@ kfspGetQueueHeadTail_GH100
  * @param[in] msgqHead   Offset to write to message queue head
  * @param[in] msgqTail   Offset to write to message queue tail
  */
-void
-kfspUpdateMsgQueueHeadTail_GH100
+static void
+_kfspUpdateMsgQueueHeadTail_GH100
 (
     OBJGPU    *pGpu,
     KernelFsp *pKernelFsp,
@@ -121,8 +148,8 @@ kfspUpdateMsgQueueHeadTail_GH100
  * @param[out] pMsgqHead  Pointer where we write message queue head
  * @param[out] pMsgqTail  Pointer where we write message queue tail
  */
-void
-kfspGetMsgQueueHeadTail_GH100
+static void
+_kfspGetMsgQueueHeadTail_GH100
 (
     OBJGPU    *pGpu,
     KernelFsp *pKernelFsp,
@@ -135,15 +162,15 @@ kfspGetMsgQueueHeadTail_GH100
 }
 
 /*!
- * @brief Get size of RM's channel in FSP EMEM
+ * @brief Get maximum size of a packet we can send.
  *
  * @param[in] pGpu       OBJGPU pointer
  * @param[in] pKernelFsp KernelFsp pointer
  *
- * @return RM channel size in bytes
+ * @return Packet size in bytes
  */
 NvU32
-kfspGetRmChannelSize_GH100
+kfspGetMaxSendPacketSize_GH100
 (
     OBJGPU    *pGpu,
     KernelFsp *pKernelFsp
@@ -154,6 +181,76 @@ kfspGetRmChannelSize_GH100
     // properly fetch the lower and higher bounds of the EMEM channel
     //
     return FSP_EMEM_CHANNEL_RM_SIZE;
+}
+
+/*!
+ * @brief Get maximum size of a packet we can receive.
+ *
+ * @param[in] pGpu       OBJGPU pointer
+ * @param[in] pKernelFsp KernelFsp pointer
+ *
+ * @return Packet size in bytes
+ */
+NvU32
+kfspGetMaxRecvPacketSize_GH100
+(
+    OBJGPU    *pGpu,
+    KernelFsp *pKernelFsp
+)
+{
+    //
+    // Channel size is hardcoded to 1K for now. Later we will use EMEMR to
+    // properly fetch the lower and higher bounds of the EMEM channel
+    //
+    return FSP_EMEM_CHANNEL_RM_SIZE;
+}
+
+/*!
+ * @brief Check if RM has a response from FSP available
+ *
+ * @param[in] pGpu       OBJGPU pointer
+ * @param[in] pKernelFsp KernelFsp pointer
+ *
+ * @return NV_TRUE if a response is available, NV_FALSE otherwise
+ */
+NvBool
+kfspIsResponseAvailable_GH100
+(
+    OBJGPU    *pGpu,
+    KernelFsp *pKernelFsp
+)
+{
+    NvU32 msgqHead;
+    NvU32 msgqTail;
+
+    _kfspGetMsgQueueHeadTail_GH100(pGpu, pKernelFsp, &msgqHead, &msgqTail);
+    // FSP updates the head after writing data into the channel
+    return (msgqHead != msgqTail);
+}
+
+
+/*!
+ * @brief Check if RM can send a packet to FSP
+ *
+ * @param[in] pGpu       OBJGPU pointer
+ * @param[in] pKernelFsp KernelFsp pointer
+ *
+ * @return NV_TRUE if send is possible, NV_FALSE otherwise
+ */
+NvBool
+kfspCanSendPacket_GH100
+(
+    OBJGPU    *pGpu,
+    KernelFsp *pKernelFsp
+)
+{
+    NvU32 cmdqHead;
+    NvU32 cmdqTail;
+
+    _kfspGetQueueHeadTail_GH100(pGpu, pKernelFsp, &cmdqHead, &cmdqTail);
+
+    // FSP will set QUEUE_HEAD = TAIL after each packet is received
+    return (cmdqHead == cmdqTail);
 }
 
 /*!
@@ -395,6 +492,7 @@ kfspProcessNvdmMessage_GH100
     return status;
 }
 
+
 /*!
  * @brief Process FSP command response
  *
@@ -425,7 +523,6 @@ kfspProcessCommandResponse_GH100
     }
 
     pCmdResponse = (NVDM_PAYLOAD_COMMAND_RESPONSE *)&(pBuffer[1]);
-
     NV_PRINTF(LEVEL_INFO, "Received FSP command response. Task ID: 0x%0x Command type: 0x%0x Error code: 0x%0x\n",
               pCmdResponse->taskId, pCmdResponse->commandNvdmType, pCmdResponse->errorCode);
 
@@ -434,9 +531,8 @@ kfspProcessCommandResponse_GH100
     {
         NV_PRINTF(LEVEL_INFO, "Last command was processed by FSP successfully!\n");
     }
-    else if (status != NV_ERR_OBJECT_NOT_FOUND)
+    else if (status != NV_ERR_OBJECT_NOT_FOUND && status != NV_ERR_INVALID_ARGUMENT)
     {
-
         NV_PRINTF(LEVEL_ERROR, "FSP response reported error. Task ID: 0x%0x Command type: 0x%0x Error code: 0x%0x\n",
                 pCmdResponse->taskId, pCmdResponse->commandNvdmType, pCmdResponse->errorCode);
     }
@@ -455,8 +551,8 @@ kfspProcessCommandResponse_GH100
  *
  * @return NV_OK
  */
-NV_STATUS
-kfspConfigEmemc_GH100
+static NV_STATUS
+_kfspConfigEmemc_GH100
 (
     OBJGPU    *pGpu,
     KernelFsp *pKernelFsp,
@@ -465,15 +561,16 @@ kfspConfigEmemc_GH100
     NvBool     bAincr
 )
 {
-    NvU32 offsetBlks, offsetDwords;
+    NvU32 offsetBlks;
+    NvU32 offsetDwords;
     NvU32 reg32 = 0;
 
     //
-    // EMEMC offset is encoded in terms of blocks (64 DWORDS) and DWORD offset
+    // EMEMC offset is encoded in terms of blocks and DWORD offset
     // within a block, so calculate each.
     //
-    offsetBlks = offset / 64;
-    offsetDwords = offset % 64;
+    offsetBlks = offset / DWORDS_PER_EMEM_BLOCK;
+    offsetDwords = offset % DWORDS_PER_EMEM_BLOCK;
 
     reg32 = FLD_SET_DRF_NUM(_PFSP, _EMEMC, _OFFS, offsetDwords, reg32);
     reg32 = FLD_SET_DRF_NUM(_PFSP, _EMEMC, _BLK, offsetBlks, reg32);
@@ -501,8 +598,8 @@ kfspConfigEmemc_GH100
  *
  * @return NV_OK
  */
-NV_STATUS
-kfspWriteToEmem_GH100
+static NV_STATUS
+_kfspWriteToEmem_GH100
 (
     OBJGPU    *pGpu,
     KernelFsp *pKernelFsp,
@@ -510,8 +607,74 @@ kfspWriteToEmem_GH100
     NvU32      size
 )
 {
-    NvU32 i, reg32;
+    NvU32 i;
+    NvU32 reg32;
+    NvU32 leftoverBytes;
+    NvU32 wordsWritten;
+    NvU32 ememOffsetStart;
     NvU32 ememOffsetEnd;
+
+    reg32 = GPU_REG_RD32(pGpu, NV_PFSP_EMEMC(FSP_EMEM_CHANNEL_RM));
+    ememOffsetStart = DRF_VAL(_PFSP, _EMEMC, _OFFS, reg32);
+    ememOffsetStart += DRF_VAL(_PFSP, _EMEMC, _BLK, reg32) * DWORDS_PER_EMEM_BLOCK;
+    NV_PRINTF(LEVEL_INFO, "About to send data to FSP, ememcOff=0x%x, size=0x%x\n", ememOffsetStart, size);
+
+    // Now write to EMEMD, we always have to write a DWORD at a time so write
+    // all the full DWORDs in the buffer and then pad any leftover bytes with 0
+    for (i = 0; i < (size / sizeof(NvU32)); i++)
+    {
+        GPU_REG_WR32(pGpu, NV_PFSP_EMEMD(FSP_EMEM_CHANNEL_RM), ((NvU32 *)(void *)pBuffer)[i]);
+    }
+    wordsWritten = size / sizeof(NvU32);
+
+    leftoverBytes = size % sizeof(NvU32);
+    if (leftoverBytes != 0)
+    {
+        reg32 = 0;
+        portMemCopy(&reg32, sizeof(NvU32), &(pBuffer[size - leftoverBytes]), leftoverBytes);
+        GPU_REG_WR32(pGpu, NV_PFSP_EMEMD(FSP_EMEM_CHANNEL_RM), reg32);
+        wordsWritten++;
+    }
+
+    // Sanity check offset. If this fails, the autoincrement did not work
+    reg32 = GPU_REG_RD32(pGpu, NV_PFSP_EMEMC(FSP_EMEM_CHANNEL_RM));
+    ememOffsetEnd = DRF_VAL(_PFSP, _EMEMC, _OFFS, reg32);
+    ememOffsetEnd += DRF_VAL(_PFSP, _EMEMC, _BLK, reg32) * DWORDS_PER_EMEM_BLOCK;
+    NV_PRINTF(LEVEL_INFO, "After sending data, ememcOff = 0x%x\n", ememOffsetEnd);
+
+    NV_ASSERT_OR_RETURN((ememOffsetEnd - ememOffsetStart) == wordsWritten, NV_ERR_INVALID_STATE);
+
+    return NV_OK;
+}
+
+/*!
+ * @brief Send one packet to FSP via EMEM
+ *
+ * @param[in] pGpu          OBJGPU pointer
+ * @param[in] pKernelFsp    KernelFsp pointer
+ * @param[in] pPacket       Packet buffer
+ * @param[in] packetSize    Packet size in bytes
+ *
+ * @return NV_OK, or NV_ERR_INSUFFICIENT_RESOURCES
+ */
+NV_STATUS
+kfspSendPacket_GH100
+(
+    OBJGPU    *pGpu,
+    KernelFsp *pKernelFsp,
+    NvU8      *pPacket,
+    NvU32      packetSize
+)
+{
+    NvU32 paddedSize;
+    NV_STATUS status = NV_OK;
+
+    // Check that queue is ready to receive data
+    status = kfspPollForCanSend(pGpu, pKernelFsp);
+    if (status != NV_OK)
+    {
+        return NV_ERR_INSUFFICIENT_RESOURCES;
+    }
 
     //
     // First configure EMEMC, RM always writes 0 to the offset, which is OK
@@ -519,84 +682,100 @@ kfspWriteToEmem_GH100
     // beginning for each packet. It should be improved later to use EMEMR to
     // properly fetch the lower and higher bounds of the EMEM channel
     //
-    kfspConfigEmemc_HAL(pGpu, pKernelFsp, 0, NV_TRUE, NV_FALSE);
+    _kfspConfigEmemc_GH100(pGpu, pKernelFsp, 0, NV_TRUE, NV_FALSE);
+    _kfspWriteToEmem_GH100(pGpu, pKernelFsp, pPacket, packetSize);
 
-    NV_PRINTF(LEVEL_INFO, "About to send data to FSP, ememcOff=0, size=0x%x\n", size);
-    if (!NV_IS_ALIGNED(size, sizeof(NvU32)))
-    {
-        NV_PRINTF(LEVEL_WARNING, "Size=0x%x is not DWORD-aligned, data will be truncated!\n", size);
-    }
+    paddedSize = NV_ALIGN_UP(packetSize, sizeof(NvU32));
+    // Update HEAD and TAIL with new EMEM offset; RM always starts at offset 0.
+    // TAIL points to the last DWORD written, so subtract 1 DWORD
+    _kfspUpdateQueueHeadTail_GH100(pGpu, pKernelFsp, 0, paddedSize - sizeof(NvU32));
 
-    // Now write to EMEMD
-    for (i = 0; i < (size / 4); i++)
-    {
-        GPU_REG_WR32(pGpu, NV_PFSP_EMEMD(FSP_EMEM_CHANNEL_RM), ((NvU32*)(void*)pBuffer)[i]);
-    }
-
-    // Sanity check offset. If this fails, the autoincrement did not work
-    reg32 = GPU_REG_RD32(pGpu, NV_PFSP_EMEMC(FSP_EMEM_CHANNEL_RM));
-    ememOffsetEnd = DRF_VAL(_PFSP, _EMEMC, _OFFS, reg32);
-
-    // Blocks are 64 DWORDS
-    ememOffsetEnd += DRF_VAL(_PFSP, _EMEMC, _BLK, reg32) * 64;
-    NV_PRINTF(LEVEL_INFO, "After sending data, ememcOff = 0x%x\n", ememOffsetEnd);
-
-    NV_ASSERT((ememOffsetEnd) == (size / sizeof(NvU32)));
-    return NV_OK;
+    return status;
 }
 
 /*!
  * @brief Read data to buffer from RM channel in FSP's EMEM
  *
- * @param[in]     pGpu       OBJGPU pointer
- * @param[in]     pKernelFsp KernelFsp pointer
- * @param[in/out] pBuffer    Buffer where we copy data from EMEM
- * @param[in]     size       Size to read in bytes, assumed DWORD aligned
+ * @param[in]     pGpu          OBJGPU pointer
+ * @param[in]     pKernelFsp    KernelFsp pointer
+ * @param[in/out] pPacket       Buffer where we copy data from EMEM
+ * @param[in]     maxPacketSize Size in bytes of pPacket buffer
+ * @param[out]    bytesRead     Size in bytes that was read into the packet buffer
  *
  * @return NV_OK
  */
 NV_STATUS
-kfspReadFromEmem_GH100
+kfspReadPacket_GH100
 (
     OBJGPU    *pGpu,
     KernelFsp *pKernelFsp,
-    NvU8      *pBuffer,
-    NvU32      size
+    NvU8      *pPacket,
+    NvU32      maxPacketSize,
+    NvU32     *bytesRead
 )
 {
     NvU32 i, reg32;
     NvU32 ememOffsetEnd;
+    NvU32 msgqHead;
+    NvU32 msgqTail;
+    NvU32 packetSize;
+
+    // First check that the packet buffer has enough space for the
+    // packet and that the size is valid.
+    _kfspGetMsgQueueHeadTail_GH100(pGpu, pKernelFsp, &msgqHead, &msgqTail);
+
+    // Tail points to last DWORD in packet, not DWORD immediately following it
+    packetSize = (msgqTail - msgqHead) + sizeof(NvU32);
+
+    NV_ASSERT_OR_RETURN((packetSize >= sizeof(NvU32)) && (packetSize <= maxPacketSize),
+        NV_ERR_INVALID_DATA);
 
     //
-    // First configure EMEMC, RM always writes 0 to the offset, which is OK
+    // Next configure EMEMC, RM always writes 0 to the offset, which is OK
     // because RM's channel starts at 0 on GH100 and we always start from the
     // beginning for each packet. It should be improved later to use EMEMR to
     // properly fetch the lower and higher bounds of the EMEM channel
     //
-    kfspConfigEmemc_HAL(pGpu, pKernelFsp, 0, NV_FALSE, NV_TRUE);
+    _kfspConfigEmemc_GH100(pGpu, pKernelFsp, 0, NV_FALSE, NV_TRUE);
 
-    NV_PRINTF(LEVEL_INFO, "About to read data from FSP, ememcOff=0, size=0x%x\n", size);
-    if (!NV_IS_ALIGNED(size, sizeof(NvU32)))
+    NV_PRINTF(LEVEL_INFO, "About to read data from FSP, ememcOff=0, size=0x%x\n", packetSize);
+    if (!NV_IS_ALIGNED(packetSize, sizeof(NvU32)))
     {
-        NV_PRINTF(LEVEL_WARNING, "Size=0x%x is not DWORD-aligned, data will be truncated!\n", size);
+        NV_PRINTF(LEVEL_WARNING, "Size=0x%x is not DWORD-aligned, data will be truncated!\n", packetSize);
     }
 
     // Now read from EMEMD
-    for (i = 0; i < (size / 4); i++)
+    for (i = 0; i < (packetSize / sizeof(NvU32)); i++)
     {
-        ((NvU32*)(void*)pBuffer)[i] = GPU_REG_RD32(pGpu, NV_PFSP_EMEMD(FSP_EMEM_CHANNEL_RM));
+        ((NvU32 *)(void *)pPacket)[i] = GPU_REG_RD32(pGpu, NV_PFSP_EMEMD(FSP_EMEM_CHANNEL_RM));
     }
+    *bytesRead = packetSize;
 
     // Sanity check offset. If this fails, the autoincrement did not work
     reg32 = GPU_REG_RD32(pGpu, NV_PFSP_EMEMC(FSP_EMEM_CHANNEL_RM));
     ememOffsetEnd = DRF_VAL(_PFSP, _EMEMC, _OFFS, reg32);
-
-    // Blocks are 64 DWORDS
-    ememOffsetEnd += DRF_VAL(_PFSP, _EMEMC, _BLK, reg32) * 64;
+    ememOffsetEnd += DRF_VAL(_PFSP, _EMEMC, _BLK, reg32) * DWORDS_PER_EMEM_BLOCK;
     NV_PRINTF(LEVEL_INFO, "After reading data, ememcOff = 0x%x\n", ememOffsetEnd);
 
-    NV_ASSERT((ememOffsetEnd) == (size / sizeof(NvU32)));
+    // Set TAIL = HEAD to indicate CPU received packet
+    _kfspUpdateMsgQueueHeadTail_GH100(pGpu, pKernelFsp, msgqHead, msgqHead);
+
+    NV_ASSERT_OR_RETURN((ememOffsetEnd) == (packetSize / sizeof(NvU32)), NV_ERR_INVALID_STATE);
     return NV_OK;
+}
+
+static NvBool
+_kfspWaitBootCond_GH100
+(
+    OBJGPU *pGpu,
+    void   *pArg
+)
+{
+    //
+    // In Hopper, Bootfsm triggers FSP execution out of chip reset.
+    // FSP writes 0xFF value in NV_THERM_I2CS_SCRATCH register after completion of boot
+    //
+    return GPU_FLD_TEST_DRF_DEF(pGpu, _THERM_I2CS_SCRATCH, _FSP_BOOT_COMPLETE, _STATUS, _SUCCESS);
 }
 
 NV_STATUS
@@ -611,53 +790,29 @@ kfspWaitForSecureBoot_GH100
 
     //
     // Polling for FSP boot complete
-    // In Hopper, Bootfsm triggers FSP execution out of chip reset.
-    // FSP writes 0xFF value in NV_THERM_I2CS_SCRATCH register after completion of boot
     // FBFalcon training during devinit alone takes 2 seconds, up to 3 on HBM3,
     // but the default threadstate timeout on windows is 1800 ms. Increase to 4 seconds
     // for this wait to match MODS GetGFWBootTimeoutMs.
-    // For flags, this must not timeout due to aforementioned threadstate timeout,
-    // and we must not use the GPU TMR since it is inaccessible.
+    // For flags, we must not use the GPU TMR since it is inaccessible.
     //
     gpuSetTimeout(pGpu, NV_MAX(gpuScaleTimeout(pGpu, 4000000), pGpu->timeoutData.defaultus),
-                  &timeout, GPU_TIMEOUT_FLAGS_OSTIMER | GPU_TIMEOUT_FLAGS_BYPASS_THREAD_STATE);
+                  &timeout, GPU_TIMEOUT_FLAGS_OSTIMER);
 
-    while(!GPU_FLD_TEST_DRF_DEF(pGpu, _THERM_I2CS_SCRATCH, _FSP_BOOT_COMPLETE, _STATUS, _SUCCESS))
+    status = gpuTimeoutCondWait(pGpu, _kfspWaitBootCond_GH100, NULL, &timeout);
+
+    if (status != NV_OK)
     {
-        status = gpuCheckTimeout(pGpu, &timeout);
-        if (status == NV_ERR_TIMEOUT)
-        {
-            NV_ERROR_LOG((void*) pGpu, GPU_INIT_ERROR, "Timeout while polling for FSP boot complete, "
-                         "0x%x, 0x%x, 0x%x, 0x%x, 0x%x",
-                         GPU_REG_RD32(pGpu, NV_THERM_I2CS_SCRATCH_FSP_BOOT_COMPLETE),
-                         GPU_REG_RD32(pGpu, NV_PFSP_FALCON_COMMON_SCRATCH_GROUP_2(0)),
-                         GPU_REG_RD32(pGpu, NV_PFSP_FALCON_COMMON_SCRATCH_GROUP_2(1)),
-                         GPU_REG_RD32(pGpu, NV_PFSP_FALCON_COMMON_SCRATCH_GROUP_2(2)),
-                         GPU_REG_RD32(pGpu, NV_PFSP_FALCON_COMMON_SCRATCH_GROUP_2(3)));
-            break;
-        }
+        NV_ASSERT_OK(gpuMarkDeviceForReset(pGpu));
+        NV_ERROR_LOG((void*) pGpu, GPU_INIT_ERROR, "Error status 0x%x while polling for FSP boot complete, "
+                     "0x%x, 0x%x, 0x%x, 0x%x, 0x%x",
+                     status,
+                     GPU_REG_RD32(pGpu, NV_THERM_I2CS_SCRATCH_FSP_BOOT_COMPLETE),
+                     GPU_REG_RD32(pGpu, NV_PFSP_FALCON_COMMON_SCRATCH_GROUP_2(0)),
+                     GPU_REG_RD32(pGpu, NV_PFSP_FALCON_COMMON_SCRATCH_GROUP_2(1)),
+                     GPU_REG_RD32(pGpu, NV_PFSP_FALCON_COMMON_SCRATCH_GROUP_2(2)),
+                     GPU_REG_RD32(pGpu, NV_PFSP_FALCON_COMMON_SCRATCH_GROUP_2(3)));
     }
-
     return status;
-}
-
-/*!
- * @brief Check if GSP-FMC Inst_in_sys ucode needs to be booted.
- *
- * @param[in]  pGpu          OBJGPU pointer
- * @param[in]  pKernelFsp    KernelFsp pointer
- *
- * @return NV_TRUE if GSP Inst_in_sys FMC needs to be booted, or NV_FALSE otherwise
- */
-NvBool
-kfspCheckGspSecureScratch_GH100
-(
-    OBJGPU    *pGpu,
-    KernelFsp *pKernelFsp
-)
-{
-
-    return NV_FALSE;
 }
 
 static const BINDATA_ARCHIVE *
@@ -683,6 +838,7 @@ kfspGetGspUcodeArchive
             }
             else
             {
+
                 return kgspGetBinArchiveGspRmFmcGfwDebugSigned_HAL(pKernelGsp);
             }
         }
@@ -702,13 +858,27 @@ kfspGetGspUcodeArchive
     else
     {
         Gsp *pGsp = GPU_GET_GSP(pGpu);
+        Spdm *pSpdm = GPU_GET_SPDM(pGpu);
 
         // Intentional error print so that we know which mode RM is loaded with
         NV_PRINTF(LEVEL_ERROR, "Loading GSP image for monolithic RM using FSP.\n");
         if (gspIsDebugModeEnabled_HAL(pGpu, pGsp))
         {
-            if (kfspCheckGspSecureScratch_HAL(pGpu, pKernelFsp))
+            if (gpuIsGspToBootInInstInSysMode_HAL(pGpu))
             {
+                NV_PRINTF(LEVEL_ERROR, "Loading GSP debug inst-in-sys image for monolithic RM using FSP.\n");
+
+                //
+                // GB20X inst-in-sys images will reset PMU, FBFALCON, FECS and GPCCS
+                // and then lower CPUCTL/reset PLM.
+                // Reason for that is that there is fuse configration
+                // changing source isolation of those registers (to GSP/FSP/SEC2).
+                //
+                if (IsGB20X(pGpu))
+                {
+                    pGsp->setProperty(pGsp, PDB_PROP_GSP_INST_IN_SYS_FMC_WILL_RESET_ENGINES, NV_TRUE);
+                }
+
                 return gspGetBinArchiveGspFmcInstInSysGfwDebugSigned_HAL(pGsp);
             }
             else
@@ -721,12 +891,18 @@ kfspGetGspUcodeArchive
                 //
                 NV_ASSERT_OR_RETURN(gspSetupRMProxyImage(pGpu, pGsp) == NV_OK, NULL);
 
-                // For debug board if CC is enabled pick spdm profile of gspcc ucode
-                if (pCC->getProperty(pCC, PDB_PROP_CONFCOMPUTE_ENABLED) == NV_TRUE)
+                // For debug board, when CC enabled, only pick SPDM profile if SPDM is enabled.
+                if  (pCC->getProperty(pCC, PDB_PROP_CONFCOMPUTE_ENABLED))
                 {
-
+                    if (confComputeIsSpdmEnabled(pGpu, pCC) &&
+                        pSpdm->getProperty(pSpdm, PDB_PROP_SPDM_ENABLED))
                     {
                         return gspGetBinArchiveGspFmcSpdmGfwDebugSigned_HAL(pGsp);
+                    }
+                    else
+                    {
+                        // When CC is enabled but SPDM is not enabled. Only for MODS.
+                        return gspGetBinArchiveGspFmcGfwDebugSigned_HAL(pGsp);
                     }
                 }
                 else
@@ -737,16 +913,40 @@ kfspGetGspUcodeArchive
         }
         else
         {
-            if (kfspCheckGspSecureScratch_HAL(pGpu, pKernelFsp))
+            if (gpuIsGspToBootInInstInSysMode_HAL(pGpu))
             {
+                NV_PRINTF(LEVEL_ERROR, "Loading GSP prod inst-in-sys image for monolithic RM using FSP.\n");
+
+                //
+                // GB20X inst-in-sys images will reset PMU, FBFALCON, FECS and GPCCS
+                // and then lower CPUCTL/reset PLM.
+                // Reason for that is that there is fuse configration
+                // changing source isolation of those registers (to GSP/FSP/SEC2).
+                //
+                if (IsGB20X(pGpu))
+                {
+                    pGsp->setProperty(pGsp, PDB_PROP_GSP_INST_IN_SYS_FMC_WILL_RESET_ENGINES, NV_TRUE);
+                }
+
                 return gspGetBinArchiveGspFmcInstInSysGfwProdSigned_HAL(pGsp);
             }
             else
             {
                 NV_ASSERT_OR_RETURN(gspSetupRMProxyImage(pGpu, pGsp) == NV_OK, NULL);
-                if (pCC->getProperty(pCC, PDB_PROP_CONFCOMPUTE_ENABLED) == NV_TRUE)
+                Spdm  *pSpdm = GPU_GET_SPDM(pGpu);
+
+                if (pCC->getProperty(pCC, PDB_PROP_CONFCOMPUTE_ENABLED))
                 {
-                    return gspGetBinArchiveGspCcFmcGfwProdSigned_HAL(pGsp);
+                    if (confComputeIsSpdmEnabled(pGpu, pCC) &&
+                        pSpdm->getProperty(pSpdm, PDB_PROP_SPDM_ENABLED))
+                    {
+                        return gspGetBinArchiveGspCcFmcGfwProdSigned_HAL(pGsp);
+                    }
+                    else
+                    {
+                        // When CC is enabled but SPDM is not enabled. Only for MODS.
+                        return gspGetBinArchiveGspFmcGfwDebugSigned_HAL(pGsp);
+                    }
                 }
                 else
                 {
@@ -773,7 +973,6 @@ kfspGetGspBootArgs
 )
 {
     NV_STATUS status         = NV_OK;
-
     ConfidentialCompute *pCC = GPU_GET_CONF_COMPUTE(pGpu);
     NV_ASSERT(pCC != NULL);
 
@@ -814,6 +1013,7 @@ kfspSetupGspImages
     PBINDATA_STORAGE pGspImageHash;
     PBINDATA_STORAGE pGspImageSignature;
     PBINDATA_STORAGE pGspImagePublicKey;
+    NvBool bReUseInitMem  = pGpu->getProperty(pGpu, PDB_PROP_GPU_REUSE_INIT_CONTING_MEM);
     NvU32 pGspImageSize;
     NvU32 pGspImageMapSize;
     NvP64 pVaKernel = NULL;
@@ -836,10 +1036,10 @@ kfspSetupGspImages
     }
 
     // Set up the structures to send GSP-FMC
-    pGspImage = (PBINDATA_STORAGE)bindataArchiveGetStorage(pBinArchive, "ucode_image");
-    pGspImageHash = (PBINDATA_STORAGE)bindataArchiveGetStorage(pBinArchive, "ucode_hash");
-    pGspImageSignature = (PBINDATA_STORAGE)bindataArchiveGetStorage(pBinArchive, "ucode_sig");
-    pGspImagePublicKey = (PBINDATA_STORAGE)bindataArchiveGetStorage(pBinArchive, "ucode_pkey");
+    pGspImage = (PBINDATA_STORAGE)bindataArchiveGetStorage(pBinArchive, BINDATA_LABEL_UCODE_IMAGE);
+    pGspImageHash = (PBINDATA_STORAGE)bindataArchiveGetStorage(pBinArchive, BINDATA_LABEL_UCODE_HASH);
+    pGspImageSignature = (PBINDATA_STORAGE)bindataArchiveGetStorage(pBinArchive, BINDATA_LABEL_UCODE_SIG);
+    pGspImagePublicKey = (PBINDATA_STORAGE)bindataArchiveGetStorage(pBinArchive, BINDATA_LABEL_UCODE_PKEY);
 
     if ((pGspImage == NULL) || (pGspImageHash == NULL) ||
         (pGspImageSignature == NULL) || (pGspImagePublicKey == NULL))
@@ -850,15 +1050,17 @@ kfspSetupGspImages
 
     pGspImageSize = bindataGetBufferSize(pGspImage);
     pGspImageMapSize = NV_ALIGN_UP(pGspImageSize, 0x1000);
+    if ((pKernelFsp->pGspFmcMemdesc == NULL) || !bReUseInitMem)
+    {
+        NV_ASSERT(pKernelFsp->pGspFmcMemdesc == NULL); // If we assert the pointer becomes a zombie.
+        status = memdescCreate(&pKernelFsp->pGspFmcMemdesc, pGpu, pGspImageMapSize,
+                               0, NV_TRUE, ADDR_SYSMEM, NV_MEMORY_CACHED, flags);
+        NV_ASSERT_OR_GOTO(status == NV_OK, failed);
 
-    status = memdescCreate(&pKernelFsp->pGspFmcMemdesc, pGpu, pGspImageMapSize,
-                           0, NV_TRUE, ADDR_SYSMEM, NV_MEMORY_CACHED, flags);
-    NV_ASSERT_OR_GOTO(status == NV_OK, failed);
-
-    memdescTagAlloc(status, NV_FB_ALLOC_RM_INTERNAL_OWNER_UNNAMED_TAG_7,
-                    pKernelFsp->pGspFmcMemdesc);
-    NV_ASSERT_OR_GOTO(status == NV_OK, failed);
-
+        memdescTagAlloc(status, NV_FB_ALLOC_RM_INTERNAL_OWNER_UNNAMED_TAG_7,
+                        pKernelFsp->pGspFmcMemdesc);
+        NV_ASSERT_OR_GOTO(status == NV_OK, failed);
+    }
     status = memdescMap(pKernelFsp->pGspFmcMemdesc, 0, pGspImageMapSize, NV_TRUE,
                         NV_PROTECT_READ_WRITE, &pVaKernel, &pPrivKernel);
     NV_ASSERT_OR_GOTO(status == NV_OK, failed);
@@ -876,10 +1078,14 @@ kfspSetupGspImages
     status = bindataWriteToBuffer(pGspImageHash, (NvU8*)pCotPayload->hash384, sizeof(pCotPayload->hash384));
     NV_ASSERT_OR_GOTO(status == NV_OK, failed);
 
-    status = bindataWriteToBuffer(pGspImageSignature, (NvU8*)pCotPayload->signature, sizeof(pCotPayload->signature));
+    NV_ASSERT_OR_GOTO(bindataGetBufferSize(pGspImageSignature) == pKernelFsp->cotPayloadSignatureSize, failed);
+    NV_ASSERT_OR_GOTO(bindataGetBufferSize(pGspImageSignature) <= sizeof(pCotPayload->signature), failed);
+    status = bindataWriteToBuffer(pGspImageSignature, (NvU8*)pCotPayload->signature, bindataGetBufferSize(pGspImageSignature));
     NV_ASSERT_OR_GOTO(status == NV_OK, failed);
 
-    status = bindataWriteToBuffer(pGspImagePublicKey, (NvU8*)pCotPayload->publicKey, sizeof(pCotPayload->publicKey));
+    NV_ASSERT_OR_GOTO(bindataGetBufferSize(pGspImagePublicKey) == pKernelFsp->cotPayloadPublicKeySize, failed);
+    NV_ASSERT_OR_GOTO(bindataGetBufferSize(pGspImagePublicKey) <= sizeof(pCotPayload->publicKey), failed);
+    status = bindataWriteToBuffer(pGspImagePublicKey, (NvU8*)pCotPayload->publicKey, bindataGetBufferSize(pGspImagePublicKey));
     NV_ASSERT_OR_GOTO(status == NV_OK, failed);
 
     // Set up boot args based on the mode of operation
@@ -983,6 +1189,8 @@ kfspDumpDebugState_GH100
 
     NV_PRINTF(LEVEL_ERROR, "GPU %04x:%02x:%02x\n",
               gpuGetDomain(pGpu), gpuGetBus(pGpu), gpuGetDevice(pGpu));
+
+
     NV_PRINTF(LEVEL_ERROR, "NV_PFSP_FALCON_COMMON_SCRATCH_GROUP_2(0) = 0x%x\n",
               GPU_REG_RD32(pGpu, NV_PFSP_FALCON_COMMON_SCRATCH_GROUP_2(0)));
     NV_PRINTF(LEVEL_ERROR, "NV_PFSP_FALCON_COMMON_SCRATCH_GROUP_2(1) = 0x%x\n",
@@ -991,6 +1199,11 @@ kfspDumpDebugState_GH100
               GPU_REG_RD32(pGpu, NV_PFSP_FALCON_COMMON_SCRATCH_GROUP_2(2)));
     NV_PRINTF(LEVEL_ERROR, "NV_PFSP_FALCON_COMMON_SCRATCH_GROUP_2(3) = 0x%x\n",
               GPU_REG_RD32(pGpu, NV_PFSP_FALCON_COMMON_SCRATCH_GROUP_2(3)));
+
+    NV_PRINTF(LEVEL_ERROR, "NV_PGSP_FALCON_MAILBOX0 = 0x%x\n",
+              GPU_REG_RD32(pGpu, NV_PGSP_FALCON_MAILBOX0));
+    NV_PRINTF(LEVEL_ERROR, "NV_PGSP_FALCON_MAILBOX1 = 0x%x\n",
+              GPU_REG_RD32(pGpu, NV_PGSP_FALCON_MAILBOX1));
 }
 
 /*!
@@ -1095,16 +1308,12 @@ kfspPrepareBootCommands_GH100
 {
     NV_STATUS status = NV_OK;
     NV_STATUS statusBoot;
-
+    NvU32 data = 0;
     NvU32 frtsSize = 0;
     NvP64 pVaKernel = NULL;
     NvP64 pPrivKernel = NULL;
-
-    status = kfspSafeToSendBootCommands(pGpu, pKernelFsp);
-    if (status != NV_OK)
-    {
-        return status;
-    }
+    NvBool bIsKeepWPRGc6 = IS_GPU_GC6_STATE_EXITING(pGpu);
+    NvBool bReUseInitMem  = pGpu->getProperty(pGpu, PDB_PROP_GPU_REUSE_INIT_CONTING_MEM);
 
     statusBoot = kfspWaitForSecureBoot_HAL(pGpu, pKernelFsp);
 
@@ -1116,14 +1325,65 @@ kfspPrepareBootCommands_GH100
         goto failed;
     }
 
-    pKernelFsp->pCotPayload = portMemAllocNonPaged(sizeof(NVDM_PAYLOAD_COT));
-    NV_CHECK_OR_RETURN(LEVEL_ERROR, pKernelFsp->pCotPayload != NULL, NV_ERR_NO_MEMORY);
-    portMemSet(pKernelFsp->pCotPayload, 0, sizeof(NVDM_PAYLOAD_COT));
+    statusBoot = kfspSafeToSendBootCommands(pGpu, pKernelFsp);
+    if (statusBoot != NV_OK)
+    {
+        NV_PRINTF(LEVEL_ERROR, "FSP secure boot GSP prechecks failed.\n");
+        status = statusBoot;
+        goto failed;
+    }
+
+    if (!pGpu->getProperty(pGpu, PDB_PROP_GPU_IN_PM_RESUME_CODEPATH))
+    {
+        if (!IS_GSP_CLIENT(pGpu))
+        {
+            kfspCheckForClockBoostCapability_HAL(pGpu, pKernelFsp);
+        }
+
+        pKernelFsp->bClockBoostDisabledViaRegkey = NV_FALSE;
+
+        // Read and parse clock boost regkey, for the feature override
+        if ((osReadRegistryDword(pGpu, NV_REG_STR_RM_BOOT_GSPRM_WITH_BOOST_CLOCKS, &data) == NV_OK) &&
+            (data == NV_REG_STR_RM_BOOT_GSPRM_WITH_BOOST_CLOCKS_DISABLED))
+        {
+            pKernelFsp->bClockBoostDisabledViaRegkey = NV_TRUE;
+        }
+    }
+
+    if (pKernelFsp->bClockBoostSupported)
+    {
+        NvU8 cmd;
+
+        if (pKernelFsp->bClockBoostDisabledViaRegkey)
+        {
+            cmd = FSP_CLOCK_BOOST_FEATURE_DISABLE_SUBMESSAGE_ID;
+        }
+        else
+        {
+            cmd = FSP_CLOCK_BOOST_FEATURE_ENABLE_SUBMESSAGE_ID;
+        }
+
+        status = kfspSendClockBoostRpc_HAL(pGpu, pKernelFsp, cmd);
+
+        if (status != NV_OK)
+        {
+            NV_PRINTF(LEVEL_ERROR, "Clock boost feature cmd %d via FSP failed with error 0x%x\n", cmd, status);
+            goto failed;
+        }
+    }
+
+    // COT payload is freed in FSP state cleanup during state destroy.
+    if (!pGpu->getProperty(pGpu, PDB_PROP_GPU_IN_PM_RESUME_CODEPATH))
+    {
+        pKernelFsp->pCotPayload = portMemAllocNonPaged(sizeof(NVDM_PAYLOAD_COT));
+        NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR, (pKernelFsp->pCotPayload == NULL) ? NV_ERR_NO_MEMORY : NV_OK, failed);
+        portMemSet(pKernelFsp->pCotPayload, 0, sizeof(NVDM_PAYLOAD_COT));
+    }
 
     frtsSize = NV_PGC6_AON_FRTS_INPUT_WPR_SIZE_SECURE_SCRATCH_GROUP_03_0_WPR_SIZE_1MB_IN_4K << 12;
     NV_ASSERT(frtsSize != 0);
 
-    pKernelFsp->pCotPayload->version = 1;
+    pKernelFsp->pCotPayload->version = pKernelFsp->cotPayloadVersion;
     pKernelFsp->pCotPayload->size = sizeof(NVDM_PAYLOAD_COT);
 
     // Set up sysmem for FRTS copy
@@ -1136,13 +1396,17 @@ kfspPrepareBootCommands_GH100
         // FSP (an unit inside GPU) and hence placed in unprotected sysmem
         //
         flags = MEMDESC_FLAGS_ALLOC_IN_UNPROTECTED_MEMORY;
-        status = memdescCreate(&pKernelFsp->pSysmemFrtsMemdesc, pGpu, frtsSize,
-                               0, NV_TRUE, ADDR_SYSMEM, NV_MEMORY_CACHED, flags);
-        NV_ASSERT_OR_GOTO(status == NV_OK, failed);
+        if ((pKernelFsp->pSysmemFrtsMemdesc == NULL) || !bReUseInitMem)
+        {
+            NV_ASSERT(pKernelFsp->pSysmemFrtsMemdesc == NULL); // If we assert the pointer becomes a zombie.
+            status = memdescCreate(&pKernelFsp->pSysmemFrtsMemdesc, pGpu, frtsSize,
+                                   0, NV_TRUE, ADDR_SYSMEM, NV_MEMORY_CACHED, flags);
+            NV_ASSERT_OR_GOTO(status == NV_OK, failed);
 
-        memdescTagAlloc(status, NV_FB_ALLOC_RM_INTERNAL_OWNER_UNNAMED_TAG_8,
-                        pKernelFsp->pSysmemFrtsMemdesc);
-        NV_ASSERT_OR_GOTO(status == NV_OK, failed);
+            memdescTagAlloc(status, NV_FB_ALLOC_RM_INTERNAL_OWNER_UNNAMED_TAG_8,
+                            pKernelFsp->pSysmemFrtsMemdesc);
+            NV_ASSERT_OR_GOTO(status == NV_OK, failed);
+        }
 
         // Set up a kernel mapping for future use in RM
         status = memdescMap(pKernelFsp->pSysmemFrtsMemdesc, 0, frtsSize, NV_TRUE,
@@ -1162,8 +1426,11 @@ kfspPrepareBootCommands_GH100
             failed);
     }
 
+    //
     // Set up vidmem for FRTS copy
-    if (!pKernelFsp->getProperty(pKernelFsp, PDB_PROP_KFSP_DISABLE_FRTS_VIDMEM))
+    // With Keep WPR feature, set Frts_In_Fb_Requested to False for VBIOS.
+    //
+    if (!pKernelFsp->getProperty(pKernelFsp, PDB_PROP_KFSP_DISABLE_FRTS_VIDMEM) && !bIsKeepWPRGc6)
     {
         //
         // Since we are very early in the boot path, we cannot know how much
@@ -1180,9 +1447,20 @@ kfspPrepareBootCommands_GH100
             memmgrGetFBEndReserveSizeEstimate_HAL(pGpu, GPU_GET_MEMORY_MANAGER(pGpu));
 
         //
-        // Layout: 0|| ....... | FRTS | rsvd est ||END
-        // frtsOffsetFromEnd =        ^ ........ ^
+        // Layout: 0|| ....... | FRTS | PMU | rsvd est ||END
+        // frtsOffsetFromEnd =        ^ .............. ^
         //
+        if (kpmuReservedMemorySizeGet(GPU_GET_KERNEL_PMU(pGpu)) != 0U)
+        {
+            frtsOffsetFromEnd += kfspGetExtraReservedMemorySize_HAL(pGpu, pKernelFsp) +
+                kpmuReservedMemorySizeGet(GPU_GET_KERNEL_PMU(pGpu));
+
+            //
+            // 2M alignment seems to be required? Should be NOP unless kpmuReserve
+            // is non 0 and GH100 WAR is needed
+            //
+            frtsOffsetFromEnd = NV_ALIGN_UP(frtsOffsetFromEnd, 0x200000U);
+        }
         KernelGsp *pKernelGsp = GPU_GET_KERNEL_GSP(pGpu);
 
         //
@@ -1200,18 +1478,30 @@ kfspPrepareBootCommands_GH100
         pKernelFsp->pCotPayload->frtsVidmemOffset = frtsOffsetFromEnd;
         pKernelFsp->pCotPayload->frtsVidmemSize = frtsSize;
     }
+    else
+    {
+        pKernelFsp->pCotPayload->frtsVidmemOffset = 0;
+        pKernelFsp->pCotPayload->frtsVidmemSize = 0;
+    }
 
-    pKernelFsp->pCotPayload->gspFmcSysmemOffset = (NvU64)-1;
-    pKernelFsp->pCotPayload->gspBootArgsSysmemOffset = (NvU64)-1;
+    if (!bIsKeepWPRGc6)
+    {
+        pKernelFsp->pCotPayload->gspFmcSysmemOffset = (NvU64)-1;
+        pKernelFsp->pCotPayload->gspBootArgsSysmemOffset = (NvU64)-1;
+    }
 
     // Set up GSP-FMC for FSP to boot GSP
     if (!pKernelFsp->getProperty(pKernelFsp, PDB_PROP_KFSP_DISABLE_GSPFMC))
     {
-        status = kfspSetupGspImages(pGpu, pKernelFsp, pKernelFsp->pCotPayload);
-        if (status!= NV_OK)
+        // With Keep WPR feature, we can reuse the GSP-FMC image in FB.
+        if (!bIsKeepWPRGc6)
         {
-            NV_PRINTF(LEVEL_ERROR, "Ucode image preparation failed!\n");
-            goto failed;
+            status = kfspSetupGspImages(pGpu, pKernelFsp, pKernelFsp->pCotPayload);
+            if (status!= NV_OK)
+            {
+                NV_PRINTF(LEVEL_ERROR, "Ucode image preparation failed!\n");
+                goto failed;
+            }
         }
 
     }
@@ -1336,6 +1626,9 @@ kfspErrorCode2NvStatusMap_GH100
         case FSP_ERR_IFS_ERR_INVALID_STATE:
         case FSP_ERR_IFS_ERR_INVALID_DATA:
         return NV_ERR_INVALID_DATA;
+
+        case FSP_ERR_PRC_ERROR_INVALID_KNOB_ID:
+        return NV_ERR_INVALID_ARGUMENT;
 
         default:
         return NV_ERR_GENERIC;

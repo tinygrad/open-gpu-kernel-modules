@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2005-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2005-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -289,6 +289,42 @@ typedef enum NV2080_CTRL_PERF_RATED_TDP_ACTION {
 } NV2080_CTRL_PERF_RATED_TDP_ACTION;
 
 /*!
+ * Enumeration VPstates - these are possible VPStates that clients can
+ * request
+ */
+typedef enum NV2080_CTRL_PERF_RATED_TDP_VPSTATE_TYPE {
+    /*!
+     * Choise of the RATED TDP VPstate
+     */
+    NV2080_CTRL_PERF_VPSTATE_RATED_TDP = 0,
+    /*!
+     * Choise of the TURBO BOOST VPstate
+     */
+    NV2080_CTRL_PERF_VPSTATE_TURBO_BOOST = 1,
+    /*!
+     * Number of supported vpstates.
+     *
+     * @Note MUST ALWAYS BE LAST!
+     */
+    NV2080_CTRL_PERF_VPSTATE_NUM_VPSTATES = 2,
+} NV2080_CTRL_PERF_RATED_TDP_VPSTATE_TYPE;
+
+/*!
+ * Enumeration VPstates - these are possible VPStates that clients can
+ * request
+ */
+typedef struct NV2080_CTRL_PERF_RATED_TDP_CLIENT_REQUEST {
+    /*!
+     * [in] - Specified client for request.
+     */
+    NV2080_CTRL_PERF_RATED_TDP_ACTION       action;
+    /*!
+     * [in/out] - Client's requested action.
+     */
+    NV2080_CTRL_PERF_RATED_TDP_VPSTATE_TYPE vPstateType;
+} NV2080_CTRL_PERF_RATED_TDP_CLIENT_REQUEST;
+
+/*!
  * Structure describing dynamic state of the RATED_TDP feature.
  */
 #define NV2080_CTRL_PERF_RATED_TDP_STATUS_PARAMS_MESSAGE_ID (0x6DU)
@@ -323,7 +359,12 @@ typedef struct NV2080_CTRL_PERF_RATED_TDP_STATUS_PARAMS {
      * NV2080_CTRL_PERF_RATED_TDP_ACTION_FORCE_EXCEED or @ref
      * NV2080_CTRL_PERF_RATED_TDP_ACTION_FORCE_LIMIT.
      */
-    NV2080_CTRL_PERF_RATED_TDP_ACTION output;
+    NV2080_CTRL_PERF_RATED_TDP_ACTION       output;
+    /*
+     * [out] - Arbitrated output VPStates of all client requests (@ref inputs).
+     * This is the current VPState of the RATED_TDP feature.
+     */
+    NV2080_CTRL_PERF_RATED_TDP_VPSTATE_TYPE outputVPstate;
     /*!
      * [out] - Array of input client request actions, indexed via @ref
      * NV2080_CTRL_PERF_RATED_TDP_CLIENT_<xyz>.  RM will arbitrate between these
@@ -331,7 +372,15 @@ typedef struct NV2080_CTRL_PERF_RATED_TDP_STATUS_PARAMS {
      * NV2080_CTRL_PERF_RATED_TDP_ACTION_DEFAULT or fallback to choosing @ref
      * NV2080_CTRL_PERF_RATED_TDP_ACTION_FORCE_EXCEED.
      */
-    NV2080_CTRL_PERF_RATED_TDP_ACTION inputs[NV2080_CTRL_PERF_RATED_TDP_CLIENT_NUM_CLIENTS];
+    NV2080_CTRL_PERF_RATED_TDP_ACTION       inputs[NV2080_CTRL_PERF_RATED_TDP_CLIENT_NUM_CLIENTS];
+    /*!
+     * [out] - Array of input client request VPstates, indexed via @ref
+     * NV2080_CTRL_PERF_RATED_TDP_CLIENT_<xyz>.  RM will arbitrate between these
+     * requests, choosing the highest priority request != @ref
+     * NV2080_CTRL_PERF_RATED_TDP_ACTION_DEFAULT or fallback to choosing @ref
+     * NV2080_CTRL_PERF_RATED_TDP_ACTION_FORCE_EXCEED.
+     */
+    NV2080_CTRL_PERF_RATED_TDP_VPSTATE_TYPE vPstateTypes[NV2080_CTRL_PERF_RATED_TDP_CLIENT_NUM_CLIENTS];
 } NV2080_CTRL_PERF_RATED_TDP_STATUS_PARAMS;
 
 /*!
@@ -357,11 +406,15 @@ typedef struct NV2080_CTRL_PERF_RATED_TDP_CONTROL_PARAMS {
     /*!
      * [in] - Specified client for request.
      */
-    NV2080_CTRL_PERF_RATED_TDP_CLIENT client;
+    NV2080_CTRL_PERF_RATED_TDP_CLIENT       client;
     /*!
      * [in/out] - Client's requested action.
      */
-    NV2080_CTRL_PERF_RATED_TDP_ACTION input;
+    NV2080_CTRL_PERF_RATED_TDP_ACTION       input;
+    /*
+     * [in] - Specified VPState of the request
+     */
+    NV2080_CTRL_PERF_RATED_TDP_VPSTATE_TYPE vPstateType;
 } NV2080_CTRL_PERF_RATED_TDP_CONTROL_PARAMS;
 
 #define NV2080_CTRL_PERF_RATED_TDP_GET_CONTROL_PARAMS_MESSAGE_ID (0x6EU)
@@ -418,6 +471,12 @@ typedef struct NV2080_CTRL_PERF_GPUMON_ENGINE_UTIL_SAMPLE {
      * the sample was taken. If no process is active then NULL will be returned.
      */
     char  subProcessName[NV_SUBPROC_NAME_MAX_LENGTH];
+    /*!
+     * PID struct pointer of the process that was active on the engine when the
+     * the sample was taken. If no process is active then NULL pointer
+     * will be returned
+     */
+    NV_DECLARE_ALIGNED(NvU64 pOsPidInfo, 8);
 } NV2080_CTRL_PERF_GPUMON_ENGINE_UTIL_SAMPLE;
 
 /*!
@@ -431,27 +490,27 @@ typedef struct NV2080_CTRL_PERF_GPUMON_PERFMON_UTIL_SAMPLE {
     /*!
      * FB bandwidth utilization sample.
      */
-    NV2080_CTRL_PERF_GPUMON_ENGINE_UTIL_SAMPLE fb;
+    NV_DECLARE_ALIGNED(NV2080_CTRL_PERF_GPUMON_ENGINE_UTIL_SAMPLE fb, 8);
     /*!
      * GR utilization sample.
      */
-    NV2080_CTRL_PERF_GPUMON_ENGINE_UTIL_SAMPLE gr;
+    NV_DECLARE_ALIGNED(NV2080_CTRL_PERF_GPUMON_ENGINE_UTIL_SAMPLE gr, 8);
     /*!
      * NV ENCODER utilization sample.
      */
-    NV2080_CTRL_PERF_GPUMON_ENGINE_UTIL_SAMPLE nvenc;
+    NV_DECLARE_ALIGNED(NV2080_CTRL_PERF_GPUMON_ENGINE_UTIL_SAMPLE nvenc, 8);
     /*!
      * NV DECODER utilization sample.
      */
-    NV2080_CTRL_PERF_GPUMON_ENGINE_UTIL_SAMPLE nvdec;
+    NV_DECLARE_ALIGNED(NV2080_CTRL_PERF_GPUMON_ENGINE_UTIL_SAMPLE nvdec, 8);
     /*!
      * NV JPEG utilization sample.
      */
-    NV2080_CTRL_PERF_GPUMON_ENGINE_UTIL_SAMPLE nvjpg;
+    NV_DECLARE_ALIGNED(NV2080_CTRL_PERF_GPUMON_ENGINE_UTIL_SAMPLE nvjpg, 8);
     /*!
      * NV OFA utilization sample.
      */
-    NV2080_CTRL_PERF_GPUMON_ENGINE_UTIL_SAMPLE nvofa;
+    NV_DECLARE_ALIGNED(NV2080_CTRL_PERF_GPUMON_ENGINE_UTIL_SAMPLE nvofa, 8);
 } NV2080_CTRL_PERF_GPUMON_PERFMON_UTIL_SAMPLE;
 
 /*!

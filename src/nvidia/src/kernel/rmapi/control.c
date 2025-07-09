@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2004-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2004-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -37,6 +37,7 @@
 #include "gpu/gpu.h"
 #include "rmapi/rmapi_specific.h"
 #include "rmapi/rmapi_utils.h"
+#include "kernel/gpu/gsp/gsp_trace_rats_macro.h"
 
 #include "ctrl/ctrl0000/ctrl0000gpuacct.h" // NV0000_CTRL_CMD_GPUACCT_*
 #include "ctrl/ctrl2080/ctrl2080tmr.h" // NV2080_CTRL_CMD_TIMER_SCHEDULE
@@ -110,7 +111,7 @@ exit:
 
     if (status != NV_OK)
     {
-        NV_PRINTF(LEVEL_WARNING, "deferred rmctrl %x failed %x!\n",
+        NV_PRINTF(LEVEL_NOTICE, "deferred rmctrl %x failed %x!\n",
                   rmCtrlParams.cmd, status);
     }
 
@@ -450,11 +451,10 @@ _rmapiRmControl(NvHandle hClient, NvHandle hObject, NvU32 cmd, NvP64 pUserParams
 
     // error check parameters
     if (((paramsSize != 0) && (pUserParams == (NvP64) 0)) ||
-        ((paramsSize == 0) && (pUserParams != (NvP64) 0))
-        || ((getCtrlInfoStatus == NV_OK) && (paramsSize != ctrlParamsSize))
-        )
+        ((paramsSize == 0) && (pUserParams != (NvP64) 0)) ||
+        ((getCtrlInfoStatus == NV_OK) && (paramsSize != ctrlParamsSize)))
     {
-        NV_PRINTF(LEVEL_WARNING,
+        NV_PRINTF(LEVEL_INFO,
                   "bad params: cmd:0x%x ptr " NvP64_fmt " size: 0x%x expect size: 0x%x\n",
                   cmd, pUserParams, paramsSize, ctrlParamsSize);
         rmStatus = NV_ERR_INVALID_ARGUMENT;
@@ -568,7 +568,8 @@ _rmapiRmControl(NvHandle hClient, NvHandle hObject, NvU32 cmd, NvP64 pUserParams
                 {
                     rmStatus = rmapiControlCacheGet(hClient, hObject, cmd,
                                                     rmCtrlParams.pParams,
-                                                    paramsSize);
+                                                    paramsSize,
+                                                    pSecInfo);
 
                     // rmStatus is passed in for error handling
                     rmStatus = serverControlApiCopyOut(&g_resServ,
@@ -659,25 +660,57 @@ serverControl_ValidateVgpu
         }
     }
 
-    //
-    // If context is not privileged enough, check whether this
-    // control call is allowed in current hypervisor environment
-    //
-    if (!bPermissionGranted)
+    return bPermissionGranted;
+}
+
+//
+// Validate privilege level access for specific control command.
+//
+// This function is used for validating access for following clients:
+// 1. Non-Hypervisor clients
+// 2. PF clients
+// 3. Unprivileged processes running in Hypervisor
+// 4. Privileged processes running in Hypervisor, executing an unprivileged control call.
+// 5. Kernel privileged processes running in Hypervisor
+//
+NV_STATUS rmControlValidateClientPrivilegeAccess
+(
+    NvHandle           hClient,
+    NvHandle           hObject,
+    NvU32              cmd,
+    NvU32              ctrlFlags,
+    API_SECURITY_INFO *pSecInfo
+)
+{
+    // permissions check for PRIVILEGED controls
+    if (ctrlFlags & RMCTRL_FLAGS_PRIVILEGED)
     {
+        //
+        // Calls originating from usermode require admin perms while calls
+        // originating from other kernel drivers are always allowed.
+        //
+        if (pSecInfo->privLevel < RS_PRIV_LEVEL_USER_ROOT)
         {
-            // For non-NV0000, identify current hypervisor environment and check for allow flag
-            if
-            (
-                (IS_SRIOV_WITH_VGPU_GSP_ENABLED(pGpu) && (cookieFlags & RMCTRL_FLAGS_CPU_PLUGIN_FOR_VGPU_GSP))
-            )
-            {
-                bPermissionGranted = NV_TRUE;
-            }
+            NV_PRINTF(LEVEL_NOTICE,
+                        "hClient: 0x%08x, hObject 0x%08x, cmd 0x%08x: non-privileged context issued privileged cmd\n",
+                        hClient, hObject, cmd);
+            return NV_ERR_INSUFFICIENT_PERMISSIONS;
         }
     }
 
-    return bPermissionGranted;
+    // permissions check for KERNEL_PRIVILEGED (default) unless NON_PRIVILEGED, PRIVILEGED or INTERNAL is specified
+    if (!(ctrlFlags & (RMCTRL_FLAGS_NON_PRIVILEGED | RMCTRL_FLAGS_PRIVILEGED | RMCTRL_FLAGS_INTERNAL)))
+    {
+        if (pSecInfo->privLevel < RS_PRIV_LEVEL_KERNEL)
+        {
+            NV_PRINTF(LEVEL_NOTICE,
+                        "hClient: 0x%08x, hObject 0x%08x, cmd 0x%08x: non-kernel client issued kernel-only cmd\n",
+                        hClient, hObject, cmd);
+            return NV_ERR_INSUFFICIENT_PERMISSIONS;
+        }
+    }
+
+    return NV_OK;
 }
 
 // validate rmctrl flags
@@ -777,7 +810,7 @@ NV_STATUS serverControl_ValidateCookie
                                                                pRmCtrlExecuteCookie->ctrlFlags);
         if (!bPermissionGranted)
         {
-            NV_PRINTF(LEVEL_WARNING,
+            NV_PRINTF(LEVEL_NOTICE,
                       "hClient: 0x%08x, hObject 0x%08x, cmd 0x%08x: non-privileged hypervisor context issued privileged cmd\n",
                       pRmCtrlParams->hClient, pRmCtrlParams->hObject,
                       pRmCtrlParams->cmd);
@@ -786,43 +819,11 @@ NV_STATUS serverControl_ValidateCookie
     }
     else
     {
-        //
-        // Non-Hypervisor clients
-        // PF clients
-        // Unprivileged processes running in Hypervisor
-        // Privileged processes running in Hypervisor, executing an unprivileged control call.
-        // Kernel privileged processes running in Hypervisor
-        //
-
-        // permissions check for PRIVILEGED controls
-        if (pRmCtrlExecuteCookie->ctrlFlags & RMCTRL_FLAGS_PRIVILEGED)
-        {
-            //
-            // Calls originating from usermode require admin perms while calls
-            // originating from other kernel drivers are always allowed.
-            //
-            if (pRmCtrlParams->secInfo.privLevel < RS_PRIV_LEVEL_USER_ROOT)
-            {
-                NV_PRINTF(LEVEL_WARNING,
-                          "hClient: 0x%08x, hObject 0x%08x, cmd 0x%08x: non-privileged context issued privileged cmd\n",
-                          pRmCtrlParams->hClient, pRmCtrlParams->hObject,
-                          pRmCtrlParams->cmd);
-                return NV_ERR_INSUFFICIENT_PERMISSIONS;
-            }
-        }
-
-        // permissions check for KERNEL_PRIVILEGED (default) unless NON_PRIVILEGED, PRIVILEGED or INTERNAL is specified
-        if (!(pRmCtrlExecuteCookie->ctrlFlags & (RMCTRL_FLAGS_NON_PRIVILEGED | RMCTRL_FLAGS_PRIVILEGED | RMCTRL_FLAGS_INTERNAL)))
-        {
-            if (pRmCtrlParams->secInfo.privLevel < RS_PRIV_LEVEL_KERNEL)
-            {
-                NV_PRINTF(LEVEL_WARNING,
-                          "hClient: 0x%08x, hObject 0x%08x, cmd 0x%08x: non-kernel client issued kernel-only cmd\n",
-                          pRmCtrlParams->hClient, pRmCtrlParams->hObject,
-                          pRmCtrlParams->cmd);
-                return NV_ERR_INSUFFICIENT_PERMISSIONS;
-            }
-        }
+        NV_CHECK_OK_OR_RETURN(LEVEL_NOTICE, rmControlValidateClientPrivilegeAccess(pRmCtrlParams->hClient,
+                                                                                          pRmCtrlParams->hObject,
+                                                                                              pRmCtrlParams->cmd,
+                                                                                        pRmCtrlExecuteCookie->ctrlFlags,
+                                                                                         &pRmCtrlParams->secInfo));
     }
 
     // fail if GPU isn't ready
@@ -839,6 +840,15 @@ NV_STATUS serverControl_ValidateCookie
         (pRmCtrlParams->secInfo.paramLocation != PARAM_LOCATION_KERNEL))
     {
         return NV_ERR_INVALID_PARAMETER;
+    }
+
+    if (pRmCtrlExecuteCookie->ctrlFlags & RMCTRL_FLAGS_RM_TEST_ONLY_CODE)
+    {
+        OBJSYS *pSys = SYS_GET_INSTANCE();
+        if (!pSys->getProperty(pSys, PDB_PROP_SYS_ENABLE_RM_TEST_ONLY_CODE))
+        {
+            return NV_ERR_TEST_ONLY_CODE_NOT_ENABLED;
+        }
     }
 
     return NV_OK;
@@ -893,6 +903,22 @@ serverControlLookupLockFlags
 
     if (lock == RS_LOCK_TOP)
     {
+        if (controlFlags & RMCTRL_FLAGS_NO_API_LOCK)
+        {
+            // NO_API_LOCK requires no access to GPU lock protected data
+            NV_ASSERT_OR_RETURN(((controlFlags & RMCTRL_FLAGS_NO_GPUS_LOCK) != 0),
+                NV_ERR_INVALID_LOCK_STATE);
+
+            // NO_API_LOCK used in combination with API_LOCK_READONLY does not make sense
+            NV_ASSERT_OR_RETURN(((controlFlags & RMCTRL_FLAGS_API_LOCK_READONLY) == 0),
+                NV_ERR_INVALID_LOCK_STATE);
+
+            RS_LOCK_INFO *pLockInfo = pRmCtrlParams->pLockInfo;
+
+            pLockInfo->flags |= RM_LOCK_FLAGS_NO_API_LOCK;
+            return NV_OK;
+        }
+
         if (!serverSupportsReadOnlyLock(&g_resServ, RS_LOCK_TOP, RS_API_CTRL))
         {
             *pAccess = LOCK_ACCESS_WRITE;
@@ -946,15 +972,34 @@ serverControlLookupLockFlags
                 pLockInfo->flags &= ~RM_LOCK_FLAGS_NO_GPUS_LOCK;
                 pLockInfo->flags &= ~RM_LOCK_FLAGS_GPU_GROUP_LOCK;
             }
-
-            if (controlFlags & RMCTRL_FLAGS_GPU_LOCK_READONLY)
-                *pAccess = LOCK_ACCESS_READ;
         }
 
         return NV_OK;
     }
 
     return NV_ERR_NOT_SUPPORTED;
+}
+
+NV_STATUS
+serverControlLookupClientLockFlags
+(
+    RmCtrlExecuteCookie *pRmCtrlExecuteCookie,
+    enum CLIENT_LOCK_TYPE *pClientLockType
+)
+{
+    NvU32 controlFlags = pRmCtrlExecuteCookie->ctrlFlags;
+
+    if ((controlFlags & RMCTRL_FLAGS_ALL_CLIENT_LOCK) != 0)
+    {
+        *pClientLockType = CLIENT_LOCK_ALL;
+
+        // Locking all clients requires the RW API lock
+        NV_ASSERT_OR_RETURN(rmapiLockIsWriteOwner(), NV_ERR_INVALID_LOCK_STATE);
+    }
+    else
+        *pClientLockType = CLIENT_LOCK_SPECIFIC;
+
+    return NV_OK;
 }
 
 NV_STATUS

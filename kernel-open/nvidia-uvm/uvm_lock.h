@@ -1,5 +1,5 @@
 /*******************************************************************************
-    Copyright (c) 2015-2022 NVIDIA Corporation
+    Copyright (c) 2015-2025 NVIDIA Corporation
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"), to
@@ -68,6 +68,17 @@
 //      and instance pointer mappings.
 //
 //      This should be taken whenever global GPU state might need to be modified.
+//
+// - Access counters VA space enablement state lock
+//      Order: UVM_LOCK_ORDER_ACCESS_COUNTERS
+//      Exclusive lock (mutex)
+//
+//      This protects VA space state associated with access counters enablement.
+//      Blackwell+ GPUs may have multiple access counters notification buffers
+//      and their "atomic" enablement is protected by this lock.
+//
+//      This should be taken whenever VA space access counters state might need
+//      to be modified.
 //
 // - GPU ISR lock
 //      Order: UVM_LOCK_ORDER_ISR
@@ -322,6 +333,15 @@
 //      Operations not allowed while holding this lock
 //      - GPU memory allocation which can evict
 //
+// - Channel pool key rotation lock
+//      Order: UVM_LOCK_ORDER_KEY_ROTATION
+//      Condition: Confidential Computing is enabled
+//      Mutex per channel pool
+//
+//      The lock ensures mutual exclusion during key rotation affecting all the
+//      channels in the associated pool. Key rotation in WLC pools is handled
+//      using a separate lock order, see UVM_LOCK_ORDER_KEY_ROTATION_WLC below.
+//
 // - CE channel CSL channel pool semaphore
 //      Order: UVM_LOCK_ORDER_CSL_PUSH
 //      Condition: The Confidential Computing feature is enabled
@@ -337,6 +357,15 @@
 //
 //      Operations allowed while holding this lock
 //      - Pushing work to CE channels (except for WLC channels)
+//
+// - WLC channel pool key rotation lock
+//      Order: UVM_LOCK_ORDER_KEY_ROTATION_WLC
+//      Condition: Confidential Computing is enabled
+//      Mutex of WLC channel pool
+//
+//      The lock has the same purpose as the regular channel pool key rotation
+//      lock. Using a different order lock for WLC channels allows key rotation
+//      on those channels during indirect work submission.
 //
 // - WLC CSL channel pool semaphore
 //      Order: UVM_LOCK_ORDER_CSL_WLC_PUSH
@@ -403,6 +432,11 @@
 //      Order: UVM_LOCK_ORDER_PMM_ROOT_CHUNK
 //      Exclusive bitlock (mutex) per each root chunk internal to PMM.
 //
+// - Access counters clear operations
+//     Order: UVM_LOCK_ACCESS_COUNTERS_CLEAR_OPS
+//
+//     It protects the parent_gpu's access counters clear tracker.
+//
 // - Channel lock
 //      Order: UVM_LOCK_ORDER_CHANNEL
 //      Spinlock (uvm_spinlock_t) or exclusive lock (mutex)
@@ -448,7 +482,7 @@
 //
 //      CE semaphore payloads are encrypted, and require to take the CSL lock
 //      (UVM_LOCK_ORDER_LEAF) to decrypt the payload.
-
+//
 // - CSL Context
 //      Order: UVM_LOCK_ORDER_CSL_CTX
 //      When the Confidential Computing feature is enabled, encrypt/decrypt
@@ -469,6 +503,7 @@ typedef enum
     UVM_LOCK_ORDER_INVALID = 0,
     UVM_LOCK_ORDER_GLOBAL_PM,
     UVM_LOCK_ORDER_GLOBAL,
+    UVM_LOCK_ORDER_ACCESS_COUNTERS,
     UVM_LOCK_ORDER_ISR,
     UVM_LOCK_ORDER_MMAP_LOCK,
     UVM_LOCK_ORDER_VA_SPACES_LIST,
@@ -484,13 +519,16 @@ typedef enum
     UVM_LOCK_ORDER_CONF_COMPUTING_DMA_BUFFER_POOL,
     UVM_LOCK_ORDER_CHUNK_MAPPING,
     UVM_LOCK_ORDER_PAGE_TREE,
+    UVM_LOCK_ORDER_KEY_ROTATION,
     UVM_LOCK_ORDER_CSL_PUSH,
+    UVM_LOCK_ORDER_KEY_ROTATION_WLC,
     UVM_LOCK_ORDER_CSL_WLC_PUSH,
     UVM_LOCK_ORDER_CSL_SEC2_PUSH,
     UVM_LOCK_ORDER_PUSH,
     UVM_LOCK_ORDER_PMM,
     UVM_LOCK_ORDER_PMM_PMA,
     UVM_LOCK_ORDER_PMM_ROOT_CHUNK,
+    UVM_LOCK_ACCESS_COUNTERS_CLEAR_OPS,
     UVM_LOCK_ORDER_CHANNEL,
     UVM_LOCK_ORDER_WLC_CHANNEL,
     UVM_LOCK_ORDER_TOOLS_VA_SPACE_LIST,
@@ -503,6 +541,7 @@ typedef enum
     // This lock order can be removed after RM no longer relies on RPC event
     // notifications.
     UVM_LOCK_ORDER_CSL_CTX,
+
     UVM_LOCK_ORDER_LEAF,
     UVM_LOCK_ORDER_COUNT,
 } uvm_lock_order_t;
@@ -721,7 +760,8 @@ bool __uvm_locking_initialized(void);
         ret;                                            \
     })
 
-// Helper for calling a UVM-RM interface function that returns void with lock recording
+// Helper for calling a UVM-RM interface function that returns void with lock
+// recording
 #define uvm_rm_locked_call_void(call) ({                \
         uvm_record_lock_rm_all();                       \
         call;                                           \
@@ -1208,7 +1248,7 @@ static void __uvm_bit_lock(uvm_bit_locks_t *bit_locks, unsigned long bit)
 {
     int res;
 
-    res = UVM_WAIT_ON_BIT_LOCK(bit_locks->bits, bit, TASK_UNINTERRUPTIBLE);
+    res = wait_on_bit_lock(bit_locks->bits, bit, TASK_UNINTERRUPTIBLE);
     UVM_ASSERT_MSG(res == 0, "Uninterruptible task interrupted: %d\n", res);
     uvm_assert_bit_locked(bit_locks, bit);
 }

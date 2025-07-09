@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2004-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2004-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -33,6 +33,7 @@
 #include "gpu/mem_mgr/mem_mgr.h"
 #include "mem_mgr/io_vaspace.h"
 #include "vgpu/vgpu_events.h"
+#include "containers/eheap_old.h"
 
 // Prototypes for static functions
 static NV_STATUS _kbusConstructVirtualBar2Heaps(KernelBus *pKernelBus, NvU32 gfid);
@@ -603,7 +604,7 @@ kbusMapBar2ApertureCached_VBAR2
     // Allocate VA SPACE
     //
     pVASpaceHeap = pKernelBus->virtualBar2[GPU_GFID_PF].pVASpaceHeap;
-    allocSize = pMemDesc->PageCount << RM_PAGE_SHIFT;
+    allocSize = GET_SIZE_FROM_PAGE_AND_COUNT(pMemDesc->PageCount, pMemDesc->pageArrayGranularity);
     bEvictNeeded =
         (NV_OK != pVASpaceHeap->eheapAlloc(pVASpaceHeap, VAS_EHEAP_OWNER_NVRM,
                                            &allocFlags, &vAddr, &allocSize,
@@ -624,7 +625,8 @@ kbusMapBar2ApertureCached_VBAR2
              pMap = listPrev(&pKernelBus->virtualBar2[GPU_GFID_PF].cachedMapList, pMap))
         {
             NV_ASSERT(pMap->pMemDesc != NULL);
-            if (pMap->pMemDesc->PageCount >= pMemDesc->PageCount)
+            if ((GET_SIZE_FROM_PAGE_AND_COUNT(pMap->pMemDesc->PageCount, pMap->pMemDesc->pageArrayGranularity)) >=
+                (GET_SIZE_FROM_PAGE_AND_COUNT(pMemDesc->PageCount, pMemDesc->pageArrayGranularity)))
             {
 #if NV_PRINTF_ENABLED
                 pKernelBus->virtualBar2[GPU_GFID_PF].evictions++;
@@ -666,7 +668,6 @@ kbusMapBar2ApertureCached_VBAR2
             NV_PRINTF(LEVEL_ERROR,
                       "Not enough contiguous BAR2 VA space left allocSize %llx!\n",
                       allocSize);
-            DBG_BREAKPOINT();
             return NULL;
         }
     }
@@ -850,6 +851,17 @@ kbusValidateBar2ApertureMapping_VBAR2_SRIOV
     return kbusValidateBar2ApertureMapping_VBAR2(pGpu, pKernelBus, pMemDesc, pCpu);
 }
 
+NvBool
+kbusBar2IsReady_SCRATCH
+(
+    OBJGPU *pGpu,
+    KernelBus *pKernelBus
+)
+{
+    // The scratch implementation is just an allocation, so it's always ready
+    return NV_TRUE;
+}
+
 /*!
  * @brief Fake BAR2 map API to a scratch buffer.
  *
@@ -870,6 +882,20 @@ kbusMapBar2Aperture_SCRATCH
     }
 
     return portMemAllocNonPaged(pMemDesc->Size);
+}
+
+NvBool
+kbusBar2IsReady_VBAR2
+(
+    OBJGPU *pGpu,
+    KernelBus *pKernelBus
+)
+{
+    //
+    // The CPU mapping is the last part of BAR2 to be initialized, so we can
+    // check it here to see if BAR2 is ready
+    //
+    return (pKernelBus->virtualBar2[GPU_GFID_PF].pCpuMapping != NULL);
 }
 
 /*!
@@ -952,6 +978,19 @@ kbusMapBar2Aperture_VBAR2
 
     // Call the lower-level routine
     return kbusMapBar2ApertureCached_VBAR2(pGpu, pKernelBus, pMemDesc, flags);
+}
+
+NvBool
+kbusBar2IsReady_VBAR2_SRIOV
+(
+    OBJGPU *pGpu,
+    KernelBus *pKernelBus
+)
+{
+    if (IS_VIRTUAL_WITHOUT_SRIOV(pGpu) || gpuIsWarBug200577889SriovHeavyEnabled(pGpu))
+        return kbusBar2IsReady_SCRATCH(pGpu, pKernelBus);
+
+    return kbusBar2IsReady_VBAR2(pGpu, pKernelBus);
 }
 
 /*!

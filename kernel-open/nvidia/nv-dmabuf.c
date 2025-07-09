@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2022-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -33,19 +33,16 @@ typedef struct nv_dma_buf_mem_handle
     NvU64                    size;
 
     // RM memdesc specific data
-    void                    *static_mem_info;
+    void                    *mem_info;
 
     //
     // Refcount for phys addresses
-    // If refcount > 0, phys address ranges in phys_range are reused.
+    // If refcount > 0, phys address ranges in memArea are reused.
     //
     NvU64                    phys_refcount;
 
-    // Number of scatterlist entries in phys_range[] array
-    NvU32                    phys_range_count;
-
-    // List of phys address ranges to be used to dma map
-    nv_phys_addr_range_t    *phys_range;
+    // Scatterlist of all the memory ranges associated with the buf
+    MemoryArea               memArea;
 } nv_dma_buf_mem_handle_t;
 
 typedef struct nv_dma_buf_file_private
@@ -93,6 +90,20 @@ typedef struct nv_dma_buf_file_private
     // fetched during dma-buf create/reuse instead of in map.
     //
     NvBool                   static_phys_addrs;
+
+    //
+    // Type of mapping requested, one of:
+    //   NV_DMABUF_EXPORT_MAPPING_TYPE_DEFAULT
+    //   NV_DMABUF_EXPORT_MAPPING_TYPE_FORCE_PCIE
+    //
+    NvU8                     mapping_type;
+
+    //
+    // On some coherent platforms requesting mapping_type FORCE_PCIE,
+    // peer-to-peer is expected to bypass the IOMMU due to hardware
+    // limitations. On such systems, IOMMU map/unmap will be skipped.
+    //
+    NvBool                   skip_iommu;
 } nv_dma_buf_file_private_t;
 
 static void
@@ -331,7 +342,7 @@ nv_dma_buf_dup_mem_handles(
         priv->handles[index].h_memory = h_memory_duped;
         priv->handles[index].offset = params->offsets[i];
         priv->handles[index].size = params->sizes[i];
-        priv->handles[index].static_mem_info = mem_info;
+        priv->handles[index].mem_info = mem_info;
         priv->num_objects++;
         index++;
         count++;
@@ -380,14 +391,15 @@ nv_put_phys_addresses(
             continue;
         }
 
-        // Per-handle phys_range is freed by RM
+        // Per-handle memArea is freed by RM
         rm_dma_buf_unmap_mem_handle(sp, priv->nv, priv->h_client,
                                     priv->handles[index].h_memory,
-                                    priv->handles[index].size,
-                                    &priv->handles[index].phys_range,
-                                    priv->handles[index].phys_range_count);
+                                    priv->mapping_type,
+                                    priv->handles[index].mem_info,
+                                    priv->static_phys_addrs,
+                                    priv->handles[index].memArea);
 
-        priv->handles[index].phys_range_count = 0;
+        priv->handles[index].memArea.numRanges = 0;
     }
 }
 
@@ -506,14 +518,15 @@ nv_dma_buf_get_phys_addresses (
             continue;
         }
 
-        // Per-handle phys_range is allocated by RM
+        // Per-handle memArea is allocated by RM
         status = rm_dma_buf_map_mem_handle(sp, priv->nv, priv->h_client,
                                            priv->handles[index].h_memory,
-                                           priv->handles[index].offset,
-                                           priv->handles[index].size,
-                                           priv->handles[index].static_mem_info,
-                                           &priv->handles[index].phys_range,
-                                           &priv->handles[index].phys_range_count);
+                                           mrangeMake(priv->handles[index].offset,
+                                                priv->handles[index].size),
+                                           priv->mapping_type,
+                                           priv->handles[index].mem_info,
+                                           priv->static_phys_addrs,
+                                           &priv->handles[index].memArea);
         if (status != NV_OK)
         {
             goto unmap_handles;
@@ -560,21 +573,33 @@ failed:
 static void
 nv_dma_buf_unmap_pages(
     struct device *dev,
-    struct sg_table *sgt
+    struct sg_table *sgt,
+    nv_dma_buf_file_private_t *priv
 )
 {
+    if (priv->skip_iommu)
+    {
+        return;
+    }
+
     dma_unmap_sg(dev, sgt->sgl, sgt->nents, DMA_BIDIRECTIONAL);
 }
 
 static void
 nv_dma_buf_unmap_pfns(
     struct device *dev,
-    struct sg_table *sgt
+    struct sg_table *sgt,
+    nv_dma_buf_file_private_t *priv
 )
 {
     nv_dma_device_t peer_dma_dev = {{ 0 }};
     struct scatterlist *sg = sgt->sgl;
     NvU32 i;
+
+    if (priv->skip_iommu)
+    {
+        return;
+    }
 
     peer_dma_dev.dev = dev;
     peer_dma_dev.addressable_range.limit = (NvU64)dev->dma_mask;
@@ -587,6 +612,42 @@ nv_dma_buf_unmap_pfns(
     }
 }
 
+static NvU32
+nv_dma_buf_get_sg_count (
+    struct device *dev,
+    nv_dma_buf_file_private_t *priv,
+    NvU32  *max_seg_size
+)
+{
+    NvU32 dma_max_seg_size, i;
+    NvU32 nents = 0;
+
+    dma_max_seg_size = NV_ALIGN_DOWN(dma_get_max_seg_size(dev), PAGE_SIZE);
+    if (dma_max_seg_size < PAGE_SIZE)
+    {
+        return 0;
+    }
+
+    // Calculate nents needed to allocate sg_table
+    for (i = 0; i < priv->num_objects; i++)
+    {
+        NvU32 range_count = priv->handles[i].memArea.numRanges;
+        NvU32 index;
+
+        for (index = 0; index < range_count; index++)
+        {
+            NvU64 length = priv->handles[i].memArea.pRanges[index].size;
+            NvU64 count = length + dma_max_seg_size - 1;
+            do_div(count, dma_max_seg_size);
+            nents += count;
+        }
+    }
+
+    *max_seg_size = dma_max_seg_size;
+
+    return nents;
+}
+
 static struct sg_table*
 nv_dma_buf_map_pages (
     struct device *dev,
@@ -595,15 +656,11 @@ nv_dma_buf_map_pages (
 {
     struct sg_table *sgt = NULL;
     struct scatterlist *sg;
-    NvU32 nents = 0;
-    NvU32 i;
+    NvU32 dma_max_seg_size = 0;
+    NvU32 i, nents;
     int rc;
 
-    // Calculate nents needed to allocate sg_table
-    for (i = 0; i < priv->num_objects; i++)
-    {
-        nents += priv->handles[i].phys_range_count;
-    }
+    nents = nv_dma_buf_get_sg_count(dev, priv, &dma_max_seg_size);
 
     NV_KZALLOC(sgt, sizeof(struct sg_table));
     if (sgt == NULL)
@@ -621,23 +678,33 @@ nv_dma_buf_map_pages (
 
     for (i = 0; i < priv->num_objects; i++)
     {
-        NvU32 range_count = priv->handles[i].phys_range_count;
+        NvU32 range_count = priv->handles[i].memArea.numRanges;
         NvU32 index = 0;
         for (index = 0; index < range_count; index++)
         {
-            NvU64 addr = priv->handles[i].phys_range[index].addr;
-            NvU64 len  = priv->handles[i].phys_range[index].len;
-            struct page *page = NV_GET_PAGE_STRUCT(addr);
+            NvU64 dma_addr = priv->handles[i].memArea.pRanges[index].start;
+            NvU64 dma_len  = priv->handles[i].memArea.pRanges[index].size;
 
-            if ((page == NULL) || (sg == NULL))
+            // Split each range into dma_max_seg_size chunks
+            while(dma_len != 0)
             {
-                goto free_table;
-            }
+                NvU32 sg_len = NV_MIN(dma_len, dma_max_seg_size);
+                struct page *page = NV_GET_PAGE_STRUCT(dma_addr);
 
-            sg_set_page(sg, page, len, 0);
-            sg = sg_next(sg);
+                if ((page == NULL) || (sg == NULL))
+                {
+                    goto free_table;
+                }
+
+                sg_set_page(sg, page, sg_len, NV_GET_OFFSET_IN_PAGE(dma_addr));
+                dma_addr += sg_len;
+                dma_len -= sg_len;
+                sg = sg_next(sg);
+            }
         }
     }
+
+    WARN_ON(sg != NULL);
 
     // DMA map the sg_table
     rc = dma_map_sg(dev, sgt->sgl, sgt->orig_nents, DMA_BIDIRECTIONAL);
@@ -668,36 +735,16 @@ nv_dma_buf_map_pfns (
     struct sg_table *sgt = NULL;
     struct scatterlist *sg;
     nv_dma_device_t peer_dma_dev = {{ 0 }};
-    NvU32 dma_max_seg_size;
-    NvU32 nents = 0;
+    NvU32 dma_max_seg_size = 0;
     NvU32 mapped_nents = 0;
     NvU32 i = 0;
+    NvU32 nents;
     int rc = 0;
 
     peer_dma_dev.dev = dev;
     peer_dma_dev.addressable_range.limit = (NvU64)dev->dma_mask;
 
-    dma_max_seg_size = NV_ALIGN_DOWN(dma_get_max_seg_size(dev), PAGE_SIZE);
-
-    if (dma_max_seg_size < PAGE_SIZE)
-    {
-        return NULL;
-    }
-
-    // Calculate nents needed to allocate sg_table
-    for (i = 0; i < priv->num_objects; i++)
-    {
-        NvU32 range_count = priv->handles[i].phys_range_count;
-        NvU32 index;
-
-        for (index = 0; index < range_count; index++)
-        {
-            NvU64 length = priv->handles[i].phys_range[index].len;
-            NvU64 count = length + dma_max_seg_size - 1;
-            do_div(count, dma_max_seg_size);
-            nents += count;
-        }
-    }
+    nents = nv_dma_buf_get_sg_count(dev, priv, &dma_max_seg_size);
 
     NV_KZALLOC(sgt, sizeof(struct sg_table));
     if (sgt == NULL)
@@ -714,13 +761,13 @@ nv_dma_buf_map_pfns (
     sg = sgt->sgl;
     for (i = 0; i < priv->num_objects; i++)
     {
-        NvU32 range_count = priv->handles[i].phys_range_count;
+        NvU32 range_count = priv->handles[i].memArea.numRanges;
         NvU32 index = 0;
 
         for (index = 0; index < range_count; index++)
         {
-            NvU64 dma_addr = priv->handles[i].phys_range[index].addr;
-            NvU64 dma_len  = priv->handles[i].phys_range[index].len;
+            NvU64 dma_addr = priv->handles[i].memArea.pRanges[index].start;
+            NvU64 dma_len  = priv->handles[i].memArea.pRanges[index].size;
 
             // Break the scatterlist into dma_max_seg_size chunks
             while(dma_len != 0)
@@ -732,11 +779,14 @@ nv_dma_buf_map_pfns (
                     goto unmap_pfns;
                 }
 
-                status = nv_dma_map_peer(&peer_dma_dev, priv->nv->dma_dev, 0x1,
-                                         (sg_len >> PAGE_SHIFT), &dma_addr);
-                if (status != NV_OK)
+                if (!priv->skip_iommu)
                 {
-                    goto unmap_pfns;
+                    status = nv_dma_map_peer(&peer_dma_dev, priv->nv->dma_dev, 0x1,
+                                             (sg_len >> PAGE_SHIFT), &dma_addr);
+                    if (status != NV_OK)
+                    {
+                        goto unmap_pfns;
+                    }
                 }
 
                 sg_set_page(sg, NULL, sg_len, 0);
@@ -749,6 +799,9 @@ nv_dma_buf_map_pfns (
             }
         }
     }
+
+    WARN_ON(sg != NULL);
+
     sgt->nents = mapped_nents;
 
     WARN_ON(sgt->nents != sgt->orig_nents);
@@ -758,7 +811,7 @@ nv_dma_buf_map_pfns (
 unmap_pfns:
     sgt->nents = mapped_nents;
 
-    nv_dma_buf_unmap_pfns(dev, sgt);
+    nv_dma_buf_unmap_pfns(dev, sgt, priv);
 
     sg_free_table(sgt);
 
@@ -780,13 +833,14 @@ nv_dma_buf_map(
     nv_dma_buf_file_private_t *priv = buf->priv;
 
     //
-    // On non-coherent platforms, importers must be able to handle peer
-    // MMIO resources not backed by struct page.
+    // On non-coherent platforms, and on coherent platforms requesting
+    // PCIe mapping, importers must be able to handle peer MMIO resources
+    // not backed by struct page.
     //
-#if defined(NV_DMA_BUF_HAS_DYNAMIC_ATTACHMENT) && \
-    defined(NV_DMA_BUF_ATTACHMENT_HAS_PEER2PEER)
-    if (!priv->nv->coherent &&
-        dma_buf_attachment_is_dynamic(attachment) &&
+#if defined(NV_DMA_BUF_ATTACHMENT_HAS_PEER2PEER)
+    if (((!priv->nv->coherent) ||
+         (priv->mapping_type == NV_DMABUF_EXPORT_MAPPING_TYPE_FORCE_PCIE)) &&
+        (attachment->importer_ops != NULL) &&
         !attachment->peer2peer)
     {
         nv_printf(NV_DBG_ERRORS,
@@ -796,6 +850,17 @@ nv_dma_buf_map(
 #endif
 
     mutex_lock(&priv->lock);
+
+    if (priv->mapping_type == NV_DMABUF_EXPORT_MAPPING_TYPE_FORCE_PCIE)
+    {
+        if(!nv_pci_is_valid_topology_for_direct_pci(priv->nv, attachment->dev))
+        {
+            nv_printf(NV_DBG_ERRORS,
+                      "NVRM: topology not supported for mapping type FORCE_PCIE\n");
+            return NULL;
+        }
+        priv->skip_iommu = NV_TRUE;
+    }
 
     if (priv->num_objects != priv->total_objects)
     {
@@ -811,7 +876,12 @@ nv_dma_buf_map(
         }
     }
 
-    if (priv->nv->coherent)
+    //
+    // For MAPPING_TYPE_FORCE_PCIE on coherent platforms,
+    // get the BAR1 PFN scatterlist instead of C2C pages.
+    //
+    if ((priv->nv->coherent) &&
+        (priv->mapping_type == NV_DMABUF_EXPORT_MAPPING_TYPE_DEFAULT))
     {
         sgt = nv_dma_buf_map_pages(attachment->dev, priv);
     }
@@ -852,13 +922,14 @@ nv_dma_buf_unmap(
 
     mutex_lock(&priv->lock);
 
-    if (priv->nv->coherent)
+    if ((priv->nv->coherent) &&
+        (priv->mapping_type == NV_DMABUF_EXPORT_MAPPING_TYPE_DEFAULT))
     {
-        nv_dma_buf_unmap_pages(attachment->dev, sgt);
+        nv_dma_buf_unmap_pages(attachment->dev, sgt, priv);
     }
     else
     {
-        nv_dma_buf_unmap_pfns(attachment->dev, sgt);
+        nv_dma_buf_unmap_pfns(attachment->dev, sgt, priv);
     }
 
     //
@@ -1051,6 +1122,8 @@ nv_dma_buf_create(
     priv->total_size    = params->totalSize;
     priv->nv            = nv;
     priv->can_mmap      = NV_FALSE;
+    priv->mapping_type  = params->mappingType;
+    priv->skip_iommu    = NV_FALSE;
 
     rc = nv_kmem_cache_alloc_stack(&sp);
     if (rc != 0)
@@ -1069,6 +1142,7 @@ nv_dma_buf_create(
     status = rm_dma_buf_get_client_and_device(sp, priv->nv,
                                               params->hClient,
                                               params->handles[0],
+                                              priv->mapping_type,
                                               &priv->h_client,
                                               &priv->h_device,
                                               &priv->h_subdevice,
@@ -1211,7 +1285,8 @@ nv_dma_buf_reuse(
     }
 
     if ((priv->total_objects < params->numObjects) ||
-        (params->index > (priv->total_objects - params->numObjects)))
+        (params->index > (priv->total_objects - params->numObjects)) ||
+        (params->mappingType != priv->mapping_type))
     {
         status = NV_ERR_INVALID_ARGUMENT;
         goto unlock_priv;
@@ -1284,6 +1359,12 @@ nv_dma_buf_export(
         return NV_ERR_INVALID_ARGUMENT;
     }
 
+    if ((params->mappingType != NV_DMABUF_EXPORT_MAPPING_TYPE_DEFAULT) &&
+        (params->mappingType != NV_DMABUF_EXPORT_MAPPING_TYPE_FORCE_PCIE))
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
     //
     // If fd >= 0, dma-buf already exists with this fd, so get dma-buf from fd.
     // If fd == -1, dma-buf is not created yet, so create it and then store
@@ -1305,6 +1386,132 @@ nv_dma_buf_export(
     return status;
 #else
     return NV_ERR_NOT_SUPPORTED;
+#endif // CONFIG_DMA_SHARED_BUFFER
+}
+
+NV_STATUS NV_API_CALL nv_dma_import_dma_buf
+(
+    nv_dma_device_t *dma_dev,
+    struct dma_buf *dma_buf,
+    NvU32 *size,
+    struct sg_table **sgt,
+    nv_dma_buf_t **import_priv
+)
+{
+#if defined(CONFIG_DMA_SHARED_BUFFER)
+    nv_dma_buf_t *nv_dma_buf = NULL;
+    struct dma_buf_attachment *dma_attach = NULL;
+    struct sg_table *map_sgt = NULL;
+    NV_STATUS status = NV_OK;
+
+    if ((dma_dev == NULL) ||
+        (dma_buf == NULL) ||
+        (size == NULL) ||
+        (sgt  == NULL) ||
+        (import_priv == NULL))
+    {
+        nv_printf(NV_DBG_ERRORS, "Import arguments are NULL!\n");
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    status = os_alloc_mem((void **)&nv_dma_buf, sizeof(*nv_dma_buf));
+    if (status != NV_OK)
+    {
+        nv_printf(NV_DBG_ERRORS, "Can't allocate mem for nv_buf!\n");
+        return status;
+    }
+
+    get_dma_buf(dma_buf);
+
+    dma_attach = dma_buf_attach(dma_buf, dma_dev->dev);
+    if (IS_ERR_OR_NULL(dma_attach))
+    {
+        nv_printf(NV_DBG_ERRORS, "Can't attach dma_buf!\n");
+        status = NV_ERR_OPERATING_SYSTEM;
+
+        goto dma_buf_attach_fail;
+    }
+
+    map_sgt = dma_buf_map_attachment(dma_attach, DMA_BIDIRECTIONAL);
+    if (IS_ERR_OR_NULL(map_sgt))
+    {
+        nv_printf(NV_DBG_ERRORS, "Can't map dma attachment!\n");
+        status = NV_ERR_OPERATING_SYSTEM;
+
+        goto dma_buf_map_fail;
+    }
+
+    nv_dma_buf->dma_buf = dma_buf;
+    nv_dma_buf->dma_attach = dma_attach;
+    nv_dma_buf->sgt = map_sgt;
+
+    *size = dma_buf->size;
+    *import_priv = nv_dma_buf;
+    *sgt = map_sgt;
+
+    return NV_OK;
+
+dma_buf_map_fail:
+    dma_buf_detach(dma_buf, dma_attach);
+dma_buf_attach_fail:
+    os_free_mem(nv_dma_buf);
+    dma_buf_put(dma_buf);
+
+    return status;
+#else
+    return NV_ERR_NOT_SUPPORTED;
+#endif // CONFIG_DMA_SHARED_BUFFER
+}
+
+NV_STATUS NV_API_CALL nv_dma_import_from_fd
+(
+    nv_dma_device_t *dma_dev,
+    NvS32 fd,
+    NvU32 *size,
+    struct sg_table **sgt,
+    nv_dma_buf_t **import_priv
+)
+{
+#if defined(CONFIG_DMA_SHARED_BUFFER)
+    struct dma_buf *dma_buf = dma_buf_get(fd);
+    NV_STATUS status;
+
+    if (IS_ERR_OR_NULL(dma_buf))
+    {
+        nv_printf(NV_DBG_ERRORS, "Can't get dma_buf from fd!\n");
+        return NV_ERR_OPERATING_SYSTEM;
+    }
+
+    status = nv_dma_import_dma_buf(dma_dev,
+                                   dma_buf, size, sgt, import_priv);
+    dma_buf_put(dma_buf);
+
+    return status;
+#else
+    return NV_ERR_NOT_SUPPORTED;
+#endif // CONFIG_DMA_SHARED_BUFFER
+}
+
+void NV_API_CALL nv_dma_release_dma_buf
+(
+    nv_dma_buf_t *import_priv
+)
+{
+#if defined(CONFIG_DMA_SHARED_BUFFER)
+    nv_dma_buf_t *nv_dma_buf = NULL;
+
+    if (import_priv == NULL)
+    {
+        return;
+    }
+
+    nv_dma_buf = (nv_dma_buf_t *)import_priv;
+    dma_buf_unmap_attachment(nv_dma_buf->dma_attach, nv_dma_buf->sgt,
+                                DMA_BIDIRECTIONAL);
+    dma_buf_detach(nv_dma_buf->dma_buf, nv_dma_buf->dma_attach);
+    dma_buf_put(nv_dma_buf->dma_buf);
+
+    os_free_mem(nv_dma_buf);
 #endif // CONFIG_DMA_SHARED_BUFFER
 }
 

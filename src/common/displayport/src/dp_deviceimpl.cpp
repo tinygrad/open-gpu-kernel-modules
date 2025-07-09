@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -32,6 +32,7 @@
 #include "dp_deviceimpl.h"
 #include "dp_auxdefs.h"
 #include "dp_groupimpl.h"
+#include "dp_printf.h"
 #include "ctrl/ctrl0073/ctrl0073dp.h"
 using namespace DisplayPort;
 
@@ -95,7 +96,8 @@ DeviceImpl::DeviceImpl(DPCDHAL * hal, ConnectorImpl * connector, DeviceImpl * pa
       bIgnoreMsaCapCached(false),
       bSdpExtCapable(Indeterminate),
       bAsyncSDPCapable(Indeterminate),
-      bDscPassThroughColorFormatWar(false)
+      bDscPassThroughColorFormatWar(false),
+      maxModeBwRequired(0)
 {
     bandwidth.enum_path.dataValid = false;
     shadow.plugged = false;
@@ -271,7 +273,7 @@ bool DeviceImpl::getI2cData(unsigned offset, NvU8 * buffer, unsigned sizeRequest
 
         if (status != AuxBus::success)
         {
-            DP_LOG(("DPDEV> %s: Failed read transaction", __FUNCTION__));
+            DP_PRINTF(DP_ERROR, "DPDEV> %s: Failed read transaction", __FUNCTION__);
             break;
         }
 
@@ -317,7 +319,7 @@ bool DeviceImpl::setI2cData(unsigned offset, NvU8 * buffer, unsigned sizeRequest
 
         if (status != AuxBus::success)
         {
-            DP_LOG(("DPDEV> %s: Failed write transaction", __FUNCTION__));
+            DP_PRINTF(DP_ERROR, "DPDEV> %s: Failed write transaction", __FUNCTION__);
             return false;
         }
         *sizeCompleted = dataCompleted;
@@ -355,7 +357,7 @@ bool DeviceImpl::setI2cData(unsigned offset, NvU8 * buffer, unsigned sizeRequest
 
         if (status != AuxBus::success)
         {
-            DP_LOG(("DPDEV> %s: Failed write transaction", __FUNCTION__));
+            DP_PRINTF(DP_ERROR, "DPDEV> Failed write transaction");
             break;
         }
 
@@ -375,6 +377,12 @@ AuxBus::status DeviceImpl::getDpcdData(unsigned offset, NvU8 * buffer,
                                        unsigned * sizeCompleted,
                                        unsigned  * pNakReason)
 {
+    if (isFakedMuxDevice())
+    {
+        DP_PRINTF(DP_INFO, "Device is faked, returning nack\n");
+        return AuxBus::nack;
+    }
+
     if (!buffer || !sizeCompleted)
     {
         // default param may be NULL
@@ -403,6 +411,12 @@ AuxBus::status DeviceImpl::setDpcdData(unsigned offset, NvU8 * buffer,
                                        unsigned * sizeCompleted,
                                        unsigned  * pNakReason)
 {
+    if (isFakedMuxDevice())
+    {
+        DP_PRINTF(DP_INFO, "Device is faked, returning nack\n");
+        return AuxBus::nack;
+    }
+
     if (!buffer || !sizeCompleted)
     {
         // default param may be NULL
@@ -459,6 +473,15 @@ bool DeviceImpl::getRawDscCaps(NvU8 *buffer, NvU32 bufferSize)
     return true;
 }
 
+bool DeviceImpl::setRawDscCaps(const NvU8 *buffer, NvU32 bufferSize)
+{
+    if (bufferSize < sizeof(rawDscCaps))
+        return false;
+
+    dpMemCopy(&rawDscCaps, buffer, sizeof(rawDscCaps));
+    return parseDscCaps(&rawDscCaps[0], sizeof(rawDscCaps));
+}
+
 AuxBus::status DeviceImpl::transaction(Action action, Type type, int address,
                                        NvU8 * buffer, unsigned sizeRequested,
                                        unsigned * sizeCompleted,
@@ -509,7 +532,7 @@ AuxBus::status DeviceImpl::transaction(Action action, Type type, int address,
             *sizeCompleted = read.replyNumOfBytesReadDPCD();
 
             if (*sizeCompleted > sizeRequested) {
-                DP_LOG(("DPDEV> DPCD Read return more data than requested.  Clamping buffer to requested size!"));
+                DP_PRINTF(DP_ERROR, "DPDEV> DPCD Read return more data than requested.  Clamping buffer to requested size!");
                 *sizeCompleted = sizeRequested;
             }
 
@@ -529,7 +552,7 @@ AuxBus::status DeviceImpl::transaction(Action action, Type type, int address,
 
             if (nWriteTransactions > 1)
             {
-                DP_LOG(("DPDEV> Set function will fail for transactions > 1, please incraease the array size!"));
+                DP_PRINTF(DP_ERROR, "DPDEV> Set function will fail for transactions > 1, please increase the array size!");
                 return AuxBus::nack;
             }
 
@@ -555,7 +578,7 @@ AuxBus::status DeviceImpl::transaction(Action action, Type type, int address,
             *sizeCompleted = remoteI2cRead.replyNumOfBytesReadI2C();
 
             if (*sizeCompleted > sizeRequested) {
-                DP_LOG(("DPDEV> I2C Read return more data than requested.  Clamping buffer to requested size!"));
+                DP_PRINTF(DP_ERROR, "DPDEV> I2C Read return more data than requested.  Clamping buffer to requested size!");
                 *sizeCompleted = sizeRequested;
             }
 
@@ -654,7 +677,7 @@ static AuxBus::status _QueryFecStatus
 
     if (status != AuxBus::success)
     {
-        DP_LOG(("DP> Error querying FEC status!"));
+        DP_PRINTF(DP_ERROR, "DP> Error querying FEC status!");
         return AuxBus::nack;
     }
     return AuxBus::success;
@@ -678,7 +701,7 @@ static AuxBus::status _QueryFecErrorCount
 
     if (status != AuxBus::success)
     {
-        DP_LOG(("DP> Error querying FEC error count!"));
+        DP_PRINTF(DP_ERROR, "DP> Error querying FEC error count!");
         return AuxBus::nack;
     }
     else
@@ -706,7 +729,7 @@ static AuxBus::status _WriteFecConfiguration
 
     if (status != AuxBus::success)
     {
-        DP_LOG(("DP> Error setting FEC configuration!"));
+        DP_PRINTF(DP_ERROR, "DP> Error setting FEC configuration!");
         return AuxBus::nack;
     }
     return AuxBus::success;
@@ -719,7 +742,7 @@ AuxBus::status DeviceImpl::fecTransaction(NvU8 *fecStatus, NvU16 **fecErrorCount
     NvU8 data, lane, counter, laneData, offset;
     if (!bFECSupported)
     {
-        DP_LOG(("DP> FEC capability not correct!"));
+        DP_PRINTF(DP_ERROR, "DP> FEC capability not correct!");
         return nack;
     }
 
@@ -736,7 +759,7 @@ AuxBus::status DeviceImpl::fecTransaction(NvU8 *fecStatus, NvU16 **fecErrorCount
                     fecErrorCount[i][j] = NV_DP_FEC_ERROR_COUNT_INVALID;
                 }
             }
-            DP_LOG(("DP> FEC capability not correct!"));
+            DP_PRINTF(DP_ERROR, "DP> FEC capability not correct!");
             return success;
         }
     }
@@ -753,7 +776,7 @@ AuxBus::status DeviceImpl::fecTransaction(NvU8 *fecStatus, NvU16 **fecErrorCount
                     fecErrorCount[i][j] = NV_DP_FEC_ERROR_COUNT_INVALID;
                 }
             }
-            DP_LOG(("DP> FEC capability not correct!"));
+            DP_PRINTF(DP_ERROR, "DP> FEC capability not correct!");
             return success;
         }
     }
@@ -770,7 +793,7 @@ AuxBus::status DeviceImpl::fecTransaction(NvU8 *fecStatus, NvU16 **fecErrorCount
                     fecErrorCount[i][j] = NV_DP_FEC_ERROR_COUNT_INVALID;
                 }
             }
-            DP_LOG(("DP> FEC capability not correct!"));
+            DP_PRINTF(DP_ERROR, "DP> FEC capability not correct!");
             return success;
         }
     }
@@ -787,7 +810,7 @@ AuxBus::status DeviceImpl::fecTransaction(NvU8 *fecStatus, NvU16 **fecErrorCount
                     fecErrorCount[i][j] = NV_DP_FEC_ERROR_COUNT_INVALID;
                 }
             }
-            DP_LOG(("DP> FEC capability not correct!"));
+            DP_PRINTF(DP_ERROR, "DP> FEC capability not correct!");
             return success;
         }
     }
@@ -804,7 +827,7 @@ AuxBus::status DeviceImpl::fecTransaction(NvU8 *fecStatus, NvU16 **fecErrorCount
                     fecErrorCount[i][j] = NV_DP_FEC_ERROR_COUNT_INVALID;
                 }
             }
-            DP_LOG(("DP> FEC capability not correct!"));
+            DP_PRINTF(DP_ERROR, "DP> FEC capability not correct!");
             return success;
         }
     }
@@ -875,20 +898,20 @@ void DeviceImpl::dpcdOverrides()
         switch(processedEdid.WARData.optimalLinkRate)
         {
             case 0x6:
-                optimalLinkRate = RBR;
+                optimalLinkRate = dp2LinkRate_1_62Gbps;
                 break;
             case 0xa:
-                optimalLinkRate = HBR;
+                optimalLinkRate = dp2LinkRate_2_70Gbps;
                 break;
             case 0x14:
-                optimalLinkRate = HBR2;
+                optimalLinkRate = dp2LinkRate_5_40Gbps;
                 break;
             case 0x1E:
-                optimalLinkRate = HBR3;
+                optimalLinkRate = dp2LinkRate_8_10Gbps;
                 break;
             default:
-                optimalLinkRate = RBR;
-                DP_LOG(("DP-DEV> Invalid link rate supplied. Falling back to RBR"));
+                optimalLinkRate = dp2LinkRate_1_62Gbps;
+                DP_PRINTF(DP_ERROR, "DP-DEV> Invalid link rate supplied. Falling back to RBR");
                 break;
         }
         hal->overrideOptimalLinkCfg(optimalLinkRate, processedEdid.WARData.optimalLaneCount);
@@ -1188,7 +1211,7 @@ void DeviceImpl::setPanelPowerParams(bool bSinkPowerStateD0, bool bPanelPowerSta
     {
         if (this->bypassDpcdPowerOff())
         {
-            DP_LOG(("DP-DEV> Bypassing 600h write for this display"));
+            DP_PRINTF(DP_NOTICE, "DP-DEV> Bypassing 600h write for this display");
             return;
         }
 
@@ -1378,6 +1401,56 @@ LinkConfiguration * DeviceImpl::inferLeafLink(unsigned * totalLinkSlots)
     return &bandwidth.lastHopLinkConfig;
 }
 
+void DeviceImpl::inferPathConstraints()
+{
+    if (!bandwidth.enum_path.availablePbnUpdated)
+    {
+        if (plugged)
+        {
+            NakData nack;
+            for (unsigned retries = 0; retries < 7; retries++)
+            {
+                // Marking the EPR as a path message in 2x
+                EnumPathResMessage epr(getTopologyAddress().parent(), getTopologyAddress().tail(), false);
+                bool sendStatus = connector->messageManager->send(&epr, nack);
+                if (!sendStatus)
+                {
+                    if (nack.reason == NakDefer || nack.reason == NakTimeout)
+                        continue;
+
+                    bandwidth.enum_path.total = 0;
+                    bandwidth.enum_path.free = 0;
+                    bandwidth.enum_path.availableStreams = 0;
+                    bandwidth.enum_path.dfpLinkAvailable = 0;
+                    break;
+                }
+                else
+                {
+                    bandwidth.enum_path.total = epr.reply.TotalPBN;
+                    bandwidth.enum_path.free = epr.reply.FreePBN;
+                    bandwidth.enum_path.bPathFECCapable = epr.reply.bFECCapability;
+                    bandwidth.enum_path.availableStreams = epr.reply.availableStreams;
+                    // Include the new DFP available PBN only for 2x
+                    bandwidth.enum_path.dfpLinkAvailable = epr.reply.DFPLinkAvailablePBN;
+
+                    break;
+                }
+            }
+        }
+        else
+        {
+            bandwidth.enum_path.total = bandwidth.enum_path.free = bandwidth.enum_path.dfpLinkAvailable = 0;
+        }
+
+        bandwidth.enum_path.dataValid = true;
+        bandwidth.enum_path.availablePbnUpdated = true;
+        bandwidth.lastHopLinkConfig = LinkConfiguration(DP_MIN(bandwidth.enum_path.total, bandwidth.enum_path.dfpLinkAvailable));
+        // Update FEC support of the device after EPR
+        this->getFECSupport();
+    }
+    return;
+}
+
 bool DeviceImpl::isActive()
 {
     DP_ASSERT(!activeGroup || activeGroup->isHeadAttached());
@@ -1417,7 +1490,7 @@ bool DeviceImpl::getRawEpr(unsigned * totalEpr, unsigned * freeEpr, rawEprState 
             if (nack.reason == NakDefer)
                 continue;
 
-            DP_LOG(("DP-DEV> EPR message failed while getting RAW EPR"));
+            DP_PRINTF(DP_ERROR, "DP-DEV> EPR message failed while getting RAW EPR");
 
             break;
         }
@@ -1576,7 +1649,7 @@ NvBool DeviceImpl::getDSCSupport()
 
     else
     {
-        DP_LOG(("DP-DEV> DSC Support AUX READ failed for %s!", address.toString(sb)));
+        DP_PRINTF(DP_ERROR, "DP-DEV> DSC Support AUX READ failed for %s!", address.toString(sb));
     }
 
     if (dscCaps.bDSCDecompressionSupported || dscCaps.bDSCPassThroughSupported)
@@ -1589,27 +1662,146 @@ NvBool DeviceImpl::getDSCSupport()
 
 bool DeviceImpl::isPanelReplaySupported()
 {
-    return prCaps.panelReplaySupported;
+    return prCaps.bPanelReplaySupported;
+}
+
+NvBool DeviceImpl::isSelectiveUpdateSupported()
+{
+    return prCaps.bSelUpdateSupported;
+}
+
+NvBool DeviceImpl::isEarlyRegionTpSupported()
+{
+    return prCaps.bEarlyRegionTpSupported;
+}
+
+NvBool DeviceImpl::isAdaptiveSyncSdpNotSupportedInPr()
+{
+    return prCaps.bAdaptiveSyncSdpNotSupportedInPr;
+}
+
+NvBool DeviceImpl::isdscDecodeNotSupportedInPr()
+{
+    return prCaps.bDscDecodeNotSupportedInPr;
+}
+
+NvBool DeviceImpl::isLinkOffSupportedAfterAsSdpInPr()
+{
+    return prCaps.bLinkOffSupportAfterAsSdpSent;
+}
+
+SelectiveUpdateCaps DeviceImpl::getSelectiveUpdateCaps()
+{
+    return prCaps.suCaps;
+}
+
+NvBool DeviceImpl::isAuxLessAlpmSupported()
+{
+    return alpmCaps.bAuxLessAlpmSupported;
 }
 
 void  DeviceImpl::getPanelReplayCaps()
 {
-    NvU8 byte          = 0;
-    unsigned size      = 0;
+    NvU8 buffer[10]    = {0U};
+    unsigned size;
+    unsigned sizeCompleted;
     unsigned nakReason = NakUndefined;
 
+    size = 1U;
     if (AuxBus::success == this->getDpcdData(NV_DPCD20_PANEL_REPLAY_CAPABILITY,
-        &byte, sizeof(byte), &size, &nakReason))
+        &buffer[0], size, &sizeCompleted, &nakReason))
     {
-        prCaps.panelReplaySupported =
-            FLD_TEST_DRF(_DPCD20_PANEL, _REPLAY_CAPABILITY, _SUPPORTED, _YES, byte);
+        prCaps.bPanelReplaySupported =
+            FLD_TEST_DRF(_DPCD20_PANEL, _REPLAY_CAPABILITY, _SUPPORTED,
+            _YES, buffer[0]);
+        prCaps.bSelUpdateSupported =
+            FLD_TEST_DRF(_DPCD20_PANEL, _REPLAY_CAPABILITY, _SEL_UPDATE,
+            _YES, buffer[0]);
+        prCaps.bEarlyRegionTpSupported =
+            FLD_TEST_DRF(_DPCD20_PANEL, _REPLAY_CAPABILITY, _EARLY_TRANSPORT,
+            _YES, buffer[0]);
+
+        size = 1U;
+        // Check Additional Panel replay caps register
+        if (AuxBus::success == this->getDpcdData(NV_DPCD20_PANEL_REPLAY_CAPABILITY_ADD,
+            &buffer[1], size, &sizeCompleted, &nakReason))
+        {
+            prCaps.bDscDecodeNotSupportedInPr =
+                FLD_TEST_DRF(_DPCD20_PANEL, _REPLAY_CAPABILITY_ADD,
+                _DSC_DECODE_NOT_SUPPORTED_IN_PR, _YES, buffer[1]);
+            prCaps.bAdaptiveSyncSdpNotSupportedInPr =
+                FLD_TEST_DRF(_DPCD20_PANEL, _REPLAY_CAPABILITY_ADD,
+                _ASYNC_VIDEOTIMING_NOT_SUPPORTED_IN_PR, _YES, buffer[1]);
+            prCaps.bLinkOffSupportAfterAsSdpSent =
+                FLD_TEST_DRF(_DPCD20_PANEL, _REPLAY_CAPABILITY_ADD,
+                _LINK_OFF_SUPPORTED_IN_PR_AFTER_ADAPT_SYNC_SDP, _YES, buffer[1]);
+            prCaps.suCaps.bDscCrcOfMultipleSuSupported =
+                FLD_TEST_DRF(_DPCD20_PANEL, _REPLAY_CAPABILITY_ADD,
+                _DSC_CRC_MULTIPLE_SUS_SUPPORTED, _YES, buffer[1]);
+            prCaps.suCaps.bSelUpdateGranularityNeeded =
+                FLD_TEST_DRF(_DPCD20_PANEL, _REPLAY_CAPABILITY_ADD,
+                _PR_SEL_UPDATE_GRANULARITY_NEEDED, _YES, buffer[1]);
+
+            if (prCaps.suCaps.bSelUpdateGranularityNeeded)
+            {
+                size = 3U;
+                if (AuxBus::success ==
+                    this->getDpcdData(NV_DPCD20_PANEL_REPLAY_SU_X_GRANULARITY_CAPABILITY,
+                    &buffer[2], size, &sizeCompleted, &nakReason))
+                {
+                    prCaps.suCaps.selUpdateXGranularityCap = DRF_VAL(_DPCD20_PANEL, _REPLAY_SU_X_GRANULARITY,
+                    _CAPABILITY_VAL, buffer[2]);
+
+                    prCaps.suCaps.selUpdateXGranularityCap1 = DRF_VAL(_DPCD20_PANEL, _REPLAY_SU_X,
+                    _GRANULARITY_CAPABILITY1_VAL, buffer[3]);
+
+                    prCaps.suCaps.selUpdateYGranularityCap = DRF_VAL(_DPCD20_PANEL, _REPLAY_SU_Y,
+                    _GRANULARITY_CAPABILITY_VAL, buffer[4]);
+                }
+                else
+                {
+                    DP_PRINTF(DP_ERROR, "DP-DEV> Aux Read to DPCD offset 0xB2-0xB4 failed!");
+                }
+            }
+
+            prCaps.suCaps.bSuYGranularityExtendedCap =
+                FLD_TEST_DRF(_DPCD20_PANEL, _REPLAY_CAPABILITY_ADD,
+                _SU_Y_GRANULARITY_EXT_CAP_SUPPORTED, _YES, buffer[1]);
+
+            if (prCaps.suCaps.bSuYGranularityExtendedCap)
+            {
+                size = 2U;
+                if (AuxBus::success ==
+                    this->getDpcdData(NV_DPCD20_PANEL_REPLAY_SU_Y_GRANULARITY_EXTENDED_CAPABILITY,
+                    &buffer[5], size, &sizeCompleted, &nakReason))
+                {
+                    prCaps.suCaps.selUpdateYGranularityExtCap = DRF_VAL(_DPCD20_PANEL, _REPLAY_SU_Y,
+                    _GRANULARITY_EXTENDED_CAPABILITY_VAL, buffer[5]);
+
+                    prCaps.suCaps.selUpdateYGranularityExtCap1 = DRF_VAL(_DPCD20_PANEL, _REPLAY_SU_Y,
+                    _GRANULARITY_EXTENDED_CAPABILITY1_VAL, buffer[6]);
+                }
+                else
+                {
+                    DP_PRINTF(DP_ERROR, "DP-DEV> Aux Read to DPCD offset 0xB5 failed!");
+                }
+            }
+        }
+        else
+        {
+            DP_PRINTF(DP_ERROR, "DP-DEV> Aux Read to DPCD offset 0xB1 failed!");
+        }
+    }
+    else
+    {
+        DP_PRINTF(DP_ERROR, "DP-DEV> Aux Read to DPCD offset 0xB0 failed!");
     }
 }
 
 bool DeviceImpl::setPanelReplayConfig(panelReplayConfig prcfg)
 {
-    NvU8 config = 0;
-    unsigned size = 0;
+    NvU8 config = 0U;
+    unsigned size = 0U;
     unsigned nakReason = NakUndefined;
 
     if (prcfg.enablePanelReplay)
@@ -1623,19 +1815,222 @@ bool DeviceImpl::setPanelReplayConfig(panelReplayConfig prcfg)
             _ENABLE_PR_MODE, _NO, config);
     }
 
-    if (AuxBus::success == this->setDpcdData(NV_DPCD20_PANEL_REPLAY_CONFIGURATION,
-        &config, sizeof(config), &size, &nakReason))
+    if (prcfg.bEnableCrcWithPr)
     {
-        return true;
+        config = FLD_SET_DRF(_DPCD20_PANEL, _REPLAY_CONFIGURATION,
+            _ENABLE_CRC, _YES, config);
+    }
+    else
+    {
+        config = FLD_SET_DRF(_DPCD20_PANEL, _REPLAY_CONFIGURATION,
+            _ENABLE_CRC, _NO, config);
     }
 
-    return false;
+    if (prcfg.bHpdOnAdaptiveSyncSdpMissing)
+    {
+        config = FLD_SET_DRF(_DPCD20_PANEL, _REPLAY_CONFIGURATION,
+            _HPD_ADAPTIVE_SYNC_SDP_MISSING, _YES, config);
+    }
+    else
+    {
+        config = FLD_SET_DRF(_DPCD20_PANEL, _REPLAY_CONFIGURATION,
+            _HPD_ADAPTIVE_SYNC_SDP_MISSING, _NO, config);
+    }
+
+    if (prcfg.bHpdOnSdpUncorrectableError)
+    {
+        config = FLD_SET_DRF(_DPCD20_PANEL, _REPLAY_CONFIGURATION,
+            _HPD_SDP_UNCORRECTABLE_ERROR, _YES, config);
+    }
+    else
+    {
+        config = FLD_SET_DRF(_DPCD20_PANEL, _REPLAY_CONFIGURATION,
+            _HPD_SDP_UNCORRECTABLE_ERROR, _NO, config);
+    }
+
+    if (prcfg.bHpdOnRfbStorageErrors)
+    {
+        config = FLD_SET_DRF(_DPCD20_PANEL, _REPLAY_CONFIGURATION,
+            _HPD_RFB_STORAGE_ERRORS, _YES, config);
+    }
+    else
+    {
+        config = FLD_SET_DRF(_DPCD20_PANEL, _REPLAY_CONFIGURATION,
+            _HPD_RFB_STORAGE_ERRORS, _NO, config);
+    }
+
+    if (prcfg.bHpdOnRfbActiveFrameCrcError)
+    {
+        config = FLD_SET_DRF(_DPCD20_PANEL, _REPLAY_CONFIGURATION,
+            _HPD_RFB_ACTIVE_FRAME_CRC_ERROR, _YES, config);
+    }
+    else
+    {
+        config = FLD_SET_DRF(_DPCD20_PANEL, _REPLAY_CONFIGURATION,
+            _HPD_RFB_ACTIVE_FRAME_CRC_ERROR, _NO, config);
+    }
+
+    if (prcfg.bEnableSelectiveUpdate)
+    {
+        config = FLD_SET_DRF(_DPCD20_PANEL, _REPLAY_CONFIGURATION,
+            _ENABLE_SELECTIVE_UPDATE, _YES, config);
+    }
+    else
+    {
+        config = FLD_SET_DRF(_DPCD20_PANEL, _REPLAY_CONFIGURATION,
+            _ENABLE_SELECTIVE_UPDATE, _NO, config);
+    }
+
+    if (prcfg.bSuRegionEarlyTpEnable)
+    {
+        config = FLD_SET_DRF(_DPCD20_PANEL, _REPLAY_CONFIGURATION,
+            _ENABLE_SU_REGION_EARLY_TRANSPORT, _YES, config);
+    }
+    else
+    {
+        config = FLD_SET_DRF(_DPCD20_PANEL, _REPLAY_CONFIGURATION,
+            _ENABLE_SU_REGION_EARLY_TRANSPORT, _NO, config);
+    }
+
+    if (AuxBus::success !=
+        this->setDpcdData(NV_DPCD20_PANEL_REPLAY_CONFIGURATION,
+        &config, sizeof(config), &size, &nakReason))
+    {
+        return false;
+    }
+
+    config = 0U;
+    if (prcfg.bSinkRrUnlockGranted)
+    {
+        config = FLD_SET_DRF(_DPCD20_PANEL, _REPLAY_CONFIGURATION2,
+            _SINK_RR_UNLOCK_GRANTED, _YES, config);
+    }
+    else
+    {
+        config = FLD_SET_DRF(_DPCD20_PANEL, _REPLAY_CONFIGURATION2,
+            _SINK_RR_UNLOCK_GRANTED, _NO, config);
+    }
+
+    if (prcfg.bSelUpdateYExtValEnable)
+    {
+        config = FLD_SET_DRF(_DPCD20_PANEL, _REPLAY_CONFIGURATION2,
+            _SU_Y_GRANULARITY_EXTENDED_VALUE, _YES, config);
+
+        config = FLD_SET_DRF_NUM(_DPCD20_PANEL, _REPLAY_CONFIGURATION2,
+            _SU_Y_GRANULARITY_EXTENDED_VALUE_SELECTION, prcfg.selUpdateYExtVal, config);
+    }
+    else
+    {
+        config = FLD_SET_DRF(_DPCD20_PANEL, _REPLAY_CONFIGURATION2,
+            _SU_Y_GRANULARITY_EXTENDED_VALUE, _NO, config);
+    }
+
+    if (prcfg.bSuRegionScanLineIndicate)
+    {
+        config = FLD_SET_DRF(_DPCD20_PANEL, _REPLAY_CONFIGURATION2,
+            _SU_REGION_SCANLINE_CAPTURE_INDICATION, _YES, config);
+    }
+    else
+    {
+        config = FLD_SET_DRF(_DPCD20_PANEL, _REPLAY_CONFIGURATION2,
+            _SU_REGION_SCANLINE_CAPTURE_INDICATION, _NO, config);
+    }
+
+    if (AuxBus::success !=
+        this->setDpcdData(NV_DPCD20_PANEL_REPLAY_CONFIGURATION2,
+        &config, sizeof(config), &size, &nakReason))
+    {
+        return false;
+    }
+
+    config = 0U;
+    config = FLD_SET_DRF_NUM(_DPCD20_PANEL, _REPLAY_CONFIGURATION3,
+        _AS_SDP_SETUP_CONFIG_PR_ACTIVE_TIME, prcfg.asSdpSetUpTimePrActive, config);
+
+    if (AuxBus::success !=
+        this->setDpcdData(NV_DPCD20_PANEL_REPLAY_CONFIGURATION3,
+        &config, sizeof(config), &size, &nakReason))
+    {
+        return false;
+    }
+
+    return true;
+}
+
+bool DeviceImpl::getPanelReplayConfig(panelReplayConfig *pPrcfg)
+{
+    NvU8 config = 0U;
+    unsigned size = 0U;
+    unsigned nakReason = NakUndefined;
+
+    if (AuxBus::success !=
+        this->getDpcdData(NV_DPCD20_PANEL_REPLAY_CONFIGURATION,
+        &config, sizeof(config), &size, &nakReason))
+    {
+        return false;
+    }
+
+    pPrcfg->enablePanelReplay = FLD_TEST_DRF(_DPCD20_PANEL, _REPLAY_CONFIGURATION,
+        _ENABLE_PR_MODE, _YES, config);
+
+    pPrcfg->bEnableCrcWithPr = FLD_TEST_DRF(_DPCD20_PANEL, _REPLAY_CONFIGURATION,
+        _ENABLE_CRC, _YES, config);
+
+    pPrcfg->bHpdOnAdaptiveSyncSdpMissing = FLD_TEST_DRF(_DPCD20_PANEL, _REPLAY_CONFIGURATION,
+        _HPD_ADAPTIVE_SYNC_SDP_MISSING, _YES, config);
+
+    pPrcfg->bHpdOnSdpUncorrectableError = FLD_TEST_DRF(_DPCD20_PANEL, _REPLAY_CONFIGURATION,
+        _HPD_SDP_UNCORRECTABLE_ERROR, _YES, config);
+
+    pPrcfg->bHpdOnRfbStorageErrors = FLD_TEST_DRF(_DPCD20_PANEL, _REPLAY_CONFIGURATION,
+        _HPD_RFB_STORAGE_ERRORS, _YES, config);
+
+    pPrcfg->bHpdOnRfbActiveFrameCrcError = FLD_TEST_DRF(_DPCD20_PANEL, _REPLAY_CONFIGURATION,
+        _HPD_RFB_ACTIVE_FRAME_CRC_ERROR, _YES, config);
+
+
+    pPrcfg->bEnableSelectiveUpdate = FLD_TEST_DRF(_DPCD20_PANEL, _REPLAY_CONFIGURATION,
+        _ENABLE_SELECTIVE_UPDATE, _YES, config);
+
+    pPrcfg->bSuRegionEarlyTpEnable = FLD_TEST_DRF(_DPCD20_PANEL, _REPLAY_CONFIGURATION,
+            _ENABLE_SU_REGION_EARLY_TRANSPORT, _YES, config);
+
+   if (AuxBus::success !=
+        this->getDpcdData(NV_DPCD20_PANEL_REPLAY_CONFIGURATION2,
+        &config, sizeof(config), &size, &nakReason))
+    {
+        return false;
+    }
+
+    pPrcfg->bSinkRrUnlockGranted = FLD_TEST_DRF(_DPCD20_PANEL, _REPLAY_CONFIGURATION2,
+        _SINK_RR_UNLOCK_GRANTED, _YES, config);
+
+    pPrcfg->bSelUpdateYExtValEnable =  FLD_TEST_DRF(_DPCD20_PANEL, _REPLAY_CONFIGURATION2,
+        _SU_Y_GRANULARITY_EXTENDED_VALUE, _YES, config);
+
+    pPrcfg->selUpdateYExtVal = DRF_VAL(_DPCD20_PANEL, _REPLAY_CONFIGURATION2,
+        _SU_Y_GRANULARITY_EXTENDED_VALUE_SELECTION, config);
+
+    pPrcfg->bSuRegionScanLineIndicate = FLD_TEST_DRF(_DPCD20_PANEL, _REPLAY_CONFIGURATION2,
+        _SU_REGION_SCANLINE_CAPTURE_INDICATION, _YES, config);
+
+    if (AuxBus::success !=
+        this->getDpcdData(NV_DPCD20_PANEL_REPLAY_CONFIGURATION3,
+        &config, sizeof(config), &size, &nakReason))
+    {
+        return false;
+    }
+
+    pPrcfg->asSdpSetUpTimePrActive = DRF_VAL(_DPCD20_PANEL, _REPLAY_CONFIGURATION3,
+        _AS_SDP_SETUP_CONFIG_PR_ACTIVE_TIME, config);
+
+    return true;
 }
 
 bool DeviceImpl::getPanelReplayStatus(PanelReplayStatus *pPrStatus)
 {
-    NvU8 state = 0;
-    unsigned size = 0;
+    NvU8 state = 0U;
+    unsigned size = 0U;
     unsigned nakReason = NakUndefined;
 
     if (pPrStatus == NULL)
@@ -1644,7 +2039,7 @@ bool DeviceImpl::getPanelReplayStatus(PanelReplayStatus *pPrStatus)
         return false;
     }
 
-    if(AuxBus::success == this->getDpcdData(NV_DPCD20_PANEL_REPLAY_AND_FRAME_LOCK_STATUS,
+    if (AuxBus::success == this->getDpcdData(NV_DPCD20_PANEL_REPLAY_AND_FRAME_LOCK_STATUS,
         &state, sizeof(state), &size, &nakReason))
     {
         switch (DRF_VAL(_DPCD20, _PANEL_REPLAY_AND_FRAME_LOCK_STATUS, _PR_STATUS, state))
@@ -1667,11 +2062,156 @@ bool DeviceImpl::getPanelReplayStatus(PanelReplayStatus *pPrStatus)
         }
         return true;
     }
+
+    return false;
+}
+
+void DeviceImpl::getAlpmCaps()
+{
+    NvU8     byte      = 0U;
+    unsigned size      = 0U;
+    unsigned nakReason = NakUndefined;
+
+    if (AuxBus::success ==
+        this->getDpcdData(NV_DPCD20_RECEIVER_ALPM_CAPABILITIES,
+        &byte, sizeof(byte), &size, &nakReason))
+    {
+        alpmCaps.bFwStandbySupported =
+           FLD_TEST_DRF(_DPCD20_RECEIVER, _ALPM_CAPABILITIES,
+           _FW_STANDBY_SUPPORT, _YES, byte);
+        alpmCaps.bAuxLessAlpmSupported =
+           FLD_TEST_DRF(_DPCD20_RECEIVER, _ALPM_CAPABILITIES,
+           _AUX_LESS_ALPM_CAP, _YES, byte);
+        alpmCaps.bAuxLessAlpmPhySleepSupported =
+            FLD_TEST_DRF(_DPCD20_RECEIVER, _ALPM_CAPABILITIES,
+            _AUX_LESS_ALPM_ML_PHY_SLEEP_SUPPORT, _YES, byte);
+    }
     else
     {
-        return false;
+        DP_PRINTF(DP_ERROR, "DP-DEV> Aux Read to DPCD offset 0x2E failed!");
     }
 }
+
+NvBool DeviceImpl::setAlpmConfig(AlpmConfig alpmCfg)
+{
+    NvU8     config = 0U;
+    unsigned size = 0U;
+    unsigned nakReason = NakUndefined;
+
+    if (alpmCfg.bEnableAlpm)
+    {
+        config = FLD_SET_DRF(_DPCD20_RECEIVER, _ALPM_CONFIGURATION,
+            _ENABLE_ALPM, _YES, config);
+    }
+    else
+    {
+        config = FLD_SET_DRF(_DPCD20_RECEIVER, _ALPM_CONFIGURATION,
+            _ENABLE_ALPM, _NO, config);
+    }
+
+    if (alpmCfg.bHpdOnAlpmLockError)
+    {
+        config = FLD_SET_DRF(_DPCD20_RECEIVER, _ALPM_CONFIGURATION,
+            _IRQ_HPD_ON_ALPM_LOCK_ERROR, _YES, config);
+    }
+    else
+    {
+        config = FLD_SET_DRF(_DPCD20_RECEIVER, _ALPM_CONFIGURATION,
+            _IRQ_HPD_ON_ALPM_LOCK_ERROR, _NO, config);
+    }
+
+    if (alpmCfg.bSelectedAlpmMode)
+    {
+        config = FLD_SET_DRF(_DPCD20_RECEIVER, _ALPM_CONFIGURATION,
+            _ALPM_SELECTED_MODE, _AUX_LESS_ALPM, config);
+    }
+
+    if (alpmCfg.bAcdsPeriodDuration)
+    {
+        config = FLD_SET_DRF(_DPCD20_RECEIVER, _ALPM_CONFIGURATION,
+            _ACDS_PERIOD_DURATION, _YES, config);
+    }
+    else
+    {
+        config = FLD_SET_DRF(_DPCD20_RECEIVER, _ALPM_CONFIGURATION,
+            _ACDS_PERIOD_DURATION, _NO, config);
+    }
+
+    if (AuxBus::success ==
+        this->setDpcdData(NV_DPCD20_RECEIVER_ALPM_CONFIGURATION,
+        &config, sizeof(config), &size, &nakReason))
+    {
+        return true;
+    }
+
+    return false;
+}
+
+NvBool DeviceImpl::getAlpmStatus(AlpmStatus *pAlpmStatus)
+{
+    NvU8 byte = 0U;
+    unsigned size = 0U;
+    unsigned nakReason = NakUndefined;
+
+    if (pAlpmStatus == NULL)
+    {
+        DP_ASSERT(0);
+        return false;
+    }
+
+    if (AuxBus::success == this->getDpcdData(NV_DPCD20_RECEIVER_ALPM_STATUS,
+        &byte, sizeof(byte), &size, &nakReason))
+    {
+        pAlpmStatus->bAuxlessAlpmLockTimeout =
+            FLD_TEST_DRF(_DPCD20_RECEIVER, _ALPM_STATUS,
+            _AUX_LESS_ALPM_LOCK_TIMEOUT_ERR, _YES, byte);
+        pAlpmStatus->bAuxlessAlpmPhySleepDetected =
+            FLD_TEST_DRF(_DPCD20_RECEIVER, _ALPM_STATUS,
+            _AUX_LESS_ALPM_ML_PHY_SLEEP_DETECTED, _YES, byte);
+        return true;
+    }
+
+    return false;
+}
+
+NvBool DeviceImpl::enableAdaptiveSyncSdp(NvBool bEnable)
+{
+    NvU8     byte = 0U;
+    unsigned size = 0U;
+    unsigned nakReason = NakUndefined;
+    AuxBus::status status;
+
+    status = this->getDpcdData(NV_DPCD_DOWNSPREAD_CTRL,
+                               &byte, sizeof byte, &size, &nakReason);
+    if (status == AuxBus::success)
+    {
+        if (bEnable)
+        {
+            byte = FLD_SET_DRF(_DPCD, _DOWNSPREAD_CTRL,
+                _FIXED_VTOTAL_AS_SDP_EN_IN_PR_ACTIVE, _YES, byte);
+        }
+        else
+        {
+            byte = FLD_SET_DRF(_DPCD, _DOWNSPREAD_CTRL,
+                _FIXED_VTOTAL_AS_SDP_EN_IN_PR_ACTIVE, _NO, byte);
+        }
+
+        status = this->setDpcdData(NV_DPCD_DOWNSPREAD_CTRL,
+                                   &byte, sizeof byte, &size, &nakReason);
+        if (status != AuxBus::success)
+        {
+            DP_PRINTF(DP_ERROR, "DP-DEV> Aux Write to DPCD offset 0x107 failed!");
+            return status;
+        }
+    }
+    else
+    {
+        DP_PRINTF(DP_ERROR, "DP-DEV> Aux Read to DPCD offset 0x107 failed!");
+        return status;
+    }
+    return true;
+}
+
 bool DeviceImpl::getFECSupport()
 {
     NvU8 byte          = 0;
@@ -1737,7 +2277,7 @@ bool DeviceImpl::parseDscCaps(const NvU8 *buffer, NvU32 bufferSize)
 
     if (bufferSize < 16)
     {
-        DP_LOG((" DSC caps buffer must be greater than or equal to 16"));
+        DP_PRINTF(DP_ERROR, "DSC caps buffer must be greater than or equal to 16");
         return false;
     }
 
@@ -1883,7 +2423,7 @@ bool DeviceImpl::parseBranchSpecificDscCaps(const NvU8 *buffer, NvU32 bufferSize
 {
     if (bufferSize < 3)
     {
-        DP_LOG((" Branch DSC caps buffer must be greater than or equal to 3"));
+        DP_PRINTF(DP_ERROR, "Branch DSC caps buffer must be greater than or equal to 3");
         return false;
     }
 
@@ -1917,7 +2457,7 @@ bool DeviceImpl::parseBranchSpecificDscCaps(const NvU8 *buffer, NvU32 bufferSize
         else
         {
             dscCaps.branchDSCMaximumLineBufferWidth = 0;
-            DP_LOG(("Value of branch DSC maximum line buffer width is invalid, so setting it to 0."));
+            DP_PRINTF(DP_WARNING, "Value of branch DSC maximum line buffer width is invalid, so setting it to 0.");
         }
     }
     return true;
@@ -1935,7 +2475,7 @@ bool DeviceImpl::readAndParseDSCCaps()
     if(AuxBus::success != this->getDpcdData(NV_DPCD14_DSC_SUPPORT,
         &rawDscCaps[0], sizeof(rawDscCaps), &sizeCompleted, &nakReason))
     {
-        DP_LOG(("DP-DEV> Error querying DSC Caps on %s!", this->address.toString(sb)));
+        DP_PRINTF(DP_ERROR, "DP-DEV> Error querying DSC Caps on %s!", this->address.toString(sb));
         return false;
     }
 
@@ -1976,7 +2516,7 @@ void DeviceImpl::queryGUID2()
     }
     else
     {
-        DP_LOG(("DP-DEV> Error querying GUID2 on %s!", this->address.toString(sb)));
+        DP_PRINTF(DP_ERROR, "DP-DEV> Error querying GUID2 on %s!", this->address.toString(sb));
     }
 }
 
@@ -2003,7 +2543,7 @@ bool DeviceImpl::getDscEnable(bool *pEnable)
 
     if (status != AuxBus::success)
     {
-        DP_LOG(("DP-DEV> Error querying DSC Enable State!"));
+        DP_PRINTF(DP_ERROR, "DP-DEV> Error querying DSC Enable State!");
         return false;
     }
 
@@ -2150,7 +2690,7 @@ bool DeviceImpl::setDscEnable(bool enable)
     //
     if (!getDscEnable(&bCurrDscEnable))
     {
-        DP_LOG(("DP-DEV> Not able to get DSC Enable State!"));
+        DP_PRINTF(DP_ERROR, "DP-DEV> Not able to get DSC Enable State!");
         return false;
     }
 
@@ -2159,20 +2699,20 @@ bool DeviceImpl::setDscEnable(bool enable)
         if(bDscPassThrough)
         {
             dscPassthroughByte = FLD_SET_DRF(_DPCD20, _DSC_ENABLE, _PASS_THROUGH, _YES, dscPassthroughByte);
-            DP_LOG(("DP-DEV> Enabling DSC Pass through on branch device - %s",
-                    this->parent->getTopologyAddress().toString(buffer)));
+            DP_PRINTF(DP_NOTICE, "DP-DEV> Enabling DSC Pass through on branch device - %s",
+                      this->parent->getTopologyAddress().toString(buffer));
         }
 
         if (!bCurrDscEnable)
         {
             dscEnableByte = FLD_SET_DRF(_DPCD14, _DSC_ENABLE, _DECOMPRESSION, _YES, dscEnableByte);
-            DP_LOG(("DP-DEV> Enabling DSC decompression on device - %s",
-                    this->devDoingDscDecompression->getTopologyAddress().toString(buffer)));
+            DP_PRINTF(DP_NOTICE, "DP-DEV> Enabling DSC decompression on device - %s",
+                      this->devDoingDscDecompression->getTopologyAddress().toString(buffer));
         }
         else
         {
-            DP_LOG(("DP-DEV> DSC decompression is already enabled on device - %s",
-                    this->devDoingDscDecompression->getTopologyAddress().toString(buffer)));
+            DP_PRINTF(DP_NOTICE, "DP-DEV> DSC decompression is already enabled on device - %s",
+                      this->devDoingDscDecompression->getTopologyAddress().toString(buffer));
         }
     }
     else
@@ -2180,20 +2720,20 @@ bool DeviceImpl::setDscEnable(bool enable)
         if(bDscPassThrough)
         {
             dscPassthroughByte = FLD_SET_DRF(_DPCD20, _DSC_ENABLE, _PASS_THROUGH, _NO, dscPassthroughByte);
-            DP_LOG(("DP-DEV> Disabling DSC Pass through on branch device - %s",
-                    this->parent->getTopologyAddress().toString(buffer)));
+            DP_PRINTF(DP_NOTICE, "DP-DEV> Disabling DSC Pass through on branch device - %s",
+                      this->parent->getTopologyAddress().toString(buffer));
         }
 
         if (bCurrDscEnable)
         {
             dscEnableByte = FLD_SET_DRF(_DPCD14, _DSC_ENABLE, _DECOMPRESSION, _NO, dscEnableByte);
-            DP_LOG(("DP-DEV> Disabling DSC decompression on device - %s",
-                    this->devDoingDscDecompression->getTopologyAddress().toString(buffer)));
+            DP_PRINTF(DP_NOTICE, "DP-DEV> Disabling DSC decompression on device - %s",
+                      this->devDoingDscDecompression->getTopologyAddress().toString(buffer));
         }
         else
         {
-            DP_LOG(("DP-DEV> DSC decompression is already disabled on device - %s",
-                    this->devDoingDscDecompression->getTopologyAddress().toString(buffer)));
+            DP_PRINTF(DP_NOTICE, "DP-DEV> DSC decompression is already disabled on device - %s",
+                      this->devDoingDscDecompression->getTopologyAddress().toString(buffer));
         }
     }
 
@@ -2203,8 +2743,8 @@ bool DeviceImpl::setDscEnable(bool enable)
                                    &dscPassthroughByte, sizeof dscPassthroughByte, &size, &nakReason);
         if (dscPassThroughStatus != AuxBus::success)
         {
-            DP_LOG(("DP-DEV> Setting DSC Passthrough on parent branch %s failed",
-                    this->parent->getTopologyAddress().toString(buffer)));
+            DP_PRINTF(DP_ERROR, "DP-DEV> Setting DSC Passthrough on parent branch %s failed",
+                      this->parent->getTopologyAddress().toString(buffer));
         }
     }
 
@@ -2214,8 +2754,8 @@ bool DeviceImpl::setDscEnable(bool enable)
                               &dscEnableByte, sizeof dscEnableByte, &size, &nakReason);
         if (dscEnableStatus != AuxBus::success)
         {
-            DP_LOG(("DP-DEV> Setting DSC Enable on sink %s failed",
-                    this->devDoingDscDecompression->getTopologyAddress().toString(buffer)));
+            DP_PRINTF(DP_ERROR, "DP-DEV> Setting DSC Enable on sink %s failed",
+                      this->devDoingDscDecompression->getTopologyAddress().toString(buffer));
 
         }
     }
@@ -2243,7 +2783,8 @@ bool DeviceImpl::setDscEnableDPToHDMIPCON(bool bDscEnable, bool bEnablePassThrou
 
     if (!this->isDSCPossible())
     {
-        DP_LOG(("DP-DEV> DSC is not supported on DP to HDMI PCON - %s"));
+        DP_PRINTF(DP_ERROR, "DP-DEV> DSC is not supported on DP to HDMI PCON - %s",
+                  this->getTopologyAddress().toString(buffer));
         return false;
     }
 
@@ -2252,14 +2793,14 @@ bool DeviceImpl::setDscEnableDPToHDMIPCON(bool bDscEnable, bool bEnablePassThrou
         if(bEnablePassThroughForPCON)
         {
             dscEnableByte = FLD_SET_DRF(_DPCD20, _DSC_ENABLE, _PASS_THROUGH, _YES, dscEnableByte);
-            DP_LOG(("DP-DEV> Enabling DSC Pass through on DP to HDMI PCON device - %s",
-                    this->getTopologyAddress().toString(buffer)));
+            DP_PRINTF(DP_NOTICE, "DP-DEV> Enabling DSC Pass through on DP to HDMI PCON device - %s",
+                      this->getTopologyAddress().toString(buffer));
         }
         else
         {
             dscEnableByte = FLD_SET_DRF(_DPCD14, _DSC_ENABLE, _DECOMPRESSION, _YES, dscEnableByte);
-            DP_LOG(("DP-DEV> Enabling DSC decompression on DP to HDMI PCON device - %s",
-                    this->getTopologyAddress().toString(buffer)));
+            DP_PRINTF(DP_NOTICE, "DP-DEV> Enabling DSC decompression on DP to HDMI PCON device - %s",
+                      this->getTopologyAddress().toString(buffer));
         }
 
     }
@@ -2269,8 +2810,8 @@ bool DeviceImpl::setDscEnableDPToHDMIPCON(bool bDscEnable, bool bEnablePassThrou
 
     if (dscEnableStatus != AuxBus::success)
     {
-        DP_LOG(("DP-DEV> Setting DSC Enable on DP to HDMI PCON %s failed",
-                this->getTopologyAddress().toString(buffer)));
+        DP_PRINTF(DP_ERROR, "DP-DEV> Setting DSC Enable on DP to HDMI PCON %s failed",
+                  this->getTopologyAddress().toString(buffer));
         return false;
 
     }
@@ -2504,13 +3045,13 @@ bool DeviceImpl::getPCONCaps(PCONCaps *pPCONCaps)
                     break;
             }
 
-            DP_LOG((" DP2HDMI PCON caps - Max TMDS Clk: %u LinkBWGbps: %u MaxBpc: %u",
-                    pPCONCaps->maxTmdsClkRate, pPCONCaps->maxHdmiLinkBandwidthGbps, pPCONCaps->maxBpc));
+            DP_PRINTF(DP_NOTICE, "DP2HDMI PCON caps - Max TMDS Clk: %u LinkBWGbps: %u MaxBpc: %u",
+                      pPCONCaps->maxTmdsClkRate, pPCONCaps->maxHdmiLinkBandwidthGbps, pPCONCaps->maxBpc);
         }
     }
     else
     {
-        DP_LOG((" DP-DEV> Error - DPCD Read for detailed port capabilities (0x80) failed."));
+        DP_PRINTF(DP_ERROR, "DP-DEV> Error - DPCD Read for detailed port capabilities (0x80) failed.");
         return false;
     }
     return true;
@@ -2558,7 +3099,7 @@ bool DeviceImpl::getIgnoreMSACap()
                     }
                     else
                     {
-                        DP_LOG(("DP-DEV> Aux Read from DPCD offset 0x7 failed!"));
+                        DP_PRINTF(DP_ERROR, "DP-DEV> Aux Read from DPCD offset 0x7 failed!");
                         return false;
                     }
                 }
@@ -2576,7 +3117,7 @@ bool DeviceImpl::getIgnoreMSACap()
         }
         else
         {
-            DP_LOG(("DP-DEV> Aux Read from DPCD offset 0x7 failed!"));
+            DP_PRINTF(DP_ERROR, "DP-DEV> Aux Read from DPCD offset 0x7 failed!");
             return false;
         }
     }
@@ -2619,13 +3160,13 @@ AuxRetry::status  DeviceImpl::setIgnoreMSAEnable(bool msaTimingParamIgnoreEn)
             }
             else
             {
-                DP_LOG(("DP-DEV> Aux Write to DPCD offset 0x107 failed!"));
+                DP_PRINTF(DP_ERROR, "DP-DEV> Aux Write to DPCD offset 0x107 failed!");
                 return AuxRetry::nack;
             }
         }
         else
         {
-            DP_LOG(("DP-DEV> Aux Read from DPCD offset 0x7 failed!"));
+            DP_PRINTF(DP_ERROR, "DP-DEV> Aux Read from DPCD offset 0x107 failed!");
             return AuxRetry::nack;
         }
     }
@@ -2633,6 +3174,117 @@ AuxRetry::status  DeviceImpl::setIgnoreMSAEnable(bool msaTimingParamIgnoreEn)
     {
         return hal->setIgnoreMSATimingParamters(msaTimingParamIgnoreEn);
     }
+}
+
+bool DeviceImpl::getDeviceSpecificData(NvU8 *oui, NvU8 *devIdString,
+                                       NvU8 *hwRevision, NvU8 *swMajorRevision,
+                                       NvU8 *swMinorRevision)
+{
+    NvU8 buffer[16] = {0};
+    unsigned size = 13U;
+    unsigned sizeCompleted = 0U;
+    unsigned nakReason = NakUndefined;
+    unsigned i = 0U;
+    unsigned address;
+
+    if (oui == NULL || devIdString == NULL || hwRevision == NULL ||
+        swMajorRevision == NULL || swMinorRevision == NULL)
+    {
+        return false;
+    }
+
+    if (!this->audioSink && !this->videoSink)
+    {
+        address = NV_DPCD_BRANCH_IEEE_OUI;
+    }
+    else
+    {
+        address = NV_DPCD_SINK_IEEE_OUI;
+    }
+
+    if (AuxBus::success != this->getDpcdData(address, &buffer[0],
+                                             size, &sizeCompleted, &nakReason))
+    {
+        return false;
+    }
+
+    // 0x400-0x402 for sink device and 0x500-0x502 for branch device gives OUI.
+    for (i = 0U; i < DEVICE_OUI_SIZE; i++)
+    {
+        oui[i] = buffer[i];
+    }
+
+    //
+    // 0x403-0x408 for sink device and 0x503-0x508 for branch device provides
+    // device Identification string.
+    //
+    for (unsigned j = 0U; j < NV_DPCD_SOURCE_DEV_ID_STRING__SIZE; i++, j++)
+    {
+        devIdString[j] = buffer[i];
+    }
+
+    // 0x409 for sink and 0x509 for branch provides HW revision.
+    // 0x40A-0x40B for sink and 0x50A-0x50B for branch provides SW/Firmware revision.
+    *hwRevision = buffer[9];
+    *swMajorRevision = buffer[10];
+    *swMinorRevision = buffer[11];
+
+    return true;
+}
+
+bool DeviceImpl::getParentSpecificData(NvU8 *oui, NvU8 *devIdString,
+                                       NvU8 *hwRevision, NvU8 *swMajorRevision,
+                                       NvU8 *swMinorRevision)
+{
+    if (this->parent == NULL)
+    {
+        return false;
+    }
+
+    return this->parent->getDeviceSpecificData(oui, devIdString, hwRevision,
+                                               swMajorRevision, swMinorRevision);
+}
+
+bool DeviceImpl::setModeList(DisplayPort::DpModesetParams *modeList, unsigned numModes)
+{
+    // Create a dummy group for compoundQuery
+    GroupImpl g(connector);
+    g.insert(this);
+
+    maxModeBwRequired = 0;
+
+    for (unsigned modeItr = 0; modeItr < numModes; modeItr++)
+    {
+        connector->beginCompoundQuery();
+        DscParams dscParams = DscParams();
+        dscParams.bCheckWithDsc = true;
+
+        DpModesetParams &modesetParams = modeList[modeItr];
+        NvU64 bpp = modesetParams.modesetInfo.depth;
+        DP_IMP_ERROR dpImpError = DP_IMP_ERROR_NONE;
+
+        if (connector->compoundQueryAttach((Group *)&g, modesetParams, &dscParams, &dpImpError))
+        {
+            if (dscParams.bEnableDsc)
+            {
+                bpp = divide_ceil(dscParams.bitsPerPixelX16, 16);
+            }
+
+            NvU64 modeBwRequired = modesetParams.modesetInfo.pixelClockHz * bpp;
+            if (maxModeBwRequired < modeBwRequired)
+            {
+                maxModeBwRequired = modeBwRequired;
+            }
+        }
+
+        connector->endCompoundQuery();
+    }
+
+    DP_PRINTF(DP_INFO, "Computed Max mode BW: %d Mbps", maxModeBwRequired / (1000 * 1000));
+
+    connector->updateDpTunnelBwAllocation();
+
+    return true;
 }
 
 void
@@ -2737,9 +3389,9 @@ DeviceHDCPDetection::handleRemoteDpcdReadDownReply
     {
         bksvReadCompleted = true;
         bBKSVReadMessagePending = false;
-        DP_LOG(("DP-QM> REMOTE_DPCD_READ(BKSV) {%p} at '%s' completed",
-                (MessageManager::Message *)&remoteBKSVReadMessage,
-                parent->address.toString(sb)));
+        DP_PRINTF(DP_NOTICE, "DP-QM> REMOTE_DPCD_READ(BKSV) {%p} at '%s' completed",
+                  (MessageManager::Message *)&remoteBKSVReadMessage,
+                  parent->address.toString(sb));
 
         if (remoteBKSVReadMessage.replyNumOfBytesReadDPCD() != HDCP_KSV_SIZE)
         {
@@ -2762,17 +3414,17 @@ DeviceHDCPDetection::handleRemoteDpcdReadDownReply
             for (unsigned i=0; i<HDCP_KSV_SIZE; i++)
                 parent->BKSV[i] = (remoteBKSVReadMessage.replyGetData())[i];
 
-            DP_LOG(("DP-QM> Device at '%s' is with valid BKSV.",
-                parent->address.toString(sb)));
+            DP_PRINTF(DP_NOTICE, "DP-QM> Device at '%s' is with valid BKSV.",
+                  parent->address.toString(sb));
         }
     }
     else if (from == &remoteBCapsReadMessage)
     {
         bCapsReadCompleted = true;
         bBCapsReadMessagePending = false;
-        DP_LOG(("DP-QM> REMOTE_DPCD_READ(BCaps) {%p} at '%s' completed",
-                (MessageManager::Message *)&remoteBCapsReadMessage,
-                parent->address.toString(sb)));
+        DP_PRINTF(DP_NOTICE, "DP-QM> REMOTE_DPCD_READ(BCaps) {%p} at '%s' completed",
+                  (MessageManager::Message *)&remoteBCapsReadMessage,
+                  parent->address.toString(sb));
 
         if (remoteBCapsReadMessage.replyNumOfBytesReadDPCD() != HDCP_BCAPS_SIZE)
         {
@@ -2794,22 +3446,22 @@ DeviceHDCPDetection::handleRemoteDpcdReadDownReply
             *(parent->nvBCaps) = *(parent->BCAPS) = *remoteBCapsReadMessage.replyGetData();
             isBCapsHDCP = true;
 
-            DP_LOG(("DP-QM> Device at '%s' is with valid BCAPS : %x",
-                parent->address.toString(sb), *remoteBCapsReadMessage.replyGetData()));
+            DP_PRINTF(DP_NOTICE, "DP-QM> Device at '%s' is with valid BCAPS : %x",
+                  parent->address.toString(sb), *remoteBCapsReadMessage.replyGetData());
         }
         else
         {
             if (isValidBKSV)
             {
-                DP_LOG(("DP-QM> Device at '%s' is with valid BKSV but Invalid BCAPS : %x",
-                    parent->address.toString(sb), *remoteBCapsReadMessage.replyGetData()));
+                DP_PRINTF(DP_WARNING, "DP-QM> Device at '%s' is with valid BKSV but Invalid BCAPS : %x",
+                      parent->address.toString(sb), *remoteBCapsReadMessage.replyGetData());
 
                 // Read the BCAPS DDC offset
                 parent->transaction(AuxBus::read, AuxBus::i2cMot, HDCP_I2C_CLIENT_ADDR, &i2cBcaps,
                                  1, &dataCompleted, &defaultReason, HDCP_BCAPS_DDC_OFFSET, 1);
 
-                DP_LOG(("DP-QM> Device at '%s' is with DDC BACPS: %x",
-                    parent->address.toString(sb), i2cBcaps));
+                DP_PRINTF(DP_NOTICE, "DP-QM> Device at '%s' is with DDC BACPS: %x",
+                      parent->address.toString(sb), i2cBcaps);
 
                 // If the Reserved Bit is SET, Device supports HDCP
                 if (i2cBcaps & HDCP_BCAPS_DDC_EN_BIT)
@@ -2822,7 +3474,7 @@ DeviceHDCPDetection::handleRemoteDpcdReadDownReply
             }
             else
             {
-                DP_LOG(("DP-QM> Device at '%s' is without valid BKSV and BCAPS, thus try 22BCAPS"));
+                DP_PRINTF(DP_NOTICE, "DP-QM> Device at '%s' is without valid BKSV and BCAPS, thus try 22BCAPS", parent->address.toString(sb));
 
                 Address parentAddress = parent->address.parent();
                 remote22BCapsReadMessage.setMessagePriority(NV_DP_SBMSG_PRIORITY_LEVEL_DEFAULT);
@@ -2837,9 +3489,9 @@ DeviceHDCPDetection::handleRemoteDpcdReadDownReply
     {
         bCapsReadCompleted = true;
         bBCapsReadMessagePending = false;
-        DP_LOG(("DP-QM> REMOTE_DPCD_READ(22BCaps) {%p} at '%s' completed",
-                (MessageManager::Message *)&remote22BCapsReadMessage,
-                parent->address.toString(sb)));
+        DP_PRINTF(DP_NOTICE, "DP-QM> REMOTE_DPCD_READ(22BCaps) {%p} at '%s' completed",
+                  (MessageManager::Message *)&remote22BCapsReadMessage,
+                  parent->address.toString(sb));
 
         if (remote22BCapsReadMessage.replyNumOfBytesReadDPCD() != HDCP22_BCAPS_SIZE)
         {
@@ -2871,8 +3523,8 @@ DeviceHDCPDetection::handleRemoteDpcdReadDownReply
             // hdcp22 will validate certificate's bksv directly.
             isBCapsHDCP = isValidBKSV = true;
 
-            DP_LOG(("DP-QM> Device at '%s' is with valid 22BCAPS : %x",
-                parent->address.toString(sb), *remote22BCapsReadMessage.replyGetData()));
+            DP_PRINTF(DP_NOTICE, "DP-QM> Device at '%s' is with valid 22BCAPS : %x",
+                  parent->address.toString(sb), *remote22BCapsReadMessage.replyGetData());
         }
     }
 
@@ -2999,11 +3651,11 @@ DeviceHDCPDetection::messageFailed
     parent->isHDCPCap = False;
     Address::StringBuffer sb;
     DP_USED(sb);
-    DP_LOG(("DP-QM> Message %s {%p} at '%s' failed. Device marked as not HDCP support.",
-            from == &remoteBKSVReadMessage ? "REMOTE_DPCD_READ(BKSV)" :
-            from == &remoteBCapsReadMessage ? "REMOTE_DPC_READ(BCaps)" :
-            from == &remote22BCapsReadMessage ? "REMOTE_DPC_READ(22BCaps)" : "???",
-            from, parent->address.toString(sb)));
+    DP_PRINTF(DP_ERROR, "DP-QM> Message %s {%p} at '%s' failed. Device marked as not HDCP support.",
+              from == &remoteBKSVReadMessage ? "REMOTE_DPCD_READ(BKSV)" :
+              from == &remoteBCapsReadMessage ? "REMOTE_DPC_READ(BCaps)" :
+              from == &remote22BCapsReadMessage ? "REMOTE_DPC_READ(22BCaps)" : "???",
+              from, parent->address.toString(sb));
 
     // Destruct only when no message is pending
     if (!(bBKSVReadMessagePending || bBCapsReadMessagePending))
@@ -3060,11 +3712,11 @@ DeviceHDCPDetection::expired
 
         Address::StringBuffer sb;
         DP_USED(sb);
-        DP_LOG(("DP-QM> Requeing REMOTE_DPCD_READ_MESSAGE(BKSV) to %s", parentAddress.toString(sb)));
+        DP_PRINTF(DP_NOTICE, "DP-QM> Requeing REMOTE_DPCD_READ_MESSAGE(BKSV) to %s", parentAddress.toString(sb));
 
         retryRemoteBKSVReadMessage = false;
         remoteBKSVReadMessage.set(parentAddress, parent->address.tail(), NV_DPCD_HDCP_BKSV_OFFSET, HDCP_KSV_SIZE);
-        DP_LOG(("DP-QM> Get BKSV (remotely) for '%s' sent REMOTE_DPCD_READ {%p}", parent->address.toString(sb), &remoteBKSVReadMessage));
+        DP_PRINTF(DP_NOTICE, "DP-QM> Get BKSV (remotely) for '%s' sent REMOTE_DPCD_READ {%p}", parent->address.toString(sb), &remoteBKSVReadMessage);
 
         bBKSVReadMessagePending = true;
         messageManager->post(&remoteBKSVReadMessage, this);
@@ -3076,11 +3728,11 @@ DeviceHDCPDetection::expired
 
         Address::StringBuffer sb;
         DP_USED(sb);
-        DP_LOG(("DP-QM> Requeing REMOTE_DPCD_READ_MESSAGE(BCAPS) to %s", parentAddress.toString(sb)));
+        DP_PRINTF(DP_NOTICE, "DP-QM> Requeing REMOTE_DPCD_READ_MESSAGE(BCAPS) to %s", parentAddress.toString(sb));
 
         retryRemoteBCapsReadMessage = false;
         remoteBCapsReadMessage.set(parentAddress, parent->address.tail(), NV_DPCD_HDCP_BCAPS_OFFSET, HDCP_BCAPS_SIZE);
-        DP_LOG(("DP-QM> Get BCaps (remotely) for '%s' sent REMOTE_DPCD_READ {%p}", parent->address.toString(sb), &remoteBCapsReadMessage));
+        DP_PRINTF(DP_NOTICE, "DP-QM> Get BCaps (remotely) for '%s' sent REMOTE_DPCD_READ {%p}", parent->address.toString(sb), &remoteBCapsReadMessage);
 
         bBCapsReadMessagePending = true;
         messageManager->post(&remoteBCapsReadMessage, this);
@@ -3092,11 +3744,11 @@ DeviceHDCPDetection::expired
 
         Address::StringBuffer sb;
         DP_USED(sb);
-        DP_LOG(("DP-QM> Requeing REMOTE_DPCD_READ_MESSAGE(22BCAPS) to %s", parentAddress.toString(sb)));
+        DP_PRINTF(DP_NOTICE, "DP-QM> Requeing REMOTE_DPCD_READ_MESSAGE(22BCAPS) to %s", parentAddress.toString(sb));
 
         retryRemote22BCapsReadMessage = false;
         remote22BCapsReadMessage.set(parentAddress, parent->address.tail(), NV_DPCD_HDCP22_BCAPS_OFFSET, HDCP22_BCAPS_SIZE);
-        DP_LOG(("DP-QM> Get 22BCaps (remotely) for '%s' sent REMOTE_DPCD_READ {%p}", parent->address.toString(sb), &remote22BCapsReadMessage));
+        DP_PRINTF(DP_NOTICE, "DP-QM> Get 22BCaps (remotely) for '%s' sent REMOTE_DPCD_READ {%p}", parent->address.toString(sb), &remote22BCapsReadMessage);
 
         bBCapsReadMessagePending = true;
         messageManager->post(&remote22BCapsReadMessage, this);

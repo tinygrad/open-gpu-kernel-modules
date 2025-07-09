@@ -1,13 +1,22 @@
+
 #ifndef _G_GSYNC_NVOC_H_
 #define _G_GSYNC_NVOC_H_
+
+// Version of generated metadata structures
+#ifdef NVOC_METADATA_VERSION
+#undef NVOC_METADATA_VERSION
+#endif
+#define NVOC_METADATA_VERSION 2
+
 #include "nvoc/runtime.h"
+#include "nvoc/rtti.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2006-2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2006-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -29,6 +38,7 @@ extern "C" {
  * DEALINGS IN THE SOFTWARE.
  */
 
+#pragma once
 #include "g_gsync_nvoc.h"
 
 #ifndef GSYNC_H_
@@ -104,6 +114,9 @@ typedef enum {
     refSetCommit       = 2,
 } REFTYPE;
 
+// Pre-define to use OBJGSYNC references in API calls
+typedef struct _def_gsync OBJGSYNC;
+
 typedef NV30F1_CTRL_GSYNC_GET_OPTIMIZED_TIMING_PARAMS GSYNCTIMINGPARAMS;
 typedef NV30F1_CTRL_GSYNC_GET_CAPS_PARAMS             GSYNCCAPSPARAMS;
 
@@ -128,11 +141,11 @@ typedef NV_STATUS GsyncGetInterlaceMode  (struct OBJGPU *, PDACEXTERNALDEVICE, N
 typedef NV_STATUS GsyncSetInterlaceMode  (struct OBJGPU *, PDACEXTERNALDEVICE, NvU32);
 typedef NV_STATUS GsyncRefSwapBarrier    (struct OBJGPU *, PDACEXTERNALDEVICE, REFTYPE, NvBool *);
 typedef NV_STATUS GsyncRefSignal         (struct OBJGPU *, PDACEXTERNALDEVICE, REFTYPE, GSYNCSYNCSIGNAL, NvBool TestRate, NvU32 *);
-typedef NV_STATUS GsyncRefMaster         (struct OBJGPU *, PDACEXTERNALDEVICE, REFTYPE, NvU32 *, NvU32 *, NvBool, NvBool);
+typedef NV_STATUS GsyncRefMaster         (struct OBJGPU *, OBJGSYNC *, REFTYPE, NvU32 *, NvU32 *, NvBool, NvBool);
 typedef NV_STATUS GsyncRefSlaves         (struct OBJGPU *, PDACEXTERNALDEVICE, REFTYPE, NvU32 *, NvU32 *);
 typedef NV_STATUS GsyncGetCplStatus      (struct OBJGPU *, PDACEXTERNALDEVICE, GSYNCSTATUS, NvU32 *);
 typedef NV_STATUS GsyncSetWatchdog       (struct OBJGPU *, PDACEXTERNALDEVICE, NvU32);
-typedef NV_STATUS GsyncGetRevision       (struct OBJGPU *, PDACEXTERNALDEVICE, GSYNCCAPSPARAMS *);
+typedef NV_STATUS GsyncGetRevision       (struct OBJGPU *, OBJGSYNC *, GSYNCCAPSPARAMS *);
 typedef NV_STATUS GsyncRefMasterable     (struct OBJGPU *, PDACEXTERNALDEVICE, REFTYPE, NvU32 *, NvU32 *);
 typedef NV_STATUS GsyncGetStereoLockMode (struct OBJGPU *, PDACEXTERNALDEVICE, NvU32 *);
 typedef NV_STATUS GsyncSetStereoLockMode (struct OBJGPU *, PDACEXTERNALDEVICE, NvU32);
@@ -143,6 +156,9 @@ typedef NV_STATUS GsyncGetHouseSyncMode  (struct OBJGPU *, PDACEXTERNALDEVICE, N
 typedef NV_STATUS GsyncSetHouseSyncMode  (struct OBJGPU *, PDACEXTERNALDEVICE, NvU8);
 typedef NV_STATUS GsyncGetMulDiv         (struct OBJGPU *, DACEXTERNALDEVICE *, NV30F1_CTRL_GSYNC_MULTIPLY_DIVIDE_SETTINGS *);
 typedef NV_STATUS GsyncSetMulDiv         (struct OBJGPU *, DACEXTERNALDEVICE *, NV30F1_CTRL_GSYNC_MULTIPLY_DIVIDE_SETTINGS *);
+typedef NV_STATUS GsyncGetVRR            (struct OBJGPU *, DACEXTERNALDEVICE *, NvU32 *);
+typedef NV_STATUS GsyncSetVRR            (struct OBJGPU *, DACEXTERNALDEVICE *, NvU32);
+typedef NV_STATUS GsyncSetRasterSyncDecodeMode (struct OBJGPU *, DACEXTERNALDEVICE *);
 
 typedef struct GSYNC_HAL_IFACES {
 
@@ -180,6 +196,9 @@ typedef struct GSYNC_HAL_IFACES {
     GsyncSetHouseSyncMode   *gsyncSetHouseSyncMode;
     GsyncGetMulDiv          *gsyncGetMulDiv;
     GsyncSetMulDiv          *gsyncSetMulDiv;
+    GsyncGetVRR             *gsyncGetVRR;
+    GsyncSetVRR             *gsyncSetVRR;
+    GsyncSetRasterSyncDecodeMode *gsyncSetRasterSyncDecodeMode;
 
 } GSYNC_HAL_IFACES;
 
@@ -210,14 +229,12 @@ typedef struct _def_gsync {
     // gsync hal
     GSYNC_HAL_IFACES gsyncHal;
 
-} OBJGSYNC, *POBJGSYNC;
+} OBJGSYNC;
 
 /* ------------------------ Macros & Defines ------------------------------- */
 #define FLIPLOCK_LSR_MIN_TIME_FOR_SAWP_BARRIER_NV50  0x3FF //max LSR_MIN_TIME value for nv50
 #define FLIPLOCK_LSR_MIN_TIME_FOR_SAWP_BARRIER_GF100 0x3FF //max LSR_MIN_TIME value for gf100
 #define FLIPLOCK_LSR_MIN_TIME_FOR_SAWP_BARRIER_V02   0x3FF //max LSR_MIN_TIME value for gf11x+
-
-typedef struct OBJGSYNCMGR *POBJGSYNCMGR;
 
 
 // Private field names are wrapped in PRIVATE_FIELD, which does nothing for
@@ -229,13 +246,37 @@ typedef struct OBJGSYNCMGR *POBJGSYNCMGR;
 #define PRIVATE_FIELD(x) NVOC_PRIVATE_FIELD(x)
 #endif
 
+
+// Metadata with per-class RTTI with ancestor(s)
+struct NVOC_METADATA__OBJGSYNCMGR;
+struct NVOC_METADATA__Object;
+
+
 struct OBJGSYNCMGR {
-    const struct NVOC_RTTI *__nvoc_rtti;
+
+    // Metadata starts with RTTI structure.
+    union {
+         const struct NVOC_METADATA__OBJGSYNCMGR *__nvoc_metadata_ptr;
+         const struct NVOC_RTTI *__nvoc_rtti;
+    };
+
+    // Parent (i.e. superclass or base class) objects
     struct Object __nvoc_base_Object;
-    struct Object *__nvoc_pbase_Object;
-    struct OBJGSYNCMGR *__nvoc_pbase_OBJGSYNCMGR;
+
+    // Ancestor object pointers for `staticCast` feature
+    struct Object *__nvoc_pbase_Object;    // obj super
+    struct OBJGSYNCMGR *__nvoc_pbase_OBJGSYNCMGR;    // gsyncmgr
+
+    // Data members
     NvU32 gsyncCount;
     OBJGSYNC gsyncTable[4];
+};
+
+
+// Metadata with per-class RTTI with ancestor(s)
+struct NVOC_METADATA__OBJGSYNCMGR {
+    const struct NVOC_RTTI rtti;
+    const struct NVOC_METADATA__Object metadata__Object;
 };
 
 #ifndef __NVOC_CLASS_OBJGSYNCMGR_TYPEDEF__
@@ -247,24 +288,38 @@ typedef struct OBJGSYNCMGR OBJGSYNCMGR;
 #define __nvoc_class_id_OBJGSYNCMGR 0xd07fd0
 #endif /* __nvoc_class_id_OBJGSYNCMGR */
 
+// Casting support
 extern const struct NVOC_CLASS_DEF __nvoc_class_def_OBJGSYNCMGR;
 
 #define __staticCast_OBJGSYNCMGR(pThis) \
     ((pThis)->__nvoc_pbase_OBJGSYNCMGR)
 
 #ifdef __nvoc_gsync_h_disabled
-#define __dynamicCast_OBJGSYNCMGR(pThis) ((OBJGSYNCMGR*)NULL)
+#define __dynamicCast_OBJGSYNCMGR(pThis) ((OBJGSYNCMGR*) NULL)
 #else //__nvoc_gsync_h_disabled
 #define __dynamicCast_OBJGSYNCMGR(pThis) \
-    ((OBJGSYNCMGR*)__nvoc_dynamicCast(staticCast((pThis), Dynamic), classInfo(OBJGSYNCMGR)))
+    ((OBJGSYNCMGR*) __nvoc_dynamicCast(staticCast((pThis), Dynamic), classInfo(OBJGSYNCMGR)))
 #endif //__nvoc_gsync_h_disabled
-
 
 NV_STATUS __nvoc_objCreateDynamic_OBJGSYNCMGR(OBJGSYNCMGR**, Dynamic*, NvU32, va_list);
 
 NV_STATUS __nvoc_objCreate_OBJGSYNCMGR(OBJGSYNCMGR**, Dynamic*, NvU32);
 #define __objCreate_OBJGSYNCMGR(ppNewObj, pParent, createFlags) \
     __nvoc_objCreate_OBJGSYNCMGR((ppNewObj), staticCast((pParent), Dynamic), (createFlags))
+
+
+// Wrapper macros
+#define gsyncmgrIsFirmwareGPUMismatch(pGpu, pGsync) gsyncmgrIsFirmwareGPUMismatch_STATIC_DISPATCH(pGpu, pGsync)
+#define gsyncmgrIsFirmwareGPUMismatch_HAL(pGpu, pGsync) gsyncmgrIsFirmwareGPUMismatch_STATIC_DISPATCH(pGpu, pGsync)
+
+// Dispatch functions
+NvBool gsyncmgrIsFirmwareGPUMismatch_GB100(struct OBJGPU *pGpu, OBJGSYNC *pGsync);
+
+static inline NvBool gsyncmgrIsFirmwareGPUMismatch_4a4dee(struct OBJGPU *pGpu, OBJGSYNC *pGsync) {
+    return 0;
+}
+
+NvBool gsyncmgrIsFirmwareGPUMismatch_STATIC_DISPATCH(struct OBJGPU *pGpu, OBJGSYNC *pGsync);
 
 NV_STATUS gsyncmgrConstruct_IMPL(struct OBJGSYNCMGR *arg_pGsyncmgr);
 

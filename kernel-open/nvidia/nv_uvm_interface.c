@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2013-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2013-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -208,7 +208,6 @@ NV_STATUS nvUvmInterfaceSessionCreate(uvmGpuSessionHandle *session,
 
     memset(platformInfo, 0, sizeof(*platformInfo));
     platformInfo->atsSupported = nv_ats_supported;
-
     platformInfo->confComputingEnabled = os_cc_enabled;
 
     status = rm_gpu_ops_create_session(sp, (gpuSessionHandle *)session);
@@ -692,7 +691,8 @@ EXPORT_SYMBOL(nvUvmInterfaceServiceDeviceInterruptsRM);
 
 NV_STATUS nvUvmInterfaceSetPageDirectory(uvmGpuAddressSpaceHandle vaSpace,
                                          NvU64 physAddress, unsigned numEntries,
-                                         NvBool bVidMemAperture, NvU32 pasid)
+                                         NvBool bVidMemAperture, NvU32 pasid,
+                                         NvU64 *dmaAddress)
 {
     nvidia_stack_t *sp = NULL;
     NV_STATUS status;
@@ -703,7 +703,8 @@ NV_STATUS nvUvmInterfaceSetPageDirectory(uvmGpuAddressSpaceHandle vaSpace,
     }
 
     status = rm_gpu_ops_set_page_directory(sp, (gpuAddressSpaceHandle)vaSpace,
-                                    physAddress, numEntries, bVidMemAperture, pasid);
+                                    physAddress, numEntries, bVidMemAperture, pasid,
+                                    dmaAddress);
 
     nv_kmem_cache_free_stack(sp);
     return status;
@@ -894,6 +895,7 @@ NV_STATUS nvUvmInterfaceInitFaultInfo(uvmGpuDeviceHandle device,
             goto error;
         }
     }
+
     goto done;
 
 error:
@@ -931,7 +933,7 @@ EXPORT_SYMBOL(nvUvmInterfaceInitAccessCntrInfo);
 
 NV_STATUS nvUvmInterfaceEnableAccessCntr(uvmGpuDeviceHandle device,
                                          UvmGpuAccessCntrInfo *pAccessCntrInfo,
-                                         UvmGpuAccessCntrConfig *pAccessCntrConfig)
+                                         const UvmGpuAccessCntrConfig *pAccessCntrConfig)
 {
     nvidia_stack_t *sp = NULL;
     NV_STATUS status;
@@ -1219,6 +1221,73 @@ NV_STATUS nv_uvm_event_interrupt(const NvU8 *pUuid)
     return NV_ERR_NO_INTR_PENDING;
 }
 
+NV_STATUS nvUvmInterfaceGetNvlinkInfo(uvmGpuDeviceHandle device,
+                                      UvmGpuNvlinkInfo *nvlinkInfo)
+{
+    nvidia_stack_t *sp = NULL;
+    NV_STATUS status;
+
+    if (nv_kmem_cache_alloc_stack(&sp) != 0)
+    {
+        return NV_ERR_NO_MEMORY;
+    }
+
+    status = rm_gpu_ops_get_nvlink_info(sp, (gpuDeviceHandle)device, nvlinkInfo);
+
+    nv_kmem_cache_free_stack(sp);
+
+    return status;
+}
+EXPORT_SYMBOL(nvUvmInterfaceGetNvlinkInfo);
+
+NV_STATUS nv_uvm_drain_P2P(const NvU8 *uuid)
+{
+    NvProcessorUuid uvmUuid;
+    struct UvmOpsUvmEvents *events;
+    NV_STATUS ret = NV_ERR_NOT_SUPPORTED;
+
+    memcpy(uvmUuid.uuid, uuid, UVM_UUID_LEN);
+
+    // Synchronize callbacks with unregistration
+    down(&g_pNvUvmEventsLock);
+
+    // It's not strictly necessary to use a cached local copy of the events
+    // pointer here since it can't change under the lock, but we'll do it for
+    // consistency.
+    events = getUvmEvents();
+    if(events && events->drainP2P)
+    {
+        ret = events->drainP2P(&uvmUuid);
+    }
+    up(&g_pNvUvmEventsLock);
+
+    return ret;
+}
+
+NV_STATUS nv_uvm_resume_P2P(const NvU8 *uuid)
+{
+    NvProcessorUuid uvmUuid;
+    struct UvmOpsUvmEvents *events;
+    NV_STATUS ret = NV_ERR_NOT_SUPPORTED;
+
+    memcpy(uvmUuid.uuid, uuid, UVM_UUID_LEN);
+
+    // Synchronize callbacks with unregistration
+    down(&g_pNvUvmEventsLock);
+
+    // It's not strictly necessary to use a cached local copy of the events
+    // pointer here since it can't change under the lock, but we'll do it for
+    // consistency.
+    events = getUvmEvents();
+    if(events && events->resumeP2P)
+    {
+        ret = events->resumeP2P(&uvmUuid);
+    }
+    up(&g_pNvUvmEventsLock);
+
+    return ret;
+}
+
 NV_STATUS nvUvmInterfaceP2pObjectCreate(uvmGpuDeviceHandle device1,
                                         uvmGpuDeviceHandle device2,
                                         NvHandle *hP2pObject)
@@ -1276,6 +1345,32 @@ NV_STATUS nvUvmInterfaceGetExternalAllocPtes(uvmGpuAddressSpaceHandle vaSpace,
     return status;
 }
 EXPORT_SYMBOL(nvUvmInterfaceGetExternalAllocPtes);
+
+NV_STATUS nvUvmInterfaceGetExternalAllocPhysAddrs(uvmGpuAddressSpaceHandle vaSpace,
+                                                  NvHandle hDupedMemory,
+                                                  NvU64 offset,
+                                                  NvU64 size,
+                                                  UvmGpuExternalPhysAddrInfo *gpuExternalPhysAddrInfo)
+{
+    nvidia_stack_t *sp = NULL;
+    NV_STATUS status;
+
+    if (nv_kmem_cache_alloc_stack(&sp) != 0)
+    {
+        return NV_ERR_NO_MEMORY;
+    }
+
+    status = rm_gpu_ops_get_external_alloc_phys_addrs(sp,
+                                                      (gpuAddressSpaceHandle)vaSpace,
+                                                      hDupedMemory,
+                                                      offset,
+                                                      size,
+                                                      gpuExternalPhysAddrInfo);
+
+    nv_kmem_cache_free_stack(sp);
+    return status;
+}
+EXPORT_SYMBOL(nvUvmInterfaceGetExternalAllocPhysAddrs);
 
 NV_STATUS nvUvmInterfaceRetainChannel(uvmGpuAddressSpaceHandle vaSpace,
                                       NvHandle hClient,
@@ -1478,6 +1573,14 @@ NV_STATUS nvUvmInterfacePagingChannelPushStream(UvmGpuPagingChannelHandle channe
 }
 EXPORT_SYMBOL(nvUvmInterfacePagingChannelPushStream);
 
+void nvUvmInterfaceReportFatalError(NV_STATUS error)
+{
+    nvidia_stack_t *sp = nvUvmGetSafeStack();
+    rm_gpu_ops_report_fatal_error(sp, error);
+    nvUvmFreeSafeStack(sp);
+}
+EXPORT_SYMBOL(nvUvmInterfaceReportFatalError);
+
 NV_STATUS nvUvmInterfaceCslInitContext(UvmCslContext *uvmCslContext,
                                        uvmGpuChannelHandle channel)
 {
@@ -1516,16 +1619,23 @@ void nvUvmInterfaceDeinitCslContext(UvmCslContext *uvmCslContext)
 }
 EXPORT_SYMBOL(nvUvmInterfaceDeinitCslContext);
 
-NV_STATUS nvUvmInterfaceCslUpdateContext(UvmCslContext *uvmCslContext)
+NV_STATUS nvUvmInterfaceCslRotateKey(UvmCslContext *contextList[],
+                                     NvU32 contextListCount)
 {
     NV_STATUS status;
-    nvidia_stack_t *sp = uvmCslContext->nvidia_stack;
+    nvidia_stack_t *sp;
 
-    status = rm_gpu_ops_ccsl_context_update(sp, uvmCslContext->ctx);
+    if ((contextList == NULL) || (contextListCount == 0) || (contextList[0] == NULL))
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    sp = contextList[0]->nvidia_stack;
+    status = rm_gpu_ops_ccsl_rotate_key(sp, contextList, contextListCount);
 
     return status;
 }
-EXPORT_SYMBOL(nvUvmInterfaceCslUpdateContext);
+EXPORT_SYMBOL(nvUvmInterfaceCslRotateKey);
 
 NV_STATUS nvUvmInterfaceCslRotateIv(UvmCslContext *uvmCslContext,
                                     UvmCslOperation operation)
@@ -1562,6 +1672,7 @@ NV_STATUS nvUvmInterfaceCslDecrypt(UvmCslContext *uvmCslContext,
                                    NvU32 bufferSize,
                                    NvU8 const *inputBuffer,
                                    UvmCslIv const *decryptIv,
+                                   NvU32 keyRotationId,
                                    NvU8 *outputBuffer,
                                    NvU8 const *addAuthData,
                                    NvU32 addAuthDataSize,
@@ -1575,6 +1686,7 @@ NV_STATUS nvUvmInterfaceCslDecrypt(UvmCslContext *uvmCslContext,
                                      bufferSize,
                                      inputBuffer,
                                      (NvU8 *)decryptIv,
+                                     keyRotationId,
                                      outputBuffer,
                                      addAuthData,
                                      addAuthDataSize,
@@ -1625,17 +1737,18 @@ NV_STATUS nvUvmInterfaceCslIncrementIv(UvmCslContext *uvmCslContext,
 }
 EXPORT_SYMBOL(nvUvmInterfaceCslIncrementIv);
 
-NV_STATUS nvUvmInterfaceCslLogExternalEncryption(UvmCslContext *uvmCslContext,
-                                                 NvU32 bufferSize)
+NV_STATUS nvUvmInterfaceCslLogEncryption(UvmCslContext *uvmCslContext,
+                                         UvmCslOperation operation,
+                                         NvU32 bufferSize)
 {
     NV_STATUS status;
     nvidia_stack_t *sp = uvmCslContext->nvidia_stack;
 
-    status = rm_gpu_ops_ccsl_log_device_encryption(sp, uvmCslContext->ctx, bufferSize);
+    status = rm_gpu_ops_ccsl_log_encryption(sp, uvmCslContext->ctx, operation, bufferSize);
 
     return status;
 }
-EXPORT_SYMBOL(nvUvmInterfaceCslLogExternalEncryption);
+EXPORT_SYMBOL(nvUvmInterfaceCslLogEncryption);
 
 #else // NV_UVM_ENABLE
 

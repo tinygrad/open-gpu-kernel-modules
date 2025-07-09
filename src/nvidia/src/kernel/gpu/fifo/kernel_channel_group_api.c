@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -43,6 +43,7 @@
 #include "gpu/mem_mgr/vaspace_api.h"
 #include "vgpu/rpc.h"
 #include "rmapi/rs_utils.h"
+#include "containers/eheap_old.h"
 
 NV_STATUS
 kchangrpapiConstruct_IMPL
@@ -85,7 +86,7 @@ kchangrpapiConstruct_IMPL
     if (RS_IS_COPY_CTOR(pParams))
     {
         NV_ASSERT_OK_OR_GOTO(rmStatus,
-                             rmGpuLocksAcquire(GPUS_LOCK_FLAGS_NONE, RM_LOCK_MODULES_FIFO),
+                             rmDeviceGpuLocksAcquire(pGpu, GPUS_LOCK_FLAGS_NONE, RM_LOCK_MODULES_FIFO),
                              done);
         bLockAcquired = NV_TRUE;
         rmStatus = kchangrpapiCopyConstruct_IMPL(pKernelChannelGroupApi,
@@ -102,7 +103,7 @@ kchangrpapiConstruct_IMPL
     if (rmDeviceGpuLockIsOwner(pGpu->gpuInstance))
     {
         NV_PRINTF(LEVEL_ERROR, "TSG alloc should be called without acquiring GPU lock\n");
-        LOCK_ASSERT_AND_RETURN(0);
+        NV_ASSERT_OR_RETURN(0, NV_ERR_INVALID_LOCK_STATE);
     }
 
     bufInfoList = portMemAllocNonPaged(NV_ENUM_SIZE(GR_CTX_BUFFER) * sizeof(*bufInfoList));
@@ -113,7 +114,7 @@ kchangrpapiConstruct_IMPL
 
     // Acquire the lock *only after* PMA is done allocating.
     NV_ASSERT_OK_OR_GOTO(rmStatus,
-                         rmGpuLocksAcquire(GPUS_LOCK_FLAGS_NONE, RM_LOCK_MODULES_FIFO),
+                         rmDeviceGpuLocksAcquire(pGpu, GPUS_LOCK_FLAGS_NONE, RM_LOCK_MODULES_FIFO),
                          done);
     bLockAcquired = NV_TRUE;
 
@@ -234,7 +235,9 @@ kchangrpapiConstruct_IMPL
 
     // vGpu plugin context flag should only be set on host if context is plugin
     if (gpuIsSriovEnabled(pGpu))
+    {
         pKernelChannelGroup->bIsCallingContextVgpuPlugin = pAllocParams->bIsCallingContextVgpuPlugin;
+    }
 
     if (pKernelChannelGroup->bIsCallingContextVgpuPlugin)
         gfid = GPU_GFID_PF;
@@ -245,15 +248,13 @@ kchangrpapiConstruct_IMPL
 
     if (!RMCFG_FEATURE_PLATFORM_GSP)
     {
-        NvHandle hRcWatchdog;
-
+        RmClient *pRmClient = dynamicCast(pClient, RmClient);
         //
-        // WAR for 4217716 - Force allocations made on behalf of watchdog client to
+        // WAR for 4217716 - Force allocations made on behalf of internal clients to
         // RM reserved heap. This avoids a constant memory allocation from appearing
         // due to the ctxBufPool reservation out of PMA.
         //
-        rmStatus = krcWatchdogGetClientHandle(GPU_GET_KERNEL_RC(pGpu), &hRcWatchdog);
-        if ((rmStatus != NV_OK) || (pParams->hClient != hRcWatchdog))
+        if ((pRmClient == NULL) || !(pRmClient->Flags & RMAPI_CLIENT_FLAG_RM_INTERNAL_CLIENT))
         {
             NV_ASSERT_OK_OR_GOTO(rmStatus,
                 ctxBufPoolInit(pGpu, pHeap, &pKernelChannelGroup->pCtxBufPool),
@@ -548,7 +549,7 @@ failed:
 done:
 
     if (bLockAcquired)
-        rmGpuLocksRelease(GPUS_LOCK_FLAGS_NONE, NULL);
+        rmDeviceGpuLocksRelease(pGpu, GPUS_LOCK_FLAGS_NONE, NULL);
 
     if ((rmStatus == NV_OK) && bReserveMem)
     {
@@ -913,6 +914,8 @@ kchangrpapiSetLegacyMode_IMPL
 
     pKernelChannelGroup->pSubctxIdHeap->eheapDestruct(
         pKernelChannelGroup->pSubctxIdHeap);
+    pKernelChannelGroup->pVaSpaceIdHeap->eheapDestruct(
+        pKernelChannelGroup->pVaSpaceIdHeap);
     //
     // There should only be 1 (SYNC) or 2 legacy kctxshares (SYNC + ASYNC),
     // depending on chip
@@ -924,6 +927,8 @@ kchangrpapiSetLegacyMode_IMPL
     NV_ASSERT(maxSubctx == 1 || maxSubctx == 2);
 
     constructObjEHeap(pKernelChannelGroup->pSubctxIdHeap,
+                      0, maxSubctx, sizeof(KernelCtxShare *), 0);
+    constructObjEHeap(pKernelChannelGroup->pVaSpaceIdHeap,
                       0, maxSubctx, sizeof(KernelCtxShare *), 0);
 
     pKernelChannelGroup->bLegacyMode = NV_TRUE;
@@ -1380,7 +1385,7 @@ kchangrpapiCtrlCmdSetInterleaveLevel_IMPL
     RsResourceRef   *pResourceRef = RES_GET_REF(pKernelChannelGroupApi);
     KernelChannelGroup *pKernelChannelGroup =
         pKernelChannelGroupApi->pKernelChannelGroup;
-    PCLASSDESCRIPTOR pClass       = NULL;
+    CLASSDESCRIPTOR *pClass       = NULL;
     NV_STATUS        status       = NV_OK;
 
     if (gpuGetClassByClassId(pGpu, pResourceRef->externalClassId, &pClass) != NV_OK)
@@ -1432,19 +1437,3 @@ kchangrpapiCtrlCmdGetInterleaveLevel_IMPL
     return NV_OK;
 }
 
-/*!
- * @brief Handler for NVA06C_CTRL_CMD_INTERNAL_PROMOTE_FAULT_METHOD_BUFFERS
- *
- * This is currently un-implemented as split change for bug 200691429
- */
-NV_STATUS
-kchangrpapiCtrlCmdInternalPromoteFaultMethodBuffers_IMPL
-(
-    KernelChannelGroupApi *pKernelChannelGroupApi,
-    NVA06C_CTRL_INTERNAL_PROMOTE_FAULT_METHOD_BUFFERS_PARAMS *pParams
-)
-{
-    NV_PRINTF(LEVEL_INFO,
-        "bug 200691429: kchangrpapiCtrlCmdInternalPromoteFaultMethodBuffers_IMPL received\n");
-    return NV_OK;
-}

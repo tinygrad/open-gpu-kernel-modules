@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2002-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2002-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -52,7 +52,7 @@ kbusControlGetCaps
     NvU32 caps = 0;
 
     // if the Chip is integrated.
-    if ( IsTEGRA(pGpu) )
+    if ( IsTEGRA(pGpu) || pGpu->getProperty(pGpu, PDB_PROP_GPU_IS_SOC_SDM ))
     {
         caps |= NV2080_CTRL_BUS_INFO_CAPS_CHIP_INTEGRATED;
     }
@@ -251,7 +251,7 @@ subdeviceCtrlCmdBusGetNvlinkPeerIdMask_IMPL
         KernelBus *pKernelBus = GPU_GET_KERNEL_BUS(pGpu);
         NvU32 gfid;
 
-        LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner());
+        NV_ASSERT_OR_RETURN(rmapiLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
         // This control call should always run in context of a VF.
         NV_ASSERT_OK_OR_RETURN(vgpuGetCallingContextGfid(pGpu, &gfid));
@@ -677,3 +677,62 @@ subdeviceCtrlCmdBusSysmemAccess_IMPL
 
     return kbifDisableSysmemAccess_HAL(pGpu, pKernelBif, pParams->bDisable);
 }
+
+NV_STATUS
+subdeviceCtrlCmdBusGetPcieSupportedGpuAtomics_VF
+(
+    Subdevice *pSubdevice,
+    NV2080_CTRL_CMD_BUS_GET_PCIE_SUPPORTED_GPU_ATOMICS_PARAMS *pParams
+)
+{
+    // Atomics not supported in VF. See bug 3497203.
+    for (NvU32 i = 0; i < NV2080_CTRL_PCIE_SUPPORTED_GPU_ATOMICS_OP_TYPE_COUNT; i++)
+    {
+        pParams->atomicOp[i].bSupported = NV_FALSE;
+        pParams->atomicOp[i].attributes = 0x0;
+    }
+
+    return NV_OK;
+}
+
+NV_STATUS
+subdeviceCtrlCmdBusGetC2CInfo_VF
+(
+    Subdevice *pSubdevice,
+    NV2080_CTRL_CMD_BUS_GET_C2C_INFO_PARAMS *pParams
+)
+{
+    OBJGPU *pGpu = GPU_RES_GET_GPU(pSubdevice);
+    VGPU_STATIC_INFO *pVSI = GPU_GET_STATIC_INFO(pGpu);
+
+    NV_ASSERT_OR_RETURN(pVSI != NULL, NV_ERR_INVALID_STATE);
+
+    pParams->bIsLinkUp = pVSI->c2cInfo.bIsLinkUp;
+    pParams->nrLinks = pVSI->c2cInfo.nrLinks;
+    pParams->linkMask = pVSI->c2cInfo.linkMask;
+    pParams->perLinkBwMBps = pVSI->c2cInfo.perLinkBwMBps;
+    pParams->remoteType = pVSI->c2cInfo.remoteType;
+
+    return NV_OK;
+}
+
+NV_STATUS
+subdeviceCtrlCmdBusGetC2CLpwrStats_VF
+(
+    Subdevice                                      *pSubdevice,
+    NV2080_CTRL_CMD_BUS_GET_C2C_LPWR_STATS_PARAMS  *pParams
+)
+{
+    return NV_ERR_NOT_SUPPORTED;
+}
+
+NV_STATUS
+subdeviceCtrlCmdBusSetC2CLpwrStateVote_VF
+(
+    Subdevice                                           *pSubdevice,
+    NV2080_CTRL_CMD_BUS_SET_C2C_LPWR_STATE_VOTE_PARAMS  *pParams
+)
+{
+    return NV_ERR_NOT_SUPPORTED;
+}
+

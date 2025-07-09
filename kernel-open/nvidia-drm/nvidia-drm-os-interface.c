@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2023, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2015-2025, NVIDIA CORPORATION. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -42,7 +42,7 @@
 #endif
 
 bool nv_drm_modeset_module_param = false;
-bool nv_drm_fbdev_module_param = false;
+bool nv_drm_fbdev_module_param = true;
 
 void *nv_drm_calloc(size_t nmemb, size_t size)
 {
@@ -156,9 +156,15 @@ void nv_drm_unlock_user_pages(unsigned long  pages_count, struct page **pages)
 #define VM_USERMAP 0
 #endif
 
-void *nv_drm_vmap(struct page **pages, unsigned long pages_count)
+void *nv_drm_vmap(struct page **pages, unsigned long pages_count, bool cached)
 {
-    return vmap(pages, pages_count, VM_USERMAP, PAGE_KERNEL);
+    pgprot_t prot = PAGE_KERNEL;
+
+    if (!cached) {
+        prot = pgprot_noncached(PAGE_KERNEL);
+    }
+
+    return vmap(pages, pages_count, VM_USERMAP, prot);
 }
 
 void nv_drm_vunmap(void *address)
@@ -228,15 +234,6 @@ unsigned long nv_drm_timer_now(void)
 unsigned long nv_drm_timeout_from_ms(NvU64 relative_timeout_ms)
 {
     return jiffies + msecs_to_jiffies(relative_timeout_ms);
-}
-
-bool nv_drm_del_timer_sync(nv_drm_timer *timer)
-{
-    if (del_timer_sync(&timer->kernel_timer)) {
-        return true;
-    } else {
-        return false;
-    }
 }
 
 #if defined(NV_DRM_FENCE_AVAILABLE)

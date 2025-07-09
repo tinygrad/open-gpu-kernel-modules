@@ -1,6 +1,15 @@
+
 #ifndef _G_VIRT_MEM_MGR_NVOC_H_
 #define _G_VIRT_MEM_MGR_NVOC_H_
+
+// Version of generated metadata structures
+#ifdef NVOC_METADATA_VERSION
+#undef NVOC_METADATA_VERSION
+#endif
+#define NVOC_METADATA_VERSION 2
+
 #include "nvoc/runtime.h"
+#include "nvoc/rtti.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -29,6 +38,7 @@ extern "C" {
  * DEALINGS IN THE SOFTWARE.
  */
 
+#pragma once
 #include "g_virt_mem_mgr_nvoc.h"
 
 #ifndef VIRT_MEM_MGR_H
@@ -63,11 +73,33 @@ typedef struct OBJVMM OBJVMM;
 #define PRIVATE_FIELD(x) NVOC_PRIVATE_FIELD(x)
 #endif
 
+
+// Metadata with per-class RTTI with ancestor(s)
+struct NVOC_METADATA__OBJVMM;
+struct NVOC_METADATA__Object;
+
+
 struct OBJVMM {
-    const struct NVOC_RTTI *__nvoc_rtti;
+
+    // Metadata starts with RTTI structure.
+    union {
+         const struct NVOC_METADATA__OBJVMM *__nvoc_metadata_ptr;
+         const struct NVOC_RTTI *__nvoc_rtti;
+    };
+
+    // Parent (i.e. superclass or base class) objects
     struct Object __nvoc_base_Object;
-    struct Object *__nvoc_pbase_Object;
-    struct OBJVMM *__nvoc_pbase_OBJVMM;
+
+    // Ancestor object pointers for `staticCast` feature
+    struct Object *__nvoc_pbase_Object;    // obj super
+    struct OBJVMM *__nvoc_pbase_OBJVMM;    // vmm
+};
+
+
+// Metadata with per-class RTTI with ancestor(s)
+struct NVOC_METADATA__OBJVMM {
+    const struct NVOC_RTTI rtti;
+    const struct NVOC_METADATA__Object metadata__Object;
 };
 
 #ifndef __NVOC_CLASS_OBJVMM_TYPEDEF__
@@ -79,18 +111,18 @@ typedef struct OBJVMM OBJVMM;
 #define __nvoc_class_id_OBJVMM 0xa030ab
 #endif /* __nvoc_class_id_OBJVMM */
 
+// Casting support
 extern const struct NVOC_CLASS_DEF __nvoc_class_def_OBJVMM;
 
 #define __staticCast_OBJVMM(pThis) \
     ((pThis)->__nvoc_pbase_OBJVMM)
 
 #ifdef __nvoc_virt_mem_mgr_h_disabled
-#define __dynamicCast_OBJVMM(pThis) ((OBJVMM*)NULL)
+#define __dynamicCast_OBJVMM(pThis) ((OBJVMM*) NULL)
 #else //__nvoc_virt_mem_mgr_h_disabled
 #define __dynamicCast_OBJVMM(pThis) \
-    ((OBJVMM*)__nvoc_dynamicCast(staticCast((pThis), Dynamic), classInfo(OBJVMM)))
+    ((OBJVMM*) __nvoc_dynamicCast(staticCast((pThis), Dynamic), classInfo(OBJVMM)))
 #endif //__nvoc_virt_mem_mgr_h_disabled
-
 
 NV_STATUS __nvoc_objCreateDynamic_OBJVMM(OBJVMM**, Dynamic*, NvU32, va_list);
 
@@ -98,6 +130,10 @@ NV_STATUS __nvoc_objCreate_OBJVMM(OBJVMM**, Dynamic*, NvU32);
 #define __objCreate_OBJVMM(ppNewObj, pParent, createFlags) \
     __nvoc_objCreate_OBJVMM((ppNewObj), staticCast((pParent), Dynamic), (createFlags))
 
+
+// Wrapper macros
+
+// Dispatch functions
 NV_STATUS vmmCreateVaspace_IMPL(struct OBJVMM *pVmm, NvU32 _class, NvU32 vaspaceId, NvU32 gpuMask, NvU64 vaStart, NvU64 vaLimit, NvU64 vaInternalStart, NvU64 vaInternalEnd, struct OBJVASPACE *pPteSpaceMap, NvU32 flags, struct OBJVASPACE **ppVAS);
 
 #ifdef __nvoc_virt_mem_mgr_h_disabled

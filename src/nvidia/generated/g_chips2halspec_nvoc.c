@@ -1,4 +1,11 @@
 #define NVOC_CHIPS2HALSPEC_H_PRIVATE_ACCESS_ALLOWED
+
+// Version of generated metadata structures
+#ifdef NVOC_METADATA_VERSION
+#undef NVOC_METADATA_VERSION
+#endif
+#define NVOC_METADATA_VERSION 2
+
 #include "nvoc/runtime.h"
 #include "nvoc/rtti.h"
 #include "nvtypes.h"
@@ -94,6 +101,61 @@ void __nvoc_init_halspec_ChipHal(ChipHal *pChipHal, NvU32 arch, NvU32 impl, NvU3
     {
         pChipHal->__nvoc_HalVarIdx = 60;
     }
+    // GB100
+    else if(arch == 0x1A && impl == 0x0)
+    {
+        pChipHal->__nvoc_HalVarIdx = 61;
+    }
+    // GB102
+    else if(arch == 0x1A && impl == 0x2)
+    {
+        pChipHal->__nvoc_HalVarIdx = 62;
+    }
+    // GB10B
+    else if(arch == 0x1A && impl == 0xB)
+    {
+        pChipHal->__nvoc_HalVarIdx = 63;
+    }
+    // GB110
+    else if(arch == 0x1A && impl == 0x3)
+    {
+        pChipHal->__nvoc_HalVarIdx = 65;
+    }
+    // GB112
+    else if(arch == 0x1A && impl == 0x4)
+    {
+        pChipHal->__nvoc_HalVarIdx = 66;
+    }
+    // GB202
+    else if(arch == 0x1B && impl == 0x2)
+    {
+        pChipHal->__nvoc_HalVarIdx = 69;
+    }
+    // GB203
+    else if(arch == 0x1B && impl == 0x3)
+    {
+        pChipHal->__nvoc_HalVarIdx = 70;
+    }
+    // GB205
+    else if(arch == 0x1B && impl == 0x5)
+    {
+        pChipHal->__nvoc_HalVarIdx = 71;
+    }
+    // GB206
+    else if(arch == 0x1B && impl == 0x6)
+    {
+        pChipHal->__nvoc_HalVarIdx = 72;
+    }
+    // GB207
+    else if(arch == 0x1B && impl == 0x7)
+    {
+        pChipHal->__nvoc_HalVarIdx = 73;
+    }
+    // GB20B
+    else if(arch == 0x1B && impl == 0xB)
+    {
+        pChipHal->__nvoc_HalVarIdx = 74;
+    }
 }
 
 void __nvoc_init_halspec_TegraChipHal(TegraChipHal *pTegraChipHal, TEGRA_CHIP_TYPE tegraType)
@@ -141,10 +203,25 @@ void __nvoc_init_halspec_DispIpHal(DispIpHal *pDispIpHal, NvU32 ipver)
     {
         pDispIpHal->__nvoc_HalVarIdx = 14;
     }
+    // DISPv0501
+    else if(ipver == 0x5010000)
+    {
+        pDispIpHal->__nvoc_HalVarIdx = 15;
+    }
+    // DISPv0502
+    else if(ipver == 0x5020000)
+    {
+        pDispIpHal->__nvoc_HalVarIdx = 16;
+    }
+    // DISPv0503
+    else if(ipver == 0x5030000)
+    {
+        pDispIpHal->__nvoc_HalVarIdx = 17;
+    }
     // DISPv0000
     else if(ipver == 0x0)
     {
-        pDispIpHal->__nvoc_HalVarIdx = 17;
+        pDispIpHal->__nvoc_HalVarIdx = 19;
     }
 }
 

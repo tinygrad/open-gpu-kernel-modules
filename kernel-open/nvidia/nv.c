@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1999-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1999-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -24,9 +24,9 @@
 #include <linux/module.h>  // for MODULE_FIRMWARE
 
 // must precede "nv.h" and "nv-firmware.h" includes
-#define NV_FIRMWARE_PATH_FOR_FILENAME(filename)  "nvidia/" NV_VERSION_STRING "/" filename
-#define NV_FIRMWARE_DECLARE_GSP_FILENAME(filename) \
-    MODULE_FIRMWARE(NV_FIRMWARE_PATH_FOR_FILENAME(filename));
+#define NV_FIRMWARE_FOR_NAME(name)  "nvidia/" NV_VERSION_STRING "/" name ".bin"
+#define NV_FIRMWARE_DECLARE_GSP(name) \
+    MODULE_FIRMWARE(NV_FIRMWARE_FOR_NAME(name));
 #include "nv-firmware.h"
 
 #include "nvmisc.h"
@@ -50,7 +50,6 @@
 #include "nvlink_caps.h"
 
 #include "nv-hypervisor.h"
-#include "nv-ibmnpu.h"
 #include "nv-rsync.h"
 #include "nv-kthread-q.h"
 #include "nv-pat.h"
@@ -96,6 +95,10 @@
 #include <linux/cc_platform.h>
 #endif
 
+#if defined(NV_ASM_MSHYPERV_H_PRESENT) && defined(NVCPU_X86_64)
+#include <asm/mshyperv.h>
+#endif
+
 #if defined(NV_ASM_CPUFEATURE_H_PRESENT)
 #include <asm/cpufeature.h>
 #endif
@@ -123,7 +126,11 @@ MODULE_ALIAS_CHARDEV_MAJOR(NV_MAJOR_DEVICE_NUMBER);
  * DMA_BUF namespace is added by commit id 16b0314aa746
  * ("dma-buf: move dma-buf symbols into the DMA_BUF module namespace") in 5.16
  */
+#if defined(NV_MODULE_IMPORT_NS_TAKES_CONSTANT)
 MODULE_IMPORT_NS(DMA_BUF);
+#else
+MODULE_IMPORT_NS("DMA_BUF");
+#endif  // defined(NV_MODULE_IMPORT_NS_TAKES_CONSTANT)
 #endif  // defined(MODULE_IMPORT_NS)
 
 const NvBool nv_is_rm_firmware_supported_os = NV_TRUE;
@@ -178,17 +185,11 @@ static void *nvidia_pte_t_cache;
 void *nvidia_stack_t_cache;
 static nvidia_stack_t *__nv_init_sp;
 
-static int nv_tce_bypass_mode = NV_TCE_BYPASS_MODE_DEFAULT;
-
 struct semaphore nv_linux_devices_lock;
 
-// True if all the successfully probed devices support ATS
+// True if at least one of the successfully probed devices support ATS
 // Assigned at device probe (module init) time
-NvBool nv_ats_supported = NVCPU_IS_PPC64LE
-#if defined(NV_PCI_DEV_HAS_ATS_ENABLED)
-                          || NV_TRUE
-#endif
-;
+NvBool nv_ats_supported;
 
 // allow an easy way to convert all debug printfs related to events
 // back and forth between 'info' and 'errors'
@@ -277,6 +278,67 @@ struct dev_pm_ops nv_pm_ops = {
  *** STATIC functions
  ***/
 
+#if defined(NVCPU_X86_64)
+#define NV_AMD_SME_BIT BIT(0)
+
+static
+NvBool nv_is_sme_supported(
+    void
+)
+{
+    unsigned int eax, ebx, ecx, edx;
+
+    /* Check for the SME/SEV support leaf */
+    eax = 0x80000000;
+    ecx = 0;
+    native_cpuid(&eax, &ebx, &ecx, &edx);
+    if (eax < 0x8000001f)
+    {
+        return NV_FALSE;
+    }
+
+    eax = 0x8000001f;
+    ecx = 0;
+    native_cpuid(&eax, &ebx, &ecx, &edx);
+    /* Check whether SME is supported */
+    if (!(eax & NV_AMD_SME_BIT))
+    {
+        return NV_FALSE;
+    }
+
+    return NV_TRUE;
+}
+#endif
+
+static
+NvBool nv_detect_sme_enabled(
+    void
+)
+{
+#if (defined(MSR_K8_SYSCFG) || defined(MSR_AMD64_SYSCFG)) && defined(NVCPU_X86_64)
+    NvU32 lo_val, hi_val;
+
+    if (!nv_is_sme_supported())
+    {
+        return NV_FALSE;
+    }
+
+#if defined(MSR_AMD64_SYSCFG)
+    rdmsr(MSR_AMD64_SYSCFG, lo_val, hi_val);
+#if defined(MSR_AMD64_SYSCFG_MEM_ENCRYPT)
+    return (lo_val & MSR_AMD64_SYSCFG_MEM_ENCRYPT) ? NV_TRUE : NV_FALSE;
+#endif //defined(MSR_AMD64_SYSCFG_MEM_ENCRYPT)
+#elif defined(MSR_K8_SYSCFG)
+    rdmsr(MSR_K8_SYSCFG, lo_val, hi_val);
+#if defined(MSR_K8_SYSCFG_MEM_ENCRYPT)
+    return (lo_val & MSR_K8_SYSCFG_MEM_ENCRYPT) ? NV_TRUE : NV_FALSE;
+#endif //defined(MSR_K8_SYSCFG_MEM_ENCRYPT)
+#endif //defined(MSR_AMD64_SYSCFG)
+#else
+    return NV_FALSE;
+#endif //(defined(MSR_K8_SYSCFG) || defined(MSR_AMD64_SYSCFG)) && defined(NVCPU_X86_64)
+}
+
 static
 void nv_detect_conf_compute_platform(
     void
@@ -284,6 +346,19 @@ void nv_detect_conf_compute_platform(
 {
 #if defined(NV_CC_PLATFORM_PRESENT)
     os_cc_enabled = cc_platform_has(CC_ATTR_GUEST_MEM_ENCRYPT);
+
+#if defined(NV_CC_ATTR_SEV_SNP)
+    os_cc_sev_snp_enabled = cc_platform_has(CC_ATTR_GUEST_SEV_SNP);
+#endif
+
+    os_cc_sme_enabled = cc_platform_has(CC_ATTR_MEM_ENCRYPT);
+
+#if defined(NV_HV_GET_ISOLATION_TYPE) && IS_ENABLED(CONFIG_HYPERV) && defined(NVCPU_X86_64)
+    if (hv_get_isolation_type() == HV_ISOLATION_TYPE_SNP)
+    {
+        os_cc_snp_vtom_enabled = NV_TRUE;
+    }
+#endif
 
 #if defined(X86_FEATURE_TDX_GUEST)
     if (cpu_feature_enabled(X86_FEATURE_TDX_GUEST))
@@ -293,8 +368,11 @@ void nv_detect_conf_compute_platform(
 #endif
 #else
     os_cc_enabled = NV_FALSE;
+    os_cc_sev_snp_enabled = NV_FALSE;
+    os_cc_sme_enabled = nv_detect_sme_enabled();
+    os_cc_snp_vtom_enabled = NV_FALSE;
     os_cc_tdx_enabled = NV_FALSE;
-#endif
+#endif //NV_CC_PLATFORM_PRESENT
 }
 
 static
@@ -576,20 +654,11 @@ nv_registry_keys_init(nv_stack_t *sp)
     NvU32 data;
 
     /*
-     * Determine the TCE bypass mode here so it can be used during
-     * device probe.  Also determine whether we should allow
-     * user-mode NUMA onlining of device memory.
+     * Determine whether we should allow user-mode NUMA onlining of device
+     * memory.
      */
     if (NVCPU_IS_PPC64LE)
     {
-        status = rm_read_registry_dword(sp, nv,
-                                        NV_REG_TCE_BYPASS_MODE,
-                                        &data);
-        if ((status == NV_OK) && ((int)data != NV_TCE_BYPASS_MODE_DEFAULT))
-        {
-            nv_tce_bypass_mode = data;
-        }
-
         if (NVreg_EnableUserNUMAManagement)
         {
             /* Force on the core RM registry key to match. */
@@ -625,6 +694,9 @@ nv_report_applied_patches(void)
 static void
 nv_drivers_exit(void)
 {
+#if NV_SUPPORTS_PLATFORM_DEVICE
+    nv_platform_unregister_driver();
+#endif
     nv_pci_unregister_driver();
 }
 
@@ -640,6 +712,16 @@ nv_drivers_init(void)
         rc = -ENODEV;
         goto exit;
     }
+
+#if NV_SUPPORTS_PLATFORM_DEVICE
+    rc = nv_platform_register_driver();
+    if (rc < 0)
+    {
+        nv_printf(NV_DBG_ERRORS, "NVRM: SOC driver registration failed!\n");
+        nv_pci_unregister_driver();
+        rc = -ENODEV;
+    }
+#endif
 
 exit:
     return rc;
@@ -1018,9 +1100,16 @@ static void nv_free_file_private(nv_linux_file_private_t *nvlfp)
         NV_KFREE(nvet, sizeof(nvidia_event_t));
     }
 
-    if (nvlfp->mmap_context.page_array != NULL)
+    if (nvlfp->mmap_context.valid)
     {
-        os_free_mem(nvlfp->mmap_context.page_array);
+        if (nvlfp->mmap_context.page_array != NULL)
+        {
+            os_free_mem(nvlfp->mmap_context.page_array);
+        }
+        if (nvlfp->mmap_context.memArea.pRanges != NULL)
+        {
+            os_free_mem(nvlfp->mmap_context.memArea.pRanges);
+        }
     }
 
     NV_KFREE(nvlfp, sizeof(nv_linux_file_private_t));
@@ -1251,17 +1340,29 @@ static int validate_numa_start_state(nv_linux_state_t *nvl)
     return rc;
 }
 
-NV_STATUS NV_API_CALL nv_get_num_dpaux_instances(nv_state_t *nv, NvU32 *num_instances)
-{
-    *num_instances = nv->num_dpaux_instance;
-    return NV_OK;
-}
-
 void NV_API_CALL
 nv_schedule_uvm_isr(nv_state_t *nv)
 {
 #if defined(NV_UVM_ENABLE)
     nv_uvm_event_interrupt(nv_get_cached_uuid(nv));
+#endif
+}
+
+NV_STATUS NV_API_CALL
+nv_schedule_uvm_drain_p2p(NvU8 *pUuid)
+{
+#if defined(NV_UVM_ENABLE)
+    return nv_uvm_drain_P2P(pUuid);
+#else
+    return NV_ERR_NOT_SUPPORTED;
+#endif
+}
+
+void NV_API_CALL
+nv_schedule_uvm_resume_p2p(NvU8 *pUuid)
+{
+#if defined(NV_UVM_ENABLE)
+    nv_uvm_resume_P2P(pUuid);
 #endif
 }
 
@@ -1315,15 +1416,6 @@ static int nv_start_device(nv_state_t *nv, nvidia_stack_t *sp)
             goto failed;
         }
         power_ref = NV_TRUE;
-    }
-
-    rc = nv_init_ibmnpu_devices(nv);
-    if (rc != 0)
-    {
-        nv_printf(NV_DBG_ERRORS,
-            "NVRM: failed to initialize ibmnpu devices attached to GPU with minor number %d\n",
-            nvl->minor_num);
-        goto failed;
     }
 
     if (!(nv->flags & NV_FLAG_PERSISTENT_SW_STATE))
@@ -1526,8 +1618,6 @@ failed:
 
     nv_dev_free_stacks(nvl);
 
-    nv_unregister_ibmnpu_devices(nv);
-
     if (power_ref)
     {
         rm_unref_dynamic_power(sp, nv, NV_DYNAMIC_PM_COARSE);
@@ -1547,6 +1637,11 @@ static int nv_open_device(nv_state_t *nv, nvidia_stack_t *sp)
     nv_linux_state_t *nvl = NV_GET_NVL_FROM_NV_STATE(nv);
     int rc;
     NV_STATUS status;
+
+    if ((nv->flags & NV_FLAG_PCI_REMOVE_IN_PROGRESS) != 0)
+    {
+        return -ENODEV;
+    }
 
     if ((nv->flags & NV_FLAG_EXCLUDE) != 0)
     {
@@ -1617,20 +1712,25 @@ static void nv_init_mapping_revocation(nv_linux_state_t *nvl,
                                        nv_linux_file_private_t *nvlfp,
                                        struct inode *inode)
 {
-    down(&nvl->mmap_lock);
-
     /* Set up struct address_space for use with unmap_mapping_range() */
     address_space_init_once(&nvlfp->mapping);
     nvlfp->mapping.host = inode;
     nvlfp->mapping.a_ops = inode->i_mapping->a_ops;
-#if defined(NV_ADDRESS_SPACE_HAS_BACKING_DEV_INFO)
-    nvlfp->mapping.backing_dev_info = inode->i_mapping->backing_dev_info;
-#endif
     file->f_mapping = &nvlfp->mapping;
+}
 
-    /* Add nvlfp to list of open files in nvl for mapping revocation */
+/* Adds nvlfp to list of open files for mapping revocation */
+static void nv_add_open_file(nv_linux_state_t *nvl,
+                             nv_linux_file_private_t *nvlfp)
+{
+    nvlfp->nvptr = nvl;
+
+    /*
+     * nvl->open_files and other mapping revocation members in nv_linux_state_t
+     * are protected by nvl->mmap_lock instead of nvl->ldata_lock.
+     */
+    down(&nvl->mmap_lock);
     list_add(&nvlfp->entry, &nvl->open_files);
-
     up(&nvl->mmap_lock);
 }
 
@@ -1680,11 +1780,12 @@ static void nvidia_open_deferred(void *nvlfp_raw)
      */
     down(&nvl->ldata_lock);
     rc = nv_open_device_for_nvlfp(NV_STATE_PTR(nvl), nvlfp->sp, nvlfp);
-    up(&nvl->ldata_lock);
 
-    /* Set nvptr only upon success (where nvl->usage_count is incremented) */
+    /* Only add open file tracking where nvl->usage_count is incremented */
     if (rc == 0)
-        nvlfp->nvptr = nvl;
+        nv_add_open_file(nvl, nvlfp);
+
+    up(&nvl->ldata_lock);
 
     complete_all(&nvlfp->open_complete);
 }
@@ -1803,6 +1904,7 @@ nvidia_open(
     }
 
     nv = NV_STATE_PTR(nvl);
+    nv_init_mapping_revocation(nvl, file, nvlfp, inode);
 
     if (nv_try_lock_foreground_open(file, nvl) == 0)
     {
@@ -1813,11 +1915,11 @@ nvidia_open(
 
         rc = nv_open_device_for_nvlfp(nv, nvlfp->sp, nvlfp);
 
-        up(&nvl->ldata_lock);
-
-        /* Set nvptr only upon success (where nvl->usage_count is incremented) */
+        /* Only add open file tracking where nvl->usage_count is incremented */
         if (rc == 0)
-            nvlfp->nvptr = nvl;
+            nv_add_open_file(nvl, nvlfp);
+
+        up(&nvl->ldata_lock);
 
         complete_all(&nvlfp->open_complete);
     }
@@ -1871,10 +1973,6 @@ failed:
             nv_free_file_private(nvlfp);
             NV_SET_FILE_PRIVATE(file, NULL);
         }
-    }
-    else
-    {
-        nv_init_mapping_revocation(nvl, file, nvlfp, inode);
     }
 
     return rc;
@@ -1946,6 +2044,20 @@ void nv_shutdown_adapter(nvidia_stack_t *sp,
 
     rm_shutdown_adapter(sp, nv);
 
+    if (nv->flags & NV_FLAG_TRIGGER_FLR)
+    {
+        if (nvl->pci_dev)
+        {
+            nv_printf(NV_DBG_INFO, "NVRM: Trigger FLR!\n");
+            os_pci_trigger_flr((void *)nvl->pci_dev);
+        }
+        else
+        {
+            nv_printf(NV_DBG_ERRORS, "NVRM: FLR not supported by the device!\n");
+        }
+        nv->flags &= ~NV_FLAG_TRIGGER_FLR;
+    }
+
     if (nv_platform_use_auto_online(nvl))
         nv_kthread_q_stop(&nvl->remove_numa_memory_q);
 }
@@ -2007,8 +2119,6 @@ static void nv_stop_device(nv_state_t *nv, nvidia_stack_t *sp)
 
     /* leave INIT flag alone so we don't reinit every time */
     nv->flags &= ~NV_FLAG_OPEN;
-
-    nv_unregister_ibmnpu_devices(nv);
 
     if (!(nv->flags & NV_FLAG_PERSISTENT_SW_STATE))
     {
@@ -3073,17 +3183,10 @@ nv_set_dma_address_size(
 )
 {
     nv_linux_state_t *nvl = NV_GET_NVL_FROM_NV_STATE(nv);
-    NvU64 start_addr = nv_get_dma_start_address(nv);
     NvU64 new_mask = (((NvU64)1) << phys_addr_bits) - 1;
 
-    nvl->dma_dev.addressable_range.limit = start_addr + new_mask;
+    nvl->dma_dev.addressable_range.limit = new_mask;
 
-    /*
-     * The only scenario in which we definitely should not update the DMA mask
-     * is on POWER, when using TCE bypass mode (see nv_get_dma_start_address()
-     * for details), since the meaning of the DMA mask is overloaded in that
-     * case.
-     */
     if (!nvl->tce_bypass_enabled)
     {
         dma_set_mask(&nvl->pci_dev->dev, new_mask);
@@ -3131,10 +3234,12 @@ NV_STATUS NV_API_CALL
 nv_alias_pages(
     nv_state_t *nv,
     NvU32 page_cnt,
+    NvU64 page_size,
     NvU32 contiguous,
     NvU32 cache_type,
     NvU64 guest_id,
     NvU64 *pte_array,
+    NvBool carveout,
     void **priv_data
 )
 {
@@ -3152,15 +3257,21 @@ nv_alias_pages(
 
     at->cache_type = cache_type;
     if (contiguous)
+    {
         at->flags.contig = NV_TRUE;
+        at->order = get_order(at->num_pages * PAGE_SIZE);
+    }
+    else
+    {
+        at->order = get_order(page_size);
+    }
 #if defined(NVCPU_AARCH64)
     if (at->cache_type != NV_MEMORY_CACHED)
         at->flags.aliased = NV_TRUE;
 #endif
 
     at->flags.guest = NV_TRUE;
-
-    at->order = get_order(at->num_pages * PAGE_SIZE);
+    at->flags.carveout = carveout;
 
     for (i=0; i < at->num_pages; ++i)
     {
@@ -3168,14 +3279,12 @@ nv_alias_pages(
 
         if (contiguous && i>0)
         {
-            page_ptr->dma_addr = pte_array[0] + (i << PAGE_SHIFT);
+            page_ptr->phys_addr = pte_array[0] + (i << PAGE_SHIFT);
         }
         else
         {
-            page_ptr->dma_addr  = pte_array[i];
+            page_ptr->phys_addr  = pte_array[i];
         }
-
-        page_ptr->phys_addr = page_ptr->dma_addr;
 
         /* aliased pages will be mapped on demand. */
         page_ptr->virt_addr = 0x0;
@@ -3262,7 +3371,8 @@ NV_STATUS NV_API_CALL nv_register_user_pages(
     NvU64       page_count,
     NvU64      *phys_addr,
     void       *import_priv,
-    void      **priv_data
+    void      **priv_data,
+    NvBool      unencrypted
 )
 {
     nv_alloc_t *at;
@@ -3271,7 +3381,7 @@ NV_STATUS NV_API_CALL nv_register_user_pages(
     nv_linux_state_t *nvl;
     nvidia_pte_t *page_ptr;
 
-    nv_printf(NV_DBG_MEMINFO, "NVRM: VM: nv_register_user_pages: 0x%x\n", page_count);
+    nv_printf(NV_DBG_MEMINFO, "NVRM: VM: nv_register_user_pages: 0x%" NvU64_fmtx"\n", page_count);
     user_pages = *priv_data;
     nvl = NV_GET_NVL_FROM_NV_STATE(nv);
 
@@ -3292,6 +3402,9 @@ NV_STATUS NV_API_CALL nv_register_user_pages(
 #endif
 
     at->flags.user = NV_TRUE;
+
+    if (unencrypted)
+        at->flags.unencrypted = NV_TRUE;
 
     at->order = get_order(at->num_pages * PAGE_SIZE);
 
@@ -3332,7 +3445,7 @@ void NV_API_CALL nv_unregister_user_pages(
 {
     nv_alloc_t *at = *priv_data;
 
-    nv_printf(NV_DBG_MEMINFO, "NVRM: VM: nv_unregister_user_pages: 0x%x\n", page_count);
+    nv_printf(NV_DBG_MEMINFO, "NVRM: VM: nv_unregister_user_pages: 0x%" NvU64_fmtx "\n", page_count);
 
     NV_PRINT_AT(NV_DBG_MEMINFO, at);
 
@@ -3365,7 +3478,6 @@ NV_STATUS NV_API_CALL nv_register_phys_pages(
     nv_alloc_t *at;
     nv_linux_state_t *nvl = NV_GET_NVL_FROM_NV_STATE(nv);
     NvU64 i;
-    NvU64 addr;
 
     at = nvos_create_alloc(nvl->dev, page_count);
 
@@ -3384,9 +3496,9 @@ NV_STATUS NV_API_CALL nv_register_phys_pages(
 
     at->order = get_order(at->num_pages * PAGE_SIZE);
 
-    for (i = 0, addr = phys_addr[0]; i < page_count; addr = phys_addr[++i])
+    for (i = 0; i < page_count; i++)
     {
-        at->page_table[i]->phys_addr = addr;
+        at->page_table[i]->phys_addr = phys_addr[i];
     }
 
     at->user_pages = NULL;
@@ -3704,35 +3816,6 @@ NV_STATUS NV_API_CALL nv_alloc_pages(
     if (unencrypted)
         at->flags.unencrypted = NV_TRUE;
 
-#if defined(NVCPU_PPC64LE)
-    /*
-     * Starting on Power9 systems, DMA addresses for NVLink are no longer the
-     * same as used over PCIe. There is an address compression scheme required
-     * for NVLink ONLY which impacts the upper address bits of the DMA address.
-     *
-     * This divergence between PCIe and NVLink DMA mappings breaks assumptions
-     * in the driver where during initialization we allocate system memory
-     * for the GPU to access over PCIe before NVLink is trained -- and some of
-     * these mappings persist on the GPU. If these persistent mappings are not
-     * equivalent they will cause invalid DMA accesses from the GPU once we
-     * switch to NVLink.
-     *
-     * To work around this we limit all system memory allocations from the driver
-     * during the period before NVLink is enabled to be from NUMA node 0 (CPU 0)
-     * which has a CPU real address with the upper address bits (above bit 42)
-     * set to 0. Effectively making the PCIe and NVLink DMA mappings equivalent
-     * allowing persistent system memory mappings already programmed on the GPU
-     * to remain valid after NVLink is enabled.
-     *
-     * See Bug 1920398 for more details.
-     */
-    if (nv && nvl->npu && !nvl->dma_dev.nvlink)
-    {
-        at->flags.node = NV_TRUE;
-        at->node_id = 0;
-    }
-#endif
-
     if (node_id != NUMA_NO_NODE)
     {
         at->flags.node = NV_TRUE;
@@ -3939,7 +4022,9 @@ const void* NV_API_CALL nv_get_firmware(
 
     // path is relative to /lib/firmware
     // if this fails it will print an error to dmesg
-    if (request_firmware(&fw, nv_firmware_path(fw_type, fw_chip_family), nvl->dev) != 0)
+    if (request_firmware(&fw,
+                         nv_firmware_for_chip_family(fw_type, fw_chip_family),
+                         nvl->dev) != 0)
         return NULL;
 
     *fw_size = fw->size;
@@ -4036,6 +4121,16 @@ int NV_API_CALL nv_get_event(
     nvidia_event_t *nvet;
     unsigned long eflags;
 
+    //
+    // Note that the head read/write is not atomic when done outside of the
+    // spinlock, so this might not be a valid pointer at all. But if we read
+    // NULL here that means that the value indeed was NULL and we can bail
+    // early since there's no events. Otherwise, we have to do a proper read
+    // under a spinlock.
+    //
+    if (nvlfp->event_data_head == NULL)
+        return NV_ERR_GENERIC;
+
     NV_SPIN_LOCK_IRQSAVE(&nvlfp->fp_lock, eflags);
 
     nvet = nvlfp->event_data_head;
@@ -4094,7 +4189,7 @@ int NV_API_CALL nv_stop_rc_timer(
 
     nv_printf(NV_DBG_INFO, "NVRM: stopping rc timer\n");
     nv->rc_timer_enabled = 0;
-    del_timer_sync(&nvl->rc_timer.kernel_timer);
+    nv_timer_delete_sync(&nvl->rc_timer.kernel_timer);
     nv_printf(NV_DBG_INFO, "NVRM: rc timer stopped\n");
 
     return 0;
@@ -4138,7 +4233,7 @@ void NV_API_CALL nv_stop_snapshot_timer(void)
     NV_SPIN_UNLOCK_IRQRESTORE(&nvl->snapshot_timer_lock, flags);
 
     if (timer_active)
-        del_timer_sync(&nvl->snapshot_timer.kernel_timer);
+        nv_timer_delete_sync(&nvl->snapshot_timer.kernel_timer);
 }
 
 void NV_API_CALL nv_flush_snapshot_timer(void)
@@ -4393,15 +4488,7 @@ nvidia_suspend(
 
     status = nv_power_management(nv, pm_action);
 
-    if (status != NV_OK)
-    {
-        nvidia_modeset_resume(nv->gpu_id);
-        goto done;
-    }
-    else
-    {
-        nv->flags |= NV_FLAG_SUSPENDED;
-    }
+    nv->flags |= NV_FLAG_SUSPENDED;
 
 pci_pm:
     /*
@@ -4588,13 +4675,17 @@ done:
         {
             if (resume_devices)
             {
-                nvidia_resume(nvl->dev, pm_action);
+                nvidia_resume(nvl->dev, NV_PM_ACTION_RESUME);
             }
 
             nv_restore_user_channels(NV_STATE_PTR(nvl));
         }
 
         UNLOCK_NV_LINUX_DEVICES();
+
+        nv_uvm_resume();
+
+        nvidia_modeset_resume(0);
     }
 
     return status;
@@ -4671,6 +4762,10 @@ int nv_pmops_suspend(
     NV_STATUS status;
 
     status = nvidia_suspend(dev, NV_PM_ACTION_STANDBY, NV_FALSE);
+
+    if (status != NV_OK)
+        nvidia_resume(dev, NV_PM_ACTION_RESUME);
+
     return (status == NV_OK) ? 0 : -EIO;
 }
 
@@ -4691,6 +4786,10 @@ int nv_pmops_freeze(
     NV_STATUS status;
 
     status = nvidia_suspend(dev, NV_PM_ACTION_HIBERNATE, NV_FALSE);
+
+    if (status != NV_OK)
+        nvidia_resume(dev, NV_PM_ACTION_RESUME);
+
     return (status == NV_OK) ? 0 : -EIO;
 }
 
@@ -4820,154 +4919,6 @@ NV_STATUS NV_API_CALL nv_log_error(
     return status;
 }
 
-NvU64 NV_API_CALL nv_get_dma_start_address(
-    nv_state_t *nv
-)
-{
-#if defined(NVCPU_PPC64LE)
-    struct pci_dev *pci_dev;
-    dma_addr_t dma_addr;
-    NvU64 saved_dma_mask;
-    nv_linux_state_t *nvl = NV_GET_NVL_FROM_NV_STATE(nv);
-
-    /*
-     * If TCE bypass is disabled via a module parameter, then just return
-     * the default (which is 0).
-     *
-     * Otherwise, the DMA start address only needs to be set once, and it
-     * won't change afterward. Just return the cached value if asked again,
-     * to avoid the kernel printing redundant messages to the kernel
-     * log when we call pci_set_dma_mask().
-     */
-    if ((nv_tce_bypass_mode == NV_TCE_BYPASS_MODE_DISABLE) ||
-        (nvl->tce_bypass_enabled))
-    {
-        return nvl->dma_dev.addressable_range.start;
-    }
-
-    pci_dev = nvl->pci_dev;
-
-    /*
-     * Linux on IBM POWER8 offers 2 different DMA set-ups, sometimes
-     * referred to as "windows".
-     *
-     * The "default window" provides a 2GB region of PCI address space
-     * located below the 32-bit line. The IOMMU is used to provide a
-     * "rich" mapping--any page in system memory can be mapped at an
-     * arbitrary address within this window. The mappings are dynamic
-     * and pass in and out of being as pci_map*()/pci_unmap*() calls
-     * are made.
-     *
-     * Dynamic DMA Windows (sometimes "Huge DDW") provides a linear
-     * mapping of the system's entire physical address space at some
-     * fixed offset above the 59-bit line. IOMMU is still used, and
-     * pci_map*()/pci_unmap*() are still required, but mappings are
-     * static. They're effectively set up in advance, and any given
-     * system page will always map to the same PCI bus address. I.e.
-     *   physical 0x00000000xxxxxxxx => PCI 0x08000000xxxxxxxx
-     *
-     * This driver does not support the 2G default window because
-     * of its limited size, and for reasons having to do with UVM.
-     *
-     * Linux on POWER8 will only provide the DDW-style full linear
-     * mapping when the driver claims support for 64-bit DMA addressing
-     * (a pre-requisite because the PCI addresses used in this case will
-     * be near the top of the 64-bit range). The linear mapping
-     * is not available in all system configurations.
-     *
-     * Detect whether the linear mapping is present by claiming
-     * 64-bit support and then mapping physical page 0. For historical
-     * reasons, Linux on POWER8 will never map a page to PCI address 0x0.
-     * In the "default window" case page 0 will be mapped to some
-     * non-zero address below the 32-bit line.  In the
-     * DDW/linear-mapping case, it will be mapped to address 0 plus
-     * some high-order offset.
-     *
-     * If the linear mapping is present and sane then return the offset
-     * as the starting address for all DMA mappings.
-     */
-    saved_dma_mask = pci_dev->dma_mask;
-    if (dma_set_mask(&pci_dev->dev, DMA_BIT_MASK(64)) != 0)
-    {
-        goto done;
-    }
-
-    dma_addr = dma_map_single(&pci_dev->dev, NULL, 1, DMA_BIDIRECTIONAL);
-    if (dma_mapping_error(&pci_dev->dev, dma_addr))
-    {
-        dma_set_mask(&pci_dev->dev, saved_dma_mask);
-        goto done;
-    }
-
-    dma_unmap_single(&pci_dev->dev, dma_addr, 1, DMA_BIDIRECTIONAL);
-
-    /*
-     * From IBM: "For IODA2, native DMA bypass or KVM TCE-based implementation
-     * of full 64-bit DMA support will establish a window in address-space
-     * with the high 14 bits being constant and the bottom up-to-50 bits
-     * varying with the mapping."
-     *
-     * Unfortunately, we don't have any good interfaces or definitions from
-     * the kernel to get information about the DMA offset assigned by OS.
-     * However, we have been told that the offset will be defined by the top
-     * 14 bits of the address, and bits 40-49 will not vary for any DMA
-     * mappings until 1TB of system memory is surpassed; this limitation is
-     * essential for us to function properly since our current GPUs only
-     * support 40 physical address bits. We are in a fragile place where we
-     * need to tell the OS that we're capable of 64-bit addressing, while
-     * relying on the assumption that the top 24 bits will not vary in this
-     * case.
-     *
-     * The way we try to compute the window, then, is mask the trial mapping
-     * against the DMA capabilities of the device. That way, devices with
-     * greater addressing capabilities will only take the bits it needs to
-     * define the window.
-     */
-    if ((dma_addr & DMA_BIT_MASK(32)) != 0)
-    {
-        /*
-         * Huge DDW not available - page 0 mapped to non-zero address below
-         * the 32-bit line.
-         */
-        nv_printf(NV_DBG_WARNINGS,
-            "NVRM: DMA window limited by platform\n");
-        dma_set_mask(&pci_dev->dev, saved_dma_mask);
-        goto done;
-    }
-    else if ((dma_addr & saved_dma_mask) != 0)
-    {
-        NvU64 memory_size = NV_NUM_PHYSPAGES * PAGE_SIZE;
-        if ((dma_addr & ~saved_dma_mask) !=
-            ((dma_addr + memory_size) & ~saved_dma_mask))
-        {
-            /*
-             * The physical window straddles our addressing limit boundary,
-             * e.g., for an adapter that can address up to 1TB, the window
-             * crosses the 40-bit limit so that the lower end of the range
-             * has different bits 63:40 than the higher end of the range.
-             * We can only handle a single, static value for bits 63:40, so
-             * we must fall back here.
-             */
-            nv_printf(NV_DBG_WARNINGS,
-                "NVRM: DMA window limited by memory size\n");
-            dma_set_mask(&pci_dev->dev, saved_dma_mask);
-            goto done;
-        }
-    }
-
-    nvl->tce_bypass_enabled = NV_TRUE;
-    nvl->dma_dev.addressable_range.start = dma_addr & ~(saved_dma_mask);
-
-    /* Update the coherent mask to match */
-    dma_set_coherent_mask(&pci_dev->dev, pci_dev->dma_mask);
-
-done:
-    return nvl->dma_dev.addressable_range.start;
-#else
-    return 0;
-#endif
-}
-
 NV_STATUS NV_API_CALL nv_set_primary_vga_status(
     nv_state_t *nv
 )
@@ -4986,38 +4937,6 @@ NV_STATUS NV_API_CALL nv_set_primary_vga_status(
 #else
     return NV_ERR_NOT_SUPPORTED;
 #endif
-}
-
-NV_STATUS NV_API_CALL nv_pci_trigger_recovery(
-     nv_state_t *nv
-)
-{
-    NV_STATUS status = NV_ERR_NOT_SUPPORTED;
-#if defined(NV_PCI_ERROR_RECOVERY)
-    nv_linux_state_t *nvl       = NV_GET_NVL_FROM_NV_STATE(nv);
-
-    /*
-     * Calling readl() on PPC64LE will allow the kernel to check its state for
-     * the device and update it accordingly. This needs to be done before
-     * checking if the PCI channel is offline, so that we don't check stale
-     * state.
-     *
-     * This will also kick off the recovery process for the device.
-     */
-    if (NV_PCI_ERROR_RECOVERY_ENABLED())
-    {
-        if (readl(nv->regs->map) == 0xFFFFFFFF)
-        {
-            if (pci_channel_offline(nvl->pci_dev))
-            {
-                NV_DEV_PRINTF(NV_DBG_ERRORS, nv,
-                              "PCI channel for the device is offline\n");
-                status = NV_OK;
-            }
-        }
-    }
-#endif
-    return status;
 }
 
 NvBool NV_API_CALL nv_requires_dma_remap(
@@ -5251,44 +5170,6 @@ NV_STATUS NV_API_CALL nv_get_device_memory_config(
 {
     NV_STATUS status = NV_ERR_NOT_SUPPORTED;
 
-#if defined(NVCPU_PPC64LE)
-    nv_linux_state_t *nvl = NV_GET_NVL_FROM_NV_STATE(nv);
-
-    if (!nv_platform_supports_numa(nvl))
-    {
-        return NV_ERR_NOT_SUPPORTED;
-    }
-
-    if (node_id != NULL)
-    {
-        *node_id = nvl->numa_info.node_id;
-    }
-
-    {
-        nv_npu_numa_info_t *numa_info;
-
-        numa_info = &nvl->npu->numa_info;
-
-        if (compr_addr_sys_phys != NULL)
-        {
-            *compr_addr_sys_phys =
-                numa_info->compr_sys_phys_addr;
-        }
-
-        if (addr_guest_phys != NULL)
-        {
-            *addr_guest_phys =
-                numa_info->guest_phys_addr;
-        }
-    }
-
-    if (addr_width != NULL)
-    {
-        *addr_width = nv_volta_dma_addr_size - nv_volta_addr_space_width;
-    }
-
-    status = NV_OK;
-#endif
 #if defined(NVCPU_AARCH64)
     nv_linux_state_t *nvl = NV_GET_NVL_FROM_NV_STATE(nv);
 
@@ -5320,68 +5201,6 @@ NV_STATUS NV_API_CALL nv_get_device_memory_config(
 
     return status;
 }
-
-#if defined(NVCPU_PPC64LE)
-
-NV_STATUS NV_API_CALL nv_get_nvlink_line_rate(
-    nv_state_t *nvState,
-    NvU32      *linerate
-)
-{
-#if defined(NV_PNV_PCI_GET_NPU_DEV_PRESENT)
-
-    nv_linux_state_t *nvl;
-    struct pci_dev   *npuDev;
-    NvU32            *pSpeedPtr = NULL;
-    NvU32            speed;
-    int              len;
-
-    if (nvState != NULL)
-        nvl = NV_GET_NVL_FROM_NV_STATE(nvState);
-    else
-        return NV_ERR_INVALID_ARGUMENT;
-
-    if (!nvl->npu)
-    {
-        return NV_ERR_NOT_SUPPORTED;
-    }
-
-    npuDev = nvl->npu->devs[0];
-    if (!npuDev->dev.of_node)
-    {
-        nv_printf(NV_DBG_ERRORS, "NVRM: %s: OF Node not found in IBM-NPU device node\n",
-                  __FUNCTION__);
-        return NV_ERR_NOT_SUPPORTED;
-    }
-
-    pSpeedPtr = (NvU32 *) of_get_property(npuDev->dev.of_node, "ibm,nvlink-speed", &len);
-
-    if (pSpeedPtr)
-    {
-        speed = (NvU32) be32_to_cpup(pSpeedPtr);
-    }
-    else
-    {
-        return NV_ERR_NOT_SUPPORTED;
-    }
-
-    if (!speed)
-    {
-        return NV_ERR_NOT_SUPPORTED;
-    }
-    else
-    {
-        *linerate = speed;
-    }
-
-    return NV_OK;
-
-#endif
-
-    return NV_ERR_NOT_SUPPORTED;
-}
-
-#endif
 
 NV_STATUS NV_API_CALL nv_indicate_idle(
     nv_state_t *nv
@@ -5917,16 +5736,9 @@ void NV_API_CALL nv_disallow_runtime_suspend
 #endif
 }
 
-NvU32 NV_API_CALL nv_get_os_type(void)
-{
-    return OS_TYPE_LINUX;
-}
-
 void NV_API_CALL nv_flush_coherent_cpu_cache_range(nv_state_t *nv, NvU64 cpu_virtual, NvU64 size)
 {
-#if NVCPU_IS_PPC64LE
-    return nv_ibmnpu_cache_flush_range(nv, cpu_virtual, size);
-#elif NVCPU_IS_AARCH64
+#if NVCPU_IS_AARCH64
     NvU64 va, cbsize;
     NvU64 end_cpu_virtual = cpu_virtual + size;
     
@@ -5935,8 +5747,6 @@ void NV_API_CALL nv_flush_coherent_cpu_cache_range(nv_state_t *nv, NvU64 cpu_vir
             cpu_virtual, end_cpu_virtual);
 
     cbsize = cache_line_size();
-    // Align address to line size
-    cpu_virtual = NV_ALIGN_UP(cpu_virtual, cbsize);
 
     // Force eviction of any cache lines from the NUMA-onlined region.
     for (va = cpu_virtual; va < end_cpu_virtual; va += cbsize)
@@ -6076,14 +5886,16 @@ void NV_API_CALL nv_get_screen_info(
     NvU64       *pFbSize
 )
 {
+    nv_linux_state_t *nvl = NV_GET_NVL_FROM_NV_STATE(nv);
+    struct pci_dev *pci_dev = nvl->pci_dev;
+    int i;
+
     *pPhysicalAddress = 0;
     *pFbWidth = *pFbHeight = *pFbDepth = *pFbPitch = *pFbSize = 0;
 
 #if defined(CONFIG_FB) && defined(NV_NUM_REGISTERED_FB_PRESENT)
     if (num_registered_fb > 0)
     {
-        int i;
-
         for (i = 0; i < num_registered_fb; i++)
         {
             if (!registered_fb[i])
@@ -6097,7 +5909,7 @@ void NV_API_CALL nv_get_screen_info(
                 *pFbHeight = registered_fb[i]->var.yres;
                 *pFbDepth = registered_fb[i]->var.bits_per_pixel;
                 *pFbPitch = registered_fb[i]->fix.line_length;
-                *pFbSize = (NvU64)(*pFbHeight) * (NvU64)(*pFbPitch);
+                *pFbSize = registered_fb[i]->fix.smem_len;
                 return;
             }
         }
@@ -6133,7 +5945,10 @@ void NV_API_CALL nv_get_screen_info(
     {
         NvU64 physAddr = screen_info.lfb_base;
 #if defined(VIDEO_CAPABILITY_64BIT_BASE)
-        physAddr |= (NvU64)screen_info.ext_lfb_base << 32;
+        if  (screen_info.capabilities & VIDEO_CAPABILITY_64BIT_BASE)
+        {
+            physAddr |= (NvU64)screen_info.ext_lfb_base << 32;
+        }
 #endif
 
         /* Make sure base address is mapped to GPU BAR */
@@ -6145,17 +5960,17 @@ void NV_API_CALL nv_get_screen_info(
             *pFbDepth = screen_info.lfb_depth;
             *pFbPitch = screen_info.lfb_linelength;
             *pFbSize = (NvU64)(*pFbHeight) * (NvU64)(*pFbPitch);
+            return;
         }
     }
-#else
+#endif
+
+    /*
+     * If screen info can't be fetched with previous methods, then try
+     * to get the base address and size from the memory resource tree.
+     */
+    if (pci_dev != NULL)
     {
-        nv_linux_state_t *nvl = NV_GET_NVL_FROM_NV_STATE(nv);
-        struct pci_dev *pci_dev = nvl->pci_dev;
-        int i;
-
-        if (pci_dev == NULL)
-            return;
-
         BUILD_BUG_ON(NV_GPU_BAR_INDEX_IMEM != NV_GPU_BAR_INDEX_FB + 1);
         for (i = NV_GPU_BAR_INDEX_FB; i <= NV_GPU_BAR_INDEX_IMEM; i++)
         {
@@ -6188,7 +6003,6 @@ void NV_API_CALL nv_get_screen_info(
             }
         }
     }
-#endif
 }
 
 

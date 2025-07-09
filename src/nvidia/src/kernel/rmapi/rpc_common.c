@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2020-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2020-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -32,6 +32,7 @@
 #include "gpu/device/device.h"
 #include "vgpu/rpc.h"
 #include "os/os.h"
+#include "core/locks.h"
 
 #include "virtualization/kernel_vgpu_mgr.h"
 
@@ -113,6 +114,19 @@ NV_STATUS rpcWriteCommonHeader(OBJGPU *pGpu, OBJRPC *pRpc, NvU32 func, NvU32 par
 {
     NV_STATUS status = NV_OK;
 
+    NV_ASSERT_OR_RETURN(pGpu != NULL, NV_ERR_INVALID_ARGUMENT);
+    NV_ASSERT(rmDeviceGpuLockIsOwner(pGpu->gpuInstance));
+
+    if (IS_VIRTUAL(pGpu) && IS_VGPU_GSP_PLUGIN_OFFLOAD_ENABLED(pGpu))
+    {
+        OBJVGPU  *pVGpu = GPU_GET_VGPU(pGpu);
+        if (!pVGpu->bGspBuffersInitialized)
+        {
+            NV_PRINTF(LEVEL_ERROR, "NVRM_RPC: RPC buffer not initialized. Function %d\n", func);
+            return NV_ERR_INVALID_STATE;
+        }
+    }
+
     if (!pRpc)
     {
         NV_PRINTF(LEVEL_ERROR,
@@ -143,7 +157,11 @@ NV_STATUS rpcWriteCommonHeader(OBJGPU *pGpu, OBJRPC *pRpc, NvU32 func, NvU32 par
         if (pDevice != NULL)
         {
             if (pDevice->pKernelHostVgpuDevice != NULL)
+            {
+                NV_ASSERT_OR_RETURN(pDevice->pKernelHostVgpuDevice->bGspPluginTaskInitialized,
+                                    NV_ERR_INVALID_STATE);
                 vgpu_rpc_message_header_v->u.cpuRmGfid = pDevice->pKernelHostVgpuDevice->gfid;
+            }
         }
     }
     else

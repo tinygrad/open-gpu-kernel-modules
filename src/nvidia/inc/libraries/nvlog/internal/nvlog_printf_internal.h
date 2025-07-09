@@ -42,6 +42,8 @@
 // Compile time stubbing out output below NVLOG_LEVEL level
 #define _NVLOG_NOTHING(...)        ((void)0)
 
+#include "nvport/nvport.h"
+
 //
 // Use __COUNTER__ if available. If not, we can use __LINE__ since it is also
 // monotonically rising. If __COUNTER__ is unavailable, we can't have inline
@@ -85,6 +87,8 @@
 //
 // One for every debug level, needed for compile time filtering.
 //
+#include "nvstatus.h"
+
 typedef NV_STATUS NVLOG_PRINTF_PROTO(NvU32, NvU32, ...);
 NVLOG_PRINTF_PROTO nvlogPrint_printf0;
 NVLOG_PRINTF_PROTO nvlogPrint_printf1;

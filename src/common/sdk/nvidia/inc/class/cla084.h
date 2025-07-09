@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -58,6 +58,7 @@
  * hPluginHeapMemory -> plugin heap memory handle, the client handle is hPluginClient
  * hMigRmHeapMemory -> MIG-RM heap memory handle
  * bDeviceProfilingEnabled -> If set to true, profiling is allowed
+ * bGpupLiveMigrationEnabled -> True if GPUP LM is supported
  */
 #define NVA084_ALLOC_PARAMETERS_MESSAGE_ID (0xa084U)
 
@@ -75,14 +76,6 @@ typedef struct NVA084_ALLOC_PARAMETERS {
     NvBool     bDisableDefaultSmcExecPartRestore;
     NvU32      vgpuDeviceInstanceId;
     NvHandle   hPluginClient;
-    NvU32      numGuestFbHandles;
-    NvHandle   guestFbHandleList[NVA084_MAX_VMMU_SEGMENTS];
-    NvHandle   hPluginHeapMemory;
-    NvHandle   hMigRmHeapMemory;
-    NV_DECLARE_ALIGNED(NvU64 ctrlBuffOffset, 8);
-    NV_DECLARE_ALIGNED(NvU64 initTaskLogBuffOffset, 8);
-    NV_DECLARE_ALIGNED(NvU64 initTaskLogBuffSize, 8);
-    NV_DECLARE_ALIGNED(NvU64 vgpuTaskLogBuffOffset, 8);
-    NV_DECLARE_ALIGNED(NvU64 vgpuTaskLogBuffSize, 8);
-    NvBool     bDeviceProfilingEnabled;
+    NvU8       vgpuDevName[VM_UUID_SIZE];
+    NvBool     bGpupLiveMigrationEnabled;
 } NVA084_ALLOC_PARAMETERS;

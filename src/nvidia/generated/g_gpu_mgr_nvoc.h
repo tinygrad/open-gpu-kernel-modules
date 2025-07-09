@@ -1,13 +1,22 @@
+
 #ifndef _G_GPU_MGR_NVOC_H_
 #define _G_GPU_MGR_NVOC_H_
+
+// Version of generated metadata structures
+#ifdef NVOC_METADATA_VERSION
+#undef NVOC_METADATA_VERSION
+#endif
+#define NVOC_METADATA_VERSION 2
+
 #include "nvoc/runtime.h"
+#include "nvoc/rtti.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2005-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2005-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -28,6 +37,7 @@ extern "C" {
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  * DEALINGS IN THE SOFTWARE.
  */
+#pragma once
 #include "g_gpu_mgr_nvoc.h"
 
 
@@ -128,9 +138,14 @@ typedef struct CONF_COMPUTE_CAPS
     NvBool bDevToolsModeEnabled;
     NvBool bAcceptClientRequest;
     NvBool bMultiGpuProtectedPcieModeEnabled;
+    NvBool bMultiGpuNvleModeEnabled;
     NvBool bFatalFailure;
 } CONF_COMPUTE_CAPS;
 
+typedef struct NVLE_CAPS
+{
+    NvBool bNvlEncryptionEnabled;
+} NVLE_CAPS;
 //
 // types of bridges supported.
 // These defines are inices for the types of bridges supported.
@@ -145,11 +160,19 @@ typedef struct CONF_COMPUTE_CAPS
 //
 // GPU NVLINK reduced bandwidth mode
 //
-#define GPU_NVLINK_BW_MODE_FULL     (0x0)
-#define GPU_NVLINK_BW_MODE_OFF      (0x1)
-#define GPU_NVLINK_BW_MODE_MIN      (0x2)
-#define GPU_NVLINK_BW_MODE_HALF     (0x3)
-#define GPU_NVLINK_BW_MODE_3QUARTER (0x4)
+#define NV_GPU_NVLINK_BW_MODE_LINK_COUNT   7:3
+#define NV_GPU_NVLINK_BW_MODE              2:0 // Legacy bw mode
+#define GPU_NVLINK_BW_MODE_FULL          (0x0)
+#define GPU_NVLINK_BW_MODE_OFF           (0x1)
+#define GPU_NVLINK_BW_MODE_MIN           (0x2)
+#define GPU_NVLINK_BW_MODE_HALF          (0x3)
+#define GPU_NVLINK_BW_MODE_3QUARTER      (0x4)
+#define GPU_NVLINK_BW_MODE_LINK_COUNT    (0x5) // Indicates link count should be used instead of legacy bw modes
+
+// RBM settings
+#define GPU_NVLINK_BW_MODE_SCOPE_UNSET    (0x0)
+#define GPU_NVLINK_BW_MODE_SCOPE_PER_NODE (0x1) // Set per node with legacy bw modes
+#define GPU_NVLINK_BW_MODE_SCOPE_PER_GPU  (0x2) // Set per gpu with link count
 
 typedef struct NVLINK_TOPOLOGY_PARAMS
 {
@@ -162,7 +185,7 @@ typedef struct NVLINK_TOPOLOGY_PARAMS
     NvU32   numPeers;
     NvBool  bSwitchConfig;
     // Ampere +
-    NvU32   pceAvailableMaskPerHshub[NV2080_CTRL_CE_MAX_HSHUBS];
+    NvU32   pceAvailableMaskPerConnectingHub[NV2080_CTRL_CE_MAX_HSHUBS];
     NvU32   fbhubPceMask;
     NvU32   maxPceLceMap[NV2080_CTRL_MAX_PCES];
     NvU32   maxGrceConfig[NV2080_CTRL_MAX_GRCES];
@@ -176,6 +199,18 @@ typedef struct _def_gpu_nvlink_topology_info
     NvU64   DomainBusDevice;
     NVLINK_TOPOLOGY_PARAMS params;
 } NVLINK_TOPOLOGY_INFO, *PNVLINK_TOPOLOGY_INFO;
+
+typedef struct NVLINK_UNCONTAINED_ERROR_RECOVERY_INFO
+{
+    NvBool bValid;
+    NvU64 DomainBusDevice;
+    NvU64 startTime;
+    volatile NvU32 active;
+    volatile NvU32 rcCompleted;
+    volatile NvU32 uvmIdle;
+    volatile NvU32 recoveryReady;
+    NvU8 uuid[RM_SHA1_GID_SIZE];
+} NVLINK_UNCONTAINED_ERROR_RECOVERY_INFO;
 
 typedef struct
 {
@@ -275,11 +310,28 @@ MAKE_INTRUSIVE_LIST(pcieP2PCapsInfoList, PCIEP2PCAPSINFO, node);
 #define PRIVATE_FIELD(x) NVOC_PRIVATE_FIELD(x)
 #endif
 
+
+// Metadata with per-class RTTI with ancestor(s)
+struct NVOC_METADATA__OBJGPUMGR;
+struct NVOC_METADATA__Object;
+
+
 struct OBJGPUMGR {
-    const struct NVOC_RTTI *__nvoc_rtti;
+
+    // Metadata starts with RTTI structure.
+    union {
+         const struct NVOC_METADATA__OBJGPUMGR *__nvoc_metadata_ptr;
+         const struct NVOC_RTTI *__nvoc_rtti;
+    };
+
+    // Parent (i.e. superclass or base class) objects
     struct Object __nvoc_base_Object;
-    struct Object *__nvoc_pbase_Object;
-    struct OBJGPUMGR *__nvoc_pbase_OBJGPUMGR;
+
+    // Ancestor object pointers for `staticCast` feature
+    struct Object *__nvoc_pbase_Object;    // obj super
+    struct OBJGPUMGR *__nvoc_pbase_OBJGPUMGR;    // gpumgr
+
+    // Data members
     PROBEDGPU probedGpus[32];
     void *probedGpusLock;
     NvU32 gpuAttachCount;
@@ -297,14 +349,25 @@ struct OBJGPUMGR {
     NvU8 powerDisconnectedGpuBus[32];
     NVLINK_TOPOLOGY_INFO nvlinkTopologyInfo[32];
     NvU8 nvlinkBwMode;
+    NvU8 bwModeScope;
+    NVLINK_UNCONTAINED_ERROR_RECOVERY_INFO nvlinkUncontainedErrorRecoveryInfo[32];
     GPUMGR_SAVE_MIG_INSTANCE_TOPOLOGY MIGTopologyInfo[32];
     void *cachedMIGInfoLock;
     GPUMGR_CACHED_MIG_STATE cachedMIGInfo[32];
     GPU_HANDLE_ID gpuHandleIDList[32];
     NvU32 numGpuHandles;
     CONF_COMPUTE_CAPS ccCaps;
+    NvU64 ccAttackerAdvantage;
+    NVLE_CAPS nvleCaps;
     pcieP2PCapsInfoList pcieP2PCapsInfoCache;
     void *pcieP2PCapsInfoLock;
+};
+
+
+// Metadata with per-class RTTI with ancestor(s)
+struct NVOC_METADATA__OBJGPUMGR {
+    const struct NVOC_RTTI rtti;
+    const struct NVOC_METADATA__Object metadata__Object;
 };
 
 #ifndef __NVOC_CLASS_OBJGPUMGR_TYPEDEF__
@@ -316,18 +379,18 @@ typedef struct OBJGPUMGR OBJGPUMGR;
 #define __nvoc_class_id_OBJGPUMGR 0xcf1b25
 #endif /* __nvoc_class_id_OBJGPUMGR */
 
+// Casting support
 extern const struct NVOC_CLASS_DEF __nvoc_class_def_OBJGPUMGR;
 
 #define __staticCast_OBJGPUMGR(pThis) \
     ((pThis)->__nvoc_pbase_OBJGPUMGR)
 
 #ifdef __nvoc_gpu_mgr_h_disabled
-#define __dynamicCast_OBJGPUMGR(pThis) ((OBJGPUMGR*)NULL)
+#define __dynamicCast_OBJGPUMGR(pThis) ((OBJGPUMGR*) NULL)
 #else //__nvoc_gpu_mgr_h_disabled
 #define __dynamicCast_OBJGPUMGR(pThis) \
-    ((OBJGPUMGR*)__nvoc_dynamicCast(staticCast((pThis), Dynamic), classInfo(OBJGPUMGR)))
+    ((OBJGPUMGR*) __nvoc_dynamicCast(staticCast((pThis), Dynamic), classInfo(OBJGPUMGR)))
 #endif //__nvoc_gpu_mgr_h_disabled
-
 
 NV_STATUS __nvoc_objCreateDynamic_OBJGPUMGR(OBJGPUMGR**, Dynamic*, NvU32, va_list);
 
@@ -335,6 +398,10 @@ NV_STATUS __nvoc_objCreate_OBJGPUMGR(OBJGPUMGR**, Dynamic*, NvU32);
 #define __objCreate_OBJGPUMGR(ppNewObj, pParent, createFlags) \
     __nvoc_objCreate_OBJGPUMGR((ppNewObj), staticCast((pParent), Dynamic), (createFlags))
 
+
+// Wrapper macros
+
+// Dispatch functions
 NV_STATUS gpumgrInitPcieP2PCapsCache_IMPL(struct OBJGPUMGR *pGpuMgr);
 
 
@@ -368,9 +435,9 @@ NvBool gpumgrGetPcieP2PCapsFromCache_IMPL(NvU32 gpuMask, NvU8 *pP2PWriteCapStatu
 NV_STATUS gpumgrConstruct_IMPL(struct OBJGPUMGR *arg_);
 
 #define __nvoc_gpumgrConstruct(arg_) gpumgrConstruct_IMPL(arg_)
-void gpumgrDestruct_IMPL(struct OBJGPUMGR *arg0);
+void gpumgrDestruct_IMPL(struct OBJGPUMGR *arg1);
 
-#define __nvoc_gpumgrDestruct(arg0) gpumgrDestruct_IMPL(arg0)
+#define __nvoc_gpumgrDestruct(arg1) gpumgrDestruct_IMPL(arg1)
 void gpumgrAddSystemNvlinkTopo_IMPL(NvU64 DomainBusDevice);
 
 #define gpumgrAddSystemNvlinkTopo(DomainBusDevice) gpumgrAddSystemNvlinkTopo_IMPL(DomainBusDevice)
@@ -380,6 +447,9 @@ NvBool gpumgrGetSystemNvlinkTopo_IMPL(NvU64 DomainBusDevice, struct NVLINK_TOPOL
 void gpumgrUpdateSystemNvlinkTopo_IMPL(NvU64 DomainBusDevice, struct NVLINK_TOPOLOGY_PARAMS *pTopoParams);
 
 #define gpumgrUpdateSystemNvlinkTopo(DomainBusDevice, pTopoParams) gpumgrUpdateSystemNvlinkTopo_IMPL(DomainBusDevice, pTopoParams)
+NVLINK_UNCONTAINED_ERROR_RECOVERY_INFO *gpumgrGetNvlinkRecoveryInfo_IMPL(NvU64 DomainBusDevice);
+
+#define gpumgrGetNvlinkRecoveryInfo(DomainBusDevice) gpumgrGetNvlinkRecoveryInfo_IMPL(DomainBusDevice)
 NV_STATUS gpumgrSetGpuInitDisabledNvlinks_IMPL(NvU32 gpuId, NvU32 mask, NvBool bSkipHwNvlinkDisable);
 
 #define gpumgrSetGpuInitDisabledNvlinks(gpuId, mask, bSkipHwNvlinkDisable) gpumgrSetGpuInitDisabledNvlinks_IMPL(gpuId, mask, bSkipHwNvlinkDisable)
@@ -389,12 +459,18 @@ NV_STATUS gpumgrGetGpuInitDisabledNvlinks_IMPL(NvU32 gpuId, NvU32 *pMask, NvBool
 NvU8 gpumgrGetGpuNvlinkBwMode_IMPL(void);
 
 #define gpumgrGetGpuNvlinkBwMode() gpumgrGetGpuNvlinkBwMode_IMPL()
+NvU8 gpumgrGetGpuNvlinkBwModeScope_IMPL(void);
+
+#define gpumgrGetGpuNvlinkBwModeScope() gpumgrGetGpuNvlinkBwModeScope_IMPL()
 void gpumgrSetGpuNvlinkBwModeFromRegistry_IMPL(struct OBJGPU *pGpu);
 
 #define gpumgrSetGpuNvlinkBwModeFromRegistry(pGpu) gpumgrSetGpuNvlinkBwModeFromRegistry_IMPL(pGpu)
 NV_STATUS gpumgrSetGpuNvlinkBwMode_IMPL(NvU8 mode);
 
 #define gpumgrSetGpuNvlinkBwMode(mode) gpumgrSetGpuNvlinkBwMode_IMPL(mode)
+NV_STATUS gpumgrSetGpuNvlinkBwModePerGpu_IMPL(struct OBJGPU *pGpu, NvU8 mode);
+
+#define gpumgrSetGpuNvlinkBwModePerGpu(pGpu, mode) gpumgrSetGpuNvlinkBwModePerGpu_IMPL(pGpu, mode)
 NvBool gpumgrCheckIndirectPeer_IMPL(struct OBJGPU *pGpu, struct OBJGPU *pRemoteGpu);
 
 #define gpumgrCheckIndirectPeer(pGpu, pRemoteGpu) gpumgrCheckIndirectPeer_IMPL(pGpu, pRemoteGpu)
@@ -431,12 +507,12 @@ void gpumgrCacheSetMIGEnabled_IMPL(struct OBJGPU *pGpu, NvBool bMIGEnabled);
 NV_STATUS gpumgrCacheGetActiveDeviceIds_IMPL(NV0000_CTRL_GPU_GET_ACTIVE_DEVICE_IDS_PARAMS *pActiveDeviceIdsParams);
 
 #define gpumgrCacheGetActiveDeviceIds(pActiveDeviceIdsParams) gpumgrCacheGetActiveDeviceIds_IMPL(pActiveDeviceIdsParams)
-void gpumgrUpdateBoardId_IMPL(struct OBJGPU *arg0);
+void gpumgrUpdateBoardId_IMPL(struct OBJGPU *arg1);
 
-#define gpumgrUpdateBoardId(arg0) gpumgrUpdateBoardId_IMPL(arg0)
-void gpumgrServiceInterrupts_IMPL(NvU32 arg0, MC_ENGINE_BITVECTOR *arg1, NvBool arg2);
+#define gpumgrUpdateBoardId(arg1) gpumgrUpdateBoardId_IMPL(arg1)
+void gpumgrServiceInterrupts_IMPL(NvU32 arg1, MC_ENGINE_BITVECTOR *arg2, NvBool arg3);
 
-#define gpumgrServiceInterrupts(arg0, arg1, arg2) gpumgrServiceInterrupts_IMPL(arg0, arg1, arg2)
+#define gpumgrServiceInterrupts(arg1, arg2, arg3) gpumgrServiceInterrupts_IMPL(arg1, arg2, arg3)
 #undef PRIVATE_FIELD
 
 
@@ -489,6 +565,14 @@ typedef struct GPUATTACHARG
     SOCGPUATTACHARG socDeviceArgs;
 } GPUATTACHARG;
 
+typedef struct WindowsFirmwarePolicyArg
+{
+    NvU32  devId;
+    NvU32  ssId;
+    NvU32  fuseIsQuadro;
+    NvBool bIsTccOrMcdm;
+} WindowsFirmwarePolicyArg;
+
 NV_STATUS   gpumgrThreadEnableExpandedGpuVisibility(void);
 void        gpumgrThreadDisableExpandedGpuVisibility(void);
 NvBool      gpumgrThreadHasExpandedGpuVisibility(void);
@@ -515,12 +599,14 @@ NV_STATUS   gpumgrGetGpuUuidInfo(NvU32 gpuId, NvU8 **ppUuidStr, NvU32 *pUuidStrL
 // gpumgrGetRmFirmwarePolicy() and  gpumgrGetRmFirmwareLogsEnabled() contain
 // all logic for deciding the policies for loading firmwares, and so need to be
 // compiled for all platforms besides those actually running the firmwares
-void        gpumgrGetRmFirmwarePolicy(NvU32 chipId, NvU32 pmcBoot42, NvBool bIsSoc,
+void        gpumgrGetRmFirmwarePolicy(NvU32 pmcBoot42, NvBool bIsVirtualWithSriov, NvBool bIsSoc,
                                       NvU32 enableFirmwareRegVal, NvBool *pbRequestFirmware,
-                                      NvBool *pbAllowFallbackToMonolithicRm);
+                                      NvBool *pbAllowFallbackToMonolithicRm,
+                                      WindowsFirmwarePolicyArg  *pWinRmFwPolicyArg);
 NvBool      gpumgrGetRmFirmwareLogsEnabled(NvU32 enableFirmwareLogsRegVal);
-NvBool      gpumgrIsDeviceRmFirmwareCapable(NvU16 devId, NvU32 pmcBoot42,
-                                            NvBool bIsSoc, NvBool *pbEnableByDefault);
+NvBool      gpumgrIsDeviceRmFirmwareCapable(NvU32 pmcBoot42, NvBool bIsVirtualWithSriov,
+                                            NvBool bIsSoc, NvBool *pbEnableByDefault,
+                                            WindowsFirmwarePolicyArg  *pWinRmFwPolicyArg);
 NvBool      gpumgrIsVgxRmFirmwareCapableChip(NvU32 pmcBoot42);
 NV_STATUS   gpumgrAttachGpu(NvU32 deviceInstance, GPUATTACHARG *);
 NV_STATUS   gpumgrDetachGpu(NvU32 deviceInstance);
@@ -571,6 +657,7 @@ NvU8        gpumgrGetGpuBridgeType(void);
 NvBool      gpumgrAreAllGpusInOffloadMode(void);
 NvBool      gpumgrIsSafeToReadGpuInfo(void);
 NvBool      gpumgrIsDeviceMsixAllowed(RmPhysAddr bar0BaseAddr, NvU32 pmcBoot1, NvU32 pmcBoot42);
+NvBool      gpumgrWaitForBarFirewall(NvU32 domain, NvU8 bus, NvU8 device, NvU8 function, NvU16 devId);
 
 //
 // gpumgrIsSubDeviceCountOne

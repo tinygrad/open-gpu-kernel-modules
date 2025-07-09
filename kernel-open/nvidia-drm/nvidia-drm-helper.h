@@ -40,8 +40,13 @@
 #include <drm/drm_blend.h>
 #endif
 
-#if defined(NV_DRM_ROTATION_AVAILABLE)
-/* For DRM_MODE_ROTATE_* and DRM_MODE_REFLECT_* */
+#if defined(NV_DRM_ROTATION_AVAILABLE) || \
+    defined(NV_DRM_COLOR_CTM_3X4_PRESENT) || \
+    defined(NV_DRM_COLOR_LUT_PRESENT)
+/*
+ * For DRM_MODE_ROTATE_*, DRM_MODE_REFLECT_*, struct drm_color_ctm_3x4, and
+ * struct drm_color_lut.
+ */
 #include <uapi/drm/drm_mode.h>
 #endif
 
@@ -63,6 +68,13 @@
 #endif
 
 #endif //NV_DRM_ROTATION_AVAILABLE
+
+/*
+ * Commit 1e13c5644c44 ("drm/drm_mode_object: increase max objects to
+ * accommodate new color props") in Linux v6.8 increased the pre-object
+ * property limit to from 24 to 64.
+ */
+#define NV_DRM_USE_EXTENDED_PROPERTIES (DRM_OBJECT_MAX_PROPERTY >= 64)
 
 /*
  * drm_dev_put() is added by commit 9a96f55034e41b4e002b767e9218d55f03bdff7d
@@ -358,6 +370,24 @@ static inline void nv_drm_connector_put(struct drm_connector *connector)
 #endif
 }
 
+static inline void nv_drm_property_blob_put(struct drm_property_blob *blob)
+{
+#if defined(NV_DRM_PROPERTY_BLOB_PUT_PRESENT)
+    drm_property_blob_put(blob);
+#else
+    drm_property_unreference_blob(blob);
+#endif
+}
+
+static inline void nv_drm_property_blob_get(struct drm_property_blob *blob)
+{
+#if defined(NV_DRM_PROPERTY_BLOB_PUT_PRESENT)
+    drm_property_blob_get(blob);
+#else
+    drm_property_reference_blob(blob);
+#endif
+}
+
 static inline struct drm_crtc *
 nv_drm_crtc_find(struct drm_device *dev, struct drm_file *filep, uint32_t id)
 {
@@ -613,8 +643,8 @@ static inline int nv_drm_format_num_planes(uint32_t format)
 #endif /* defined(NV_DRM_FORMAT_MODIFIERS_PRESENT) */
 
 /*
- * DRM_UNLOCKED was removed with linux-next commit 2798ffcc1d6a ("drm: Remove
- * locking for legacy ioctls and DRM_UNLOCKED"), but it was previously made
+ * DRM_UNLOCKED was removed with commit 2798ffcc1d6a ("drm: Remove locking for
+ * legacy ioctls and DRM_UNLOCKED") in v6.8, but it was previously made
  * implicit for all non-legacy DRM driver IOCTLs since Linux v4.10 commit
  * fa5386459f06 "drm: Used DRM_LEGACY for all legacy functions" (Linux v4.4
  * commit ea487835e887 "drm: Enforce unlocked ioctl operation for kms driver
@@ -623,6 +653,31 @@ static inline int nv_drm_format_num_planes(uint32_t format)
  */
 #if !defined(NV_DRM_UNLOCKED_IOCTL_FLAG_PRESENT)
 #define DRM_UNLOCKED 0
+#endif
+
+/*
+ * struct drm_color_ctm_3x4 was added by commit 6872a189be50 ("drm/amd/display:
+ * Add 3x4 CTM support for plane CTM") in v6.8. For backwards compatibility,
+ * define it when not present.
+ */
+#if !defined(NV_DRM_COLOR_CTM_3X4_PRESENT)
+struct drm_color_ctm_3x4 {
+    __u64 matrix[12];
+};
+#endif
+
+/*
+ * struct drm_color_lut was added by commit 5488dc16fde7 ("drm: introduce pipe
+ * color correction properties") in v4.6. For backwards compatibility, define it
+ * when not present.
+ */
+#if !defined(NV_DRM_COLOR_LUT_PRESENT)
+struct drm_color_lut {
+    __u16 red;
+    __u16 green;
+    __u16 blue;
+    __u16 reserved;
+};
 #endif
 
 /*

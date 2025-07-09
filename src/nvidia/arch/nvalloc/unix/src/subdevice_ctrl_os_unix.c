@@ -29,7 +29,6 @@
 #include "gpu/gpu.h"
 #include "gpu/gpu_resource.h"
 #include "gpu/subdevice/subdevice.h"
-#include <osfuncs.h>
 #include <diagnostics/journal.h>
 #include "gpu/mem_mgr/mem_desc.h"
 #include "mem_mgr/mem.h"
@@ -69,9 +68,7 @@ subdeviceCtrlCmdOsUnixVidmemPersistenceStatus_IMPL
     nv_state_t *nv   = NV_GET_NV_STATE(pGpu);
     nv_priv_t  *nvp  = NV_GET_NV_PRIV(nv);
 
-    pParams->bVidmemPersistent = !gpuIsVidmemPreservationBrokenBug3172217(pGpu) &&
-                                 (nv->preserve_vidmem_allocations ||
-                                  nvp->s0ix_pm_enabled);
+    pParams->bVidmemPersistent = (nv->preserve_vidmem_allocations || nvp->s0ix_pm_enabled);
 
     return NV_OK;
 }

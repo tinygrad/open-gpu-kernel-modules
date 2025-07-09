@@ -126,13 +126,7 @@ _gmmuGetPdePa
 
         if (pAddrFld)
         {
-            KernelGmmu *pKernelGmmu = GPU_GET_KERNEL_GMMU(pGpu);
-            NvU64    addr  = gmmuFieldGetAddress(pAddrFld, pGmmuEntry->v8);
-            if ((aperture == GMMU_APERTURE_SYS_NONCOH) || (aperture == GMMU_APERTURE_SYS_COH))
-            {
-                addr += pKernelGmmu->sysmemBaseAddress;
-            }
-            return addr;
+            return gmmuFieldGetAddress(pAddrFld, pGmmuEntry->v8);
         }
     }
 
@@ -157,13 +151,7 @@ _gmmuGetPtePa
         const GMMU_FIELD_ADDRESS *pAddrFld = gmmuFmtPtePhysAddrFld(pFmt, aperture);
         if (pAddrFld)
         {
-            KernelGmmu *pKernelGmmu = GPU_GET_KERNEL_GMMU(pGpu);
-            NvU64    addr  = gmmuFieldGetAddress(pAddrFld, pGmmuEntry->v8);
-            if ((aperture == GMMU_APERTURE_SYS_NONCOH) || (aperture == GMMU_APERTURE_SYS_COH))
-            {
-                addr += pKernelGmmu->sysmemBaseAddress;
-            }
-            return addr;
+            return gmmuFieldGetAddress(pAddrFld, pGmmuEntry->v8);
         }
     }
 
@@ -372,6 +360,9 @@ _gmmuPrintPte
 
     switch (mmuFmtLevelPageSize(pFmtLevel))
     {
+        case RM_PAGE_SIZE_256G:
+            NV_PRINTF_EX(NV_PRINTF_MODULE, LEVEL_INFO, "PTE_256G");
+            break;
         case RM_PAGE_SIZE_512M:
             NV_PRINTF_EX(NV_PRINTF_MODULE, LEVEL_INFO, "PTE_512M");
             break;

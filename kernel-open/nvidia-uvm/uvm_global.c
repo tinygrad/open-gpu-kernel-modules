@@ -1,5 +1,5 @@
 /*******************************************************************************
-    Copyright (c) 2015-2024 NVIDIA Corporation
+    Copyright (c) 2015-2025 NVIDIA Corporation
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"), to
@@ -35,6 +35,7 @@
 #include "uvm_mmu.h"
 #include "uvm_perf_heuristics.h"
 #include "uvm_pmm_sysmem.h"
+#include "uvm_pmm_gpu.h"
 #include "uvm_migrate.h"
 #include "uvm_gpu_access_counters.h"
 #include "uvm_va_space_mm.h"
@@ -53,6 +54,9 @@ static NV_STATUS uvm_register_callbacks(void)
     g_exported_uvm_ops.startDevice = NULL;
     g_exported_uvm_ops.stopDevice  = NULL;
     g_exported_uvm_ops.isrTopHalf  = uvm_isr_top_half_entry;
+
+    g_exported_uvm_ops.drainP2P = uvm_suspend_and_drainP2P_entry;
+    g_exported_uvm_ops.resumeP2P = uvm_resumeP2P_entry;
 
     // Register the UVM callbacks with the main GPU driver:
     status = uvm_rm_locked_call(nvUvmInterfaceRegisterUvmCallbacks(&g_exported_uvm_ops));
@@ -87,6 +91,8 @@ NV_STATUS uvm_global_init(void)
     uvm_spin_lock_irqsave_init(&g_uvm_global.gpu_table_lock, UVM_LOCK_ORDER_LEAF);
     uvm_mutex_init(&g_uvm_global.va_spaces.lock, UVM_LOCK_ORDER_VA_SPACES_LIST);
     INIT_LIST_HEAD(&g_uvm_global.va_spaces.list);
+    uvm_mutex_init(&g_uvm_global.devmem_ranges.lock, UVM_LOCK_ORDER_LEAF);
+    INIT_LIST_HEAD(&g_uvm_global.devmem_ranges.list);
 
     status = uvm_kvmalloc_init();
     if (status != NV_OK) {
@@ -95,12 +101,6 @@ NV_STATUS uvm_global_init(void)
     }
 
     status = errno_to_nv_status(nv_kthread_q_init(&g_uvm_global.global_q, "UVM global queue"));
-    if (status != NV_OK) {
-        UVM_DBG_PRINT("nv_kthread_q_init() failed: %s\n", nvstatusToString(status));
-        goto error;
-    }
-
-    status = errno_to_nv_status(nv_kthread_q_init(&g_uvm_global.deferred_release_q, "UVM deferred release queue"));
     if (status != NV_OK) {
         UVM_DBG_PRINT("nv_kthread_q_init() failed: %s\n", nvstatusToString(status));
         goto error;
@@ -194,12 +194,25 @@ NV_STATUS uvm_global_init(void)
         goto error;
     }
 
-    // This sets up the ISR (interrupt service routine), by hooking into RM's top-half ISR callback. As soon as this
-    // call completes, GPU interrupts will start arriving, so it's important to be prepared to receive interrupts before
-    // this point:
+    status = uvm_access_counters_init();
+    if (status != NV_OK) {
+        UVM_ERR_PRINT("uvm_access_counters_init failed: %s\n", nvstatusToString(status));
+        goto error;
+    }
+
+    // This sets up the ISR (interrupt service routine), by hooking into RM's
+    // top-half ISR callback. As soon as this call completes, GPU interrupts
+    // will start arriving, so it's important to be prepared to receive
+    // interrupts before this point.
     status = uvm_register_callbacks();
     if (status != NV_OK) {
         UVM_ERR_PRINT("uvm_register_callbacks failed: %s\n", nvstatusToString(status));
+        goto error;
+    }
+
+    status = errno_to_nv_status(nv_kthread_q_init(&g_uvm_global.deferred_release_q, "UVM deferred release queue"));
+    if (status != NV_OK) {
+        UVM_DBG_PRINT("nv_kthread_q_init() failed: %s\n", nvstatusToString(status));
         goto error;
     }
 
@@ -214,13 +227,11 @@ void uvm_global_exit(void)
 {
     uvm_assert_mutex_unlocked(&g_uvm_global.global_lock);
 
-    // Guarantee completion of any release callbacks scheduled after the flush
-    // in uvm_resume().
-    nv_kthread_q_flush(&g_uvm_global.deferred_release_q);
+    nv_kthread_q_stop(&g_uvm_global.deferred_release_q);
 
     uvm_unregister_callbacks();
+    uvm_access_counters_exit();
     uvm_service_block_context_exit();
-
     uvm_perf_heuristics_exit();
     uvm_perf_events_exit();
     uvm_migrate_exit();
@@ -229,6 +240,7 @@ void uvm_global_exit(void)
     uvm_va_policy_exit();
     uvm_mem_global_exit();
     uvm_pmm_sysmem_exit();
+    uvm_pmm_devmem_exit();
     uvm_gpu_exit();
     uvm_processor_mask_cache_exit();
 
@@ -237,7 +249,6 @@ void uvm_global_exit(void)
 
     uvm_procfs_exit();
 
-    nv_kthread_q_stop(&g_uvm_global.deferred_release_q);
     nv_kthread_q_stop(&g_uvm_global.global_q);
 
     uvm_assert_mutex_unlocked(&g_uvm_global.va_spaces.lock);
@@ -282,7 +293,7 @@ static NV_STATUS uvm_suspend(void)
     //   * Flush relevant kthread queues (bottom half, etc.)
 
     // Some locks acquired by this function, such as pm.lock, are released
-    // by uvm_resume().  This is contrary to the lock tracking code's
+    // by uvm_resume(). This is contrary to the lock tracking code's
     // expectations, so lock tracking is disabled.
     uvm_thread_context_lock_disable_tracking();
 
@@ -299,7 +310,7 @@ static NV_STATUS uvm_suspend(void)
         gpu = uvm_gpu_get(gpu_id);
 
         // Since fault buffer state may be lost across sleep cycles, UVM must
-        // ensure any outstanding replayable faults are dismissed.  The RM
+        // ensure any outstanding replayable faults are dismissed. The RM
         // guarantees that all user channels have been preempted before
         // uvm_suspend() is called, which implies that no user channels can be
         // stalled on faults when this point is reached.
@@ -325,7 +336,7 @@ static NV_STATUS uvm_suspend(void)
     }
 
     // Acquire each VA space's lock in write mode to lock out VMA open and
-    // release callbacks.  These entry points do not have feasible early exit
+    // release callbacks. These entry points do not have feasible early exit
     // options, and so aren't suitable for synchronization with pm.lock.
     uvm_mutex_lock(&g_uvm_global.va_spaces.lock);
 
@@ -355,7 +366,7 @@ static NV_STATUS uvm_resume(void)
     g_uvm_global.pm.is_suspended = false;
 
     // Some locks released by this function, such as pm.lock, were acquired
-    // by uvm_suspend().  This is contrary to the lock tracking code's
+    // by uvm_suspend(). This is contrary to the lock tracking code's
     // expectations, so lock tracking is disabled.
     uvm_thread_context_lock_disable_tracking();
 
@@ -387,7 +398,7 @@ static NV_STATUS uvm_resume(void)
     uvm_thread_context_lock_enable_tracking();
 
     // Force completion of any release callbacks successfully queued for
-    // deferred completion while suspended.  The deferred release
+    // deferred completion while suspended. The deferred release
     // queue is not guaranteed to remain empty following this flush since
     // some threads that failed to acquire pm.lock in uvm_release() may
     // not have scheduled their handlers yet.
@@ -412,15 +423,18 @@ void uvm_global_set_fatal_error_impl(NV_STATUS error)
 
     UVM_ASSERT(error != NV_OK);
 
-    previous_error = nv_atomic_cmpxchg(&g_uvm_global.fatal_error, NV_OK, error);
+    previous_error = atomic_cmpxchg(&g_uvm_global.fatal_error, NV_OK, error);
 
     if (previous_error == NV_OK) {
         UVM_ERR_PRINT("Encountered a global fatal error: %s\n", nvstatusToString(error));
     }
     else {
         UVM_ERR_PRINT("Encountered a global fatal error: %s after a global error has been already set: %s\n",
-                nvstatusToString(error), nvstatusToString(previous_error));
+                nvstatusToString(error),
+                nvstatusToString(previous_error));
     }
+
+    nvUvmInterfaceReportFatalError(error);
 }
 
 NV_STATUS uvm_global_reset_fatal_error(void)
@@ -430,7 +444,7 @@ NV_STATUS uvm_global_reset_fatal_error(void)
         return NV_ERR_INVALID_STATE;
     }
 
-    return nv_atomic_xchg(&g_uvm_global.fatal_error, NV_OK);
+    return atomic_xchg(&g_uvm_global.fatal_error, NV_OK);
 }
 
 void uvm_global_gpu_retain(const uvm_processor_mask_t *mask)
@@ -464,6 +478,71 @@ NV_STATUS uvm_global_gpu_check_ecc_error(uvm_processor_mask_t *gpus)
 
     for_each_gpu_in_mask(gpu, gpus) {
         NV_STATUS status = uvm_gpu_check_ecc_error(gpu);
+        if (status != NV_OK)
+            return status;
+    }
+
+    return NV_OK;
+}
+
+static NV_STATUS suspend_and_drainP2P(const NvProcessorUuid *parent_uuid)
+{
+    NV_STATUS status = NV_OK;
+    uvm_parent_gpu_t *parent_gpu;
+
+    uvm_mutex_lock(&g_uvm_global.global_lock);
+
+    // NVLINK STO recovery is not supported in combination with MIG
+    parent_gpu = uvm_parent_gpu_get_by_uuid(parent_uuid);
+    if (!parent_gpu || parent_gpu->smc.enabled) {
+        status = NV_ERR_INVALID_DEVICE;
+        goto unlock;
+    }
+
+    status = uvm_channel_manager_suspend_p2p(parent_gpu->gpus[0]->channel_manager);
+
+unlock:
+    uvm_mutex_unlock(&g_uvm_global.global_lock);
+    return status;
+}
+
+static NV_STATUS resumeP2P(const NvProcessorUuid *parent_uuid)
+{
+    NV_STATUS status = NV_OK;
+    uvm_parent_gpu_t *parent_gpu;
+
+    uvm_mutex_lock(&g_uvm_global.global_lock);
+
+    // NVLINK STO recovery is not supported in combination with MIG
+    parent_gpu = uvm_parent_gpu_get_by_uuid(parent_uuid);
+    if (!parent_gpu || parent_gpu->smc.enabled) {
+        status = NV_ERR_INVALID_DEVICE;
+        goto unlock;
+    }
+
+    uvm_channel_manager_resume_p2p(parent_gpu->gpus[0]->channel_manager);
+
+unlock:
+    uvm_mutex_unlock(&g_uvm_global.global_lock);
+    return status;
+}
+
+NV_STATUS uvm_suspend_and_drainP2P_entry(const NvProcessorUuid *uuid)
+{
+    UVM_ENTRY_RET(suspend_and_drainP2P(uuid));
+}
+
+NV_STATUS uvm_resumeP2P_entry(const NvProcessorUuid *uuid)
+{
+    UVM_ENTRY_RET(resumeP2P(uuid));
+}
+
+NV_STATUS uvm_global_gpu_check_nvlink_error(uvm_processor_mask_t *gpus)
+{
+    uvm_gpu_t *gpu;
+
+    for_each_gpu_in_mask(gpu, gpus) {
+        NV_STATUS status = uvm_gpu_check_nvlink_error(gpu);
         if (status != NV_OK)
             return status;
     }

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -21,12 +21,14 @@
  * DEALINGS IN THE SOFTWARE.
  */
 #include "rmapi/rmapi.h"
+#include "rmapi/rmapi_utils.h"
 #include "entry_points.h"
 #include "core/thread_state.h"
 #include "rmapi/rs_utils.h"
 #include "resserv/rs_access_map.h"
 #include "resource_desc.h"
 #include "class/cl0071.h"
+#include "gpu/gpu_resource.h"
 
 static NV_STATUS
 _RmDupObject
@@ -132,13 +134,13 @@ rmapiDupObjectWithSecInfo
     }
     else
     {
-        NV_PRINTF(LEVEL_WARNING,
+        NV_PRINTF(LEVEL_INFO,
                   "Nv04DupObject: dup failed; status: %s (0x%08x)\n",
                   nvstatusToString(status), status);
-        NV_PRINTF(LEVEL_WARNING,
+        NV_PRINTF(LEVEL_INFO,
                   "Nv04DupObject:  hClient:0x%x hParent:0x%x hObject:0x%x\n",
                   hClient, hParent, *phObject);
-        NV_PRINTF(LEVEL_WARNING,
+        NV_PRINTF(LEVEL_INFO,
                   "Nv04DupObject:  hClientSrc:0x%x hObjectSrc:0x%x flags:0x%x\n",
                   hClientSrc, hObjectSrc, flags);
     }
@@ -266,10 +268,10 @@ rmapiShareWithSecInfo
     }
     else
     {
-        NV_PRINTF(LEVEL_WARNING,
+        NV_PRINTF(LEVEL_INFO,
                   "Nv04Share: share failed; status: %s (0x%08x)\n",
                   nvstatusToString(status), status);
-        NV_PRINTF(LEVEL_WARNING,
+        NV_PRINTF(LEVEL_INFO,
                   "Nv04Share:  hClient:0x%x hObject:0x%x pSharePolicy:%p\n",
                   hClient, hObject, pSharePolicy);
     }
@@ -374,6 +376,7 @@ serverInitGlobalSharePolicies
     return NV_OK;
 }
 
+// Called with both src/dst client lock held
 NV_STATUS serverUpdateLockFlagsForCopy(RsServer *pServer, RS_RES_DUP_PARAMS *pParams)
 {
     RS_RESOURCE_DESC  *pResDesc;
@@ -382,26 +385,43 @@ NV_STATUS serverUpdateLockFlagsForCopy(RsServer *pServer, RS_RES_DUP_PARAMS *pPa
     if (pParams->pSrcRef == NULL)
         return NV_ERR_INVALID_STATE;
 
-    // Special cases; TODO move these to resource_list.h
-    if (pParams->pSrcRef->externalClassId == NV01_MEMORY_SYSTEM_OS_DESCRIPTOR)
-    {
-        // Lock all GPUs
-        return NV_OK;
-    }
-
     pResDesc = RsResInfoByExternalClassId(pParams->pSrcRef->externalClassId);
     if (pResDesc == NULL)
         return NV_ERR_INVALID_OBJECT;
 
-    // Use the same flags from alloc. These should be split out in the future.
-    if (!(pResDesc->flags & RS_FLAGS_ACQUIRE_GPUS_LOCK_ON_ALLOC))
+    if (!(pResDesc->flags & RS_FLAGS_ACQUIRE_GPUS_LOCK_ON_DUP))
     {
         pLockInfo->flags |= RM_LOCK_FLAGS_NO_GPUS_LOCK;
     }
 
-    if (pResDesc->flags & RS_FLAGS_ACQUIRE_GPU_GROUP_LOCK_ON_ALLOC)
+    if (pResDesc->flags & RS_FLAGS_ACQUIRE_GPU_GROUP_LOCK_ON_DUP)
     {
         pLockInfo->flags |= RM_LOCK_FLAGS_GPU_GROUP_LOCK;
+    }
+
+    if (pResDesc->flags & RS_FLAGS_ACQUIRE_RELAXED_GPUS_LOCK_ON_DUP)
+    {
+        // Holding both client lock and the at least RO API lock. Safe to access the resource
+        if (rmapiLockIsOwner())
+        {
+            GpuResource *pGpuResSrc = dynamicCast(pParams->pSrcRef->pResource, GpuResource);
+            GpuResource *pGpuResDst = dynamicCast(pParams->pDstParentRef->pResource, GpuResource);
+
+            if ((pGpuResSrc != NULL) &&
+                (pGpuResDst != NULL) &&
+                (pGpuResSrc->pGpu == pGpuResDst->pGpu))
+            {
+                pLockInfo->flags |= RM_LOCK_FLAGS_GPU_GROUP_LOCK;
+            }
+            else
+            {
+                pLockInfo->flags &= ~(RM_LOCK_FLAGS_NO_GPUS_LOCK);
+            }
+        }
+        else
+        {
+            pLockInfo->flags &= ~(RM_LOCK_FLAGS_NO_GPUS_LOCK);
+        }
     }
 
     pLockInfo->pContextRef = pParams->pSrcRef->pParentRef;

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2020-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2020-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -29,9 +29,9 @@
 #include "export_nvswitch.h"
 #include "common_nvswitch.h"
 
+#include "nvswitch/ls10/dev_boot.h"
 #include "ctrl_dev_nvswitch.h"
 
-#include "nvswitch/ls10/dev_master.h"
 
 #define NVSWITCH_NUM_LINKS_LS10                 64
 #define NVSWITCH_NUM_LANES_LS10                 2
@@ -188,7 +188,12 @@
 
 #define SOE_VBIOS_VERSION_MASK                        0xFF0000
 #define SOE_VBIOS_REVLOCK_DISABLE_NPORT_FATAL_INTR    0x370000
-#define SOE_VBIOS_REVLOCK_ISSUE_INGRESS_STOP          0x440000
+#define SOE_VBIOS_REVLOCK_ISSUE_INGRESS_STOP          0x4C0000
+#define SOE_VBIOS_REVLOCK_TNVL_PRELOCK_COMMAND        0x590000
+#define SOE_VBIOS_REVLOCK_SOE_PRI_CHECKS              0x610000
+#define SOE_VBIOS_REVLOCK_REPORT_EN                   0x6A0000
+#define SOE_VBIOS_REVLOCK_ENGINE_COUNTERS             0x700000
+
 
 // LS10 Saved LED state
 #define ACCESS_LINK_LED_STATE CPLD_MACHXO3_ACCESS_LINK_LED_CTL_NVL_CABLE_LED
@@ -219,12 +224,6 @@
 
 #define NVSWITCH_MINION_WR32_BCAST_LS10(_d, _dev, _reg, _data)          \
     NVSWITCH_ENG_WR32(_d, MINION, _BCAST, 0, _dev, _reg, _data)
-
-#define NVSWITCH_NPG_WR32_LS10(_d, _engidx, _dev, _reg, _data)          \
-    NVSWITCH_ENG_WR32(_d, NPG, , _engidx, _dev, _reg, _data)
-
-#define NVSWITCH_NPG_RD32_LS10(_d, _engidx, _dev, _reg)                 \
-    NVSWITCH_ENG_RD32(_d, NPG, , _engidx, _dev, _reg)
 
 //
 // Per-chip device information
@@ -515,7 +514,7 @@ typedef struct
               NV_NPORT_PORTSTAT_LS10(_block, _reg, _idx, ), _data);                 \
     }
 
-#define NVSWITCH_DEFERRED_LINK_STATE_CHECK_INTERVAL_NS ((device->bModeContinuousALI ? 12 : 30) *\
+#define NVSWITCH_DEFERRED_LINK_STATE_CHECK_INTERVAL_NS ((device->bModeContinuousALI ? 15 : 30) *\
                                                         NVSWITCH_INTERVAL_1SEC_IN_NS)
 #define NVSWITCH_DEFERRED_FAULT_UP_CHECK_INTERVAL_NS   (12 * NVSWITCH_INTERVAL_1MSEC_IN_NS)
 
@@ -613,6 +612,7 @@ typedef struct
 
     // Nvlink error reporting management
     NVLINK_LINK_ERROR_REPORTING deferredLinkErrors[NVSWITCH_NUM_LINKS_LS10];
+    NVSWITCH_DEFERRED_ERROR_REPORTING_ARGS deferredLinkErrorsArgs[NVSWITCH_NUM_LINKS_LS10];
 
 } ls10_device;
 
@@ -857,7 +857,6 @@ typedef const struct
 
 #define nvswitch_link_lane_reversed_ls10             nvswitch_link_lane_reversed_lr10
 
-#define nvswitch_i2c_get_port_info_ls10             nvswitch_i2c_get_port_info_lr10
 #define nvswitch_i2c_set_hw_speed_mode_ls10         nvswitch_i2c_set_hw_speed_mode_lr10
 
 #define nvswitch_ctrl_get_err_info_ls10             nvswitch_ctrl_get_err_info_lr10
@@ -938,6 +937,7 @@ NvlStatus nvswitch_request_tl_link_state_lr10(nvlink_link *link, NvU32 tlLinkSta
 NvlStatus nvswitch_wait_for_tl_request_ready_lr10(nvlink_link *link);
 
 NvlStatus nvswitch_parse_bios_image_lr10(nvswitch_device *device);
+NvU32 nvswitch_i2c_get_port_info_ls10(nvswitch_device *device, NvU32 port);
 NvU32 nvswitch_i2c_get_port_info_lr10(nvswitch_device *device, NvU32 port);
 void      nvswitch_i2c_set_hw_speed_mode_lr10(nvswitch_device *device, NvU32 port, NvU32 speedMode);
 NvlStatus nvswitch_ctrl_i2c_indexed_lr10(nvswitch_device *device, NVSWITCH_CTRL_I2C_INDEXED_PARAMS *pParams);
@@ -1051,7 +1051,17 @@ NvlStatus nvswitch_fsp_write_to_emem_ls10(nvswitch_device *device, NvU8 *pBuffer
 NvlStatus nvswitch_fsp_read_from_emem_ls10(nvswitch_device *device, NvU8 *pBuffer, NvU32 size);
 NvlStatus nvswitch_fsp_error_code_to_nvlstatus_map_ls10(nvswitch_device *device, NvU32 errorCode);
 NvlStatus nvswitch_fsprpc_get_caps_ls10(nvswitch_device *device, NVSWITCH_FSPRPC_GET_CAPS_PARAMS *params);
-
+NvlStatus nvswitch_detect_tnvl_mode_ls10(nvswitch_device *device);
+NvBool    nvswitch_is_tnvl_mode_enabled_ls10(nvswitch_device *device);
+NvBool    nvswitch_is_tnvl_mode_locked_ls10(nvswitch_device *device);
+NvlStatus nvswitch_tnvl_get_attestation_certificate_chain_ls10(nvswitch_device *device, NVSWITCH_GET_ATTESTATION_CERTIFICATE_CHAIN_PARAMS *params);
+NvlStatus nvswitch_tnvl_get_attestation_report_ls10(nvswitch_device *device, NVSWITCH_GET_ATTESTATION_REPORT_PARAMS *params);
+NvlStatus nvswitch_tnvl_send_fsp_lock_config_ls10(nvswitch_device *device);
+NvlStatus nvswitch_tnvl_get_status_ls10(nvswitch_device *device, NVSWITCH_GET_TNVL_STATUS_PARAMS *params);
+void      nvswitch_tnvl_eng_wr_32_ls10(nvswitch_device *device, NVSWITCH_ENGINE_ID eng_id, NvU32 eng_bcast, NvU32 eng_instance, NvU32 base_addr, NvU32 offset, NvU32 data);
+NvlStatus nvswitch_send_tnvl_prelock_cmd_ls10(nvswitch_device *device);
+void      nvswitch_tnvl_disable_interrupts_ls10(nvswitch_device *device);
+void      nvswitch_tnvl_reg_wr_32_ls10(nvswitch_device *device, NvU32 offset, NvU32 data);
 NvlStatus nvswitch_ctrl_get_soe_heartbeat_ls10(nvswitch_device *device, NVSWITCH_GET_SOE_HEARTBEAT_PARAMS *p);
 NvlStatus nvswitch_cci_enable_iobist_ls10(nvswitch_device *device, NvU32 linkNumber, NvBool bEnable);
 NvlStatus nvswitch_cci_initialization_sequence_ls10(nvswitch_device *device, NvU32 linkNumber);

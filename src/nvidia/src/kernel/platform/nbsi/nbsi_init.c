@@ -31,7 +31,7 @@
 #include "platform/nbsi/nbsi_read.h"
 #include "platform/platform.h"
 #include "nbci.h"
-#include "nvRmReg.h"
+#include "nvrm_registry.h"
 #include "gpu/gpu.h"
 #include "nvhybridacpi.h"
 #include "nvlimits.h"
@@ -2834,6 +2834,11 @@ NV_STATUS getNbsiObjByType
     if (pGpu == NULL)
     {
         return NV_ERR_GENERIC;
+    }
+
+    if (IsT234DorBetter(pGpu))
+    {
+        return NV_ERR_NOT_SUPPORTED;
     }
 
     idx = gpuGetInstance(pGpu);

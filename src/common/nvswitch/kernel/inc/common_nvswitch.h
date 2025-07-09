@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2017-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2017-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -163,6 +163,7 @@ void nvswitch_assert_log(void);
             "nvidia-%s: SXid (PCI:" NVLINK_PCI_DEV_FMT "): %05d, " _fmt,                  \
             (_d)->name, NVLINK_PCI_DEV_FMT_ARGS(&(_d)->nvlink_device->pciInfo), _sxid,    \
             ##__VA_ARGS__);                                                               \
+        nvswitch_os_report_error(_d->os_handle, _sxid, _fmt, ##__VA_ARGS__);              \
         nvswitch_lib_smbpbi_log_sxid(_d, _sxid, _fmt, ##__VA_ARGS__);                     \
         nvswitch_inforom_bbx_add_sxid(_d, _sxid, 0, 0, 0);                                \
     } while(0)
@@ -175,6 +176,7 @@ void nvswitch_assert_log(void);
             "nvidia-%s: SXid (PCI:" NVLINK_PCI_DEV_FMT "): %05d, " _fmt,                  \
             (_d)->name, NVLINK_PCI_DEV_FMT_ARGS(&(_d)->nvlink_device->pciInfo), _sxid,    \
             ##__VA_ARGS__);                                                               \
+        nvswitch_os_report_error(_d->os_handle, _sxid, _fmt, ##__VA_ARGS__);              \
         nvswitch_lib_smbpbi_log_sxid(_d, _sxid, _fmt, ##__VA_ARGS__);                     \
     } while(0)
 
@@ -469,6 +471,9 @@ struct nvswitch_device
 
     // To be removed once newer vbios is on TOT.
     NvBool  bIsNvlinkVbiosTableVersion2;
+
+    // Trusted NVLink Mode
+    NVSWITCH_DEVICE_TNVL_MODE tnvl_mode;
 };
 
 #define NVSWITCH_IS_DEVICE_VALID(device) \

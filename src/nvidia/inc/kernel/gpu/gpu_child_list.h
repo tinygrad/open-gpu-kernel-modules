@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2004-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2004-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -291,20 +291,27 @@
 #if GPU_CHILD_MODULE(NVJPG)
     GPU_CHILD_MULTI_INST( OBJNVJPG,              GPU_GET_NVJPG,                       GPU_MAX_NVJPGS,   NV_FALSE,        pNvjpg           )
 #endif
+#if RMCFG_MODULE_KERNEL_FSP && GPU_CHILD_MODULE(KERNEL_FSP)
+    GPU_CHILD_SINGLE_INST( KernelFsp,            GPU_GET_KERNEL_FSP,                  1,                NV_TRUE,        pKernelFsp       )
+#endif
+#if RMCFG_MODULE_SPDM && GPU_CHILD_MODULE(SPDM)
+    GPU_CHILD_SINGLE_INST( Spdm,                 GPU_GET_SPDM,                        1,                NV_TRUE,         pSpdm            )
+#endif
+
+#if RMCFG_MODULE_CONF_COMPUTE && GPU_CHILD_MODULE(CONF_COMPUTE)
+    GPU_CHILD_SINGLE_INST( ConfidentialCompute,  GPU_GET_CONF_COMPUTE,                1,                NV_TRUE,         pConfCompute     )
+#endif
 #if GPU_CHILD_MODULE(GSP)
     GPU_CHILD_SINGLE_INST( Gsp,                  GPU_GET_GSP,                         1,                NV_FALSE,        pGsp             )
-#endif
-#if RMCFG_MODULE_KERNEL_FSP && GPU_CHILD_MODULE(KERNEL_FSP)
-    GPU_CHILD_SINGLE_INST( KernelFsp,            GPU_GET_KERNEL_FSP,                  1,                NV_FALSE,        pKernelFsp       )
 #endif
 #if GPU_CHILD_MODULE(OFA)
     GPU_CHILD_MULTI_INST( OBJOFA,                GPU_GET_OFA,                         GPU_MAX_OFAS,     NV_FALSE,        pOfa             )
 #endif
-#if RMCFG_MODULE_CONF_COMPUTE && GPU_CHILD_MODULE(CONF_COMPUTE)
-    GPU_CHILD_SINGLE_INST( ConfidentialCompute,  GPU_GET_CONF_COMPUTE,                1,                NV_TRUE,         pConfCompute      )
-#endif
 #if RMCFG_MODULE_KERNEL_CCU && GPU_CHILD_MODULE(KERNEL_CCU)
     GPU_CHILD_SINGLE_INST( KernelCcu,            GPU_GET_KERNEL_CCU,                  1,                NV_FALSE,        pKernelCcu        )
+#endif
+#if RMCFG_MODULE_KERNEL_GSPLITE && GPU_CHILD_MODULE(KERNEL_GSPLITE)
+    GPU_CHILD_MULTI_INST( KernelGsplite,         GPU_GET_KERNEL_GSPLITE,              GPU_MAX_GSPLITES, NV_FALSE,        pKernelGsplite    )
 #endif
 
 // Undefine the entry macros to simplify call sites

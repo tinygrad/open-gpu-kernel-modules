@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2006-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2006-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -156,11 +156,35 @@
  *   NV2080_CTRL_FB_INFO_INDEX_EFFECTIVE_BW
  *     This index is deprecated, and returns zero value.
  *   NV2080_CTRL_FB_INFO_INDEX_PARTITION_MASK
+ *   NV2080_CTRL_FB_INFO_INDEX_PARTITION_MASK_0
+ *   NV2080_CTRL_FB_INFO_INDEX_PARTITION_MASK_1
  *     This index is used to request the mask of currently active partitions.
- *     Each  active partition has an ID that's equivalent to the corresponding
+ *     Each active partition has an ID that's equivalent to the corresponding
  *     bit position in the mask.
  *     This an SMC aware attribute, thus necessary partition subscription is
  *     required if the device is partitioned.
+ *     This value is moving from 32bits to 64bits, so PARTITION_MASK
+ *     (though kept for backwards compatibility on older chips), on newer chips
+ *     will be replaced by:
+ *     PARTITION_MASK_0 for the lower 32bits
+ *     PARTITION_MASK_1 for the upper 32bits
+ *     Note that PARTITION_MASK and PARTITION_MASK_0 are handled the same, and
+ *     use the same enum value.
+ *   NV2080_CTRL_FB_INFO_INDEX_LTC_MASK
+ *   NV2080_CTRL_FB_INFO_INDEX_LTC_MASK_0
+ *   NV2080_CTRL_FB_INFO_INDEX_LTC_MASK_1
+ *     This index is used to request the mask of currently active LTCs.
+ *     Each active LTC has an ID that's equivalent to the corresponding
+ *     bit position in the mask.
+ *     This an SMC aware attribute, thus necessary partition subscription is
+ *     required if the device is partitioned.
+ *     This value is moving from 32bits to 64bits, so LTC_MASK
+ *     (though kept for backwards compatibility on older chips), on newer chips
+ *     will be replaced by:
+ *     LTC_MASK_0 for the lower 32bits
+ *     LTC_MASK_1 for the upper 32bits
+ *     Note that LTC_MASK and LTC_MASK_0 are handled the same, and
+ *     use the same enum value.
  *   NV2080_CTRL_FB_INFO_INDEX_VISTA_RESERVED_HEAP_SIZE
  *     This index is used to request the amount of total RAM in kilobytes
  *     reserved for internal RM allocations on Vista.  This will need to
@@ -332,9 +356,13 @@ typedef NVXXXX_CTRL_XXX_INFO NV2080_CTRL_FB_INFO;
 #define NV2080_CTRL_FB_INFO_INDEX_PROTECTED_MEM_SIZE_FREE_KB       (0x00000034U)
 #define NV2080_CTRL_FB_INFO_INDEX_ECC_STATUS_SIZE                  (0x00000035U)
 #define NV2080_CTRL_FB_INFO_INDEX_IS_ZERO_FB                       (0x00000036U)
-#define NV2080_CTRL_FB_INFO_MAX_LIST_SIZE                          (0x00000037U)
+#define NV2080_CTRL_FB_INFO_INDEX_PARTITION_MASK_0                 (NV2080_CTRL_FB_INFO_INDEX_PARTITION_MASK)
+#define NV2080_CTRL_FB_INFO_INDEX_PARTITION_MASK_1                 (0x00000037U)
+#define NV2080_CTRL_FB_INFO_INDEX_LTC_MASK_0                       (NV2080_CTRL_FB_INFO_INDEX_LTC_MASK)
+#define NV2080_CTRL_FB_INFO_INDEX_LTC_MASK_1                       (0x00000038U)
+#define NV2080_CTRL_FB_INFO_MAX_LIST_SIZE                          (0x00000039U)
 
-#define NV2080_CTRL_FB_INFO_INDEX_MAX                              (0x36U) /* finn: Evaluated from "(NV2080_CTRL_FB_INFO_MAX_LIST_SIZE - 1)" */
+#define NV2080_CTRL_FB_INFO_INDEX_MAX                              (0x38U) /* finn: Evaluated from "(NV2080_CTRL_FB_INFO_MAX_LIST_SIZE - 1)" */
 
 /* valid fb RAM type values */
 #define NV2080_CTRL_FB_INFO_RAM_TYPE_UNKNOWN                       (0x00000000U)
@@ -360,6 +388,8 @@ typedef NVXXXX_CTRL_XXX_INFO NV2080_CTRL_FB_INFO;
 #define NV2080_CTRL_FB_INFO_RAM_TYPE_GDDR6X                        (0x00000012U) /* GDDR6X Used on GA10x */
 #define NV2080_CTRL_FB_INFO_RAM_TYPE_LPDDR5                        (0x00000013U) /* LPDDR (Low Power SDDR) used on T23x and later.*/
 #define NV2080_CTRL_FB_INFO_RAM_TYPE_HBM3                          (0x00000014U) /* HBM3 (High Bandwidth Memory) v3 */
+
+#define NV2080_CTRL_FB_INFO_RAM_TYPE_GDDR7                         (0x00000015U) /* GDDR7 */
 
 
 
@@ -452,33 +482,6 @@ typedef struct NV2080_CTRL_FB_GET_BAR1_OFFSET_PARAMS {
     NV_DECLARE_ALIGNED(NvP64 cpuVirtAddress, 8);
     NV_DECLARE_ALIGNED(NvU64 gpuVirtAddress, 8);
 } NV2080_CTRL_FB_GET_BAR1_OFFSET_PARAMS;
-
-/*
- * Note: Returns Zeros if no System carveout address info
- *
- * NV2080_CTRL_CMD_FB_GET_CARVEOUT_ADDRESS_INFO
- *
- * This command returns FB carveout address space information
- *
- *   StartAddr
- *     Returns the system memory address of the start of carveout space.
- *   SpaceSize
- *     Returns the size of carveout space.
- *
- * Possible status values returned are:
- *   NV_OK
- *   NV_ERR_INVALID_PARAM_STRUCT
- *   NV_ERR_NOT_SUPPORTED
- */
-
-#define NV2080_CTRL_CMD_FB_GET_CARVEOUT_ADDRESS_INFO (0x2080130bU) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_FB_INTERFACE_ID << 8) | NV2080_CTRL_FB_GET_SYSTEM_CARVEOUT_ADDRESS_SPACE_INFO_MESSAGE_ID" */
-
-#define NV2080_CTRL_FB_GET_SYSTEM_CARVEOUT_ADDRESS_SPACE_INFO_MESSAGE_ID (0xBU)
-
-typedef struct NV2080_CTRL_FB_GET_SYSTEM_CARVEOUT_ADDRESS_SPACE_INFO {
-    NV_DECLARE_ALIGNED(NvU64 StartAddr, 8);
-    NV_DECLARE_ALIGNED(NvU64 SpaceSize, 8);
-} NV2080_CTRL_FB_GET_SYSTEM_CARVEOUT_ADDRESS_SPACE_INFO;
 
 /*
  * NV2080_CTRL_FB_CMD_GET_CALIBRATION_LOCK_FAILED
@@ -653,161 +656,6 @@ typedef struct NV2080_CTRL_FB_FLUSH_GPU_CACHE_PARAMS {
 #define NV2080_CTRL_FB_FLUSH_GPU_CACHE_FLAGS_FB_FLUSH_YES             (0x00000001U)
 
 /*
- * NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY (deprecated; use NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_V2 instead)
- *
- * These commands access the cache allocation policy on a specific
- * engine, if supported.
- *
- *   engine
- *     Specifies the target engine.  Possible values are defined in
- *     NV2080_ENGINE_TYPE.
- *   allocPolicy
- *     Specifies the read/write allocation policy of the cache on the specified
- *     engine. Possible values are defined in
- *     NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_READS and
- *     NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_WRITES.
- *
- */
-typedef struct NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_PARAMS {
-    NvU32 engine;
-    NvU32 allocPolicy;
-} NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_PARAMS;
-
-/* valid values for allocPolicy */
-#define NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_READS                0:0
-#define NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_READS_NO   (0x00000000U)
-#define NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_READS_YES  (0x00000001U)
-#define NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_WRITES               1:1
-#define NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_WRITES_NO  (0x00000000U)
-#define NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_WRITES_YES (0x00000001U)
-
-
-/*
- * NV2080_CTRL_CMD_FB_SET_GPU_CACHE_ALLOC_POLICY
- *
- * This command is deprecated.
- * Use NV2080_CTRL_CMD_FB_SET_GPU_CACHE_ALLOC_POLICY_V2 instead.
- *
- * This command sets the state of the cache allocation policy on a specific
- * engine, if supported.
- *
- * Possible status values returned are:
- *   NV_OK
- *   NV_ERR_NOT_SUPPORTED
- *   NV_ERR_INVALID_ARGUMENT
- */
-#define NV2080_CTRL_CMD_FB_SET_GPU_CACHE_ALLOC_POLICY    (0x2080130fU) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_FB_INTERFACE_ID << 8) | NV2080_CTRL_FB_SET_GPU_CACHE_ALLOC_POLICY_PARAMS_MESSAGE_ID" */
-
-#define NV2080_CTRL_FB_SET_GPU_CACHE_ALLOC_POLICY_PARAMS_MESSAGE_ID (0xFU)
-
-typedef NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_PARAMS NV2080_CTRL_FB_SET_GPU_CACHE_ALLOC_POLICY_PARAMS;
-
-/*
- * NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_V2_PARAM
- *
- * These commands access the cache allocation policy on a specific
- * client, if supported.
- *
- *   count
- *     Specifies the number of entries in entry.
- *   entry
- *     Specifies an array of allocation policy entries.
- *
- * NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_V2_ENTRY
- *
- *   clients
- *     Specifies the target client.  Possible values are defined in
- *     NV2080_CLIENT_TYPE_*.
- *   allocPolicy
- *     Specifies the read/write allocation policy of the cache on the specified
- *     engine. Possible values are defined in
- *     NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_V2_READS and
- *     NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_V2_WRITES.
- *
- * NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_V2_ENTRY_SIZE
- *
- *     Specifies the maximum number of allocation policy entries allowed
- */
-#define NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_V2_ENTRY_SIZE 11U
-
-typedef struct NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_V2_ENTRY {
-    NvU32 client;
-    NvU32 allocPolicy;
-} NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_V2_ENTRY;
-
-typedef struct NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_V2_PARAMS {
-    NvU32                                          count;
-    NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_V2_ENTRY entry[NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_V2_ENTRY_SIZE];
-} NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_V2_PARAMS;
-
-/* valid values for allocPolicy */
-#define NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_V2_READS             0:0
-#define NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_V2_READS_DISABLE    (0x00000000U)
-#define NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_V2_READS_ENABLE     (0x00000001U)
-#define NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_V2_READS_ALLOW       1:1
-#define NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_V2_READS_ALLOW_NO   (0x00000000U)
-#define NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_V2_READS_ALLOW_YES  (0x00000001U)
-#define NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_V2_WRITES            2:2
-#define NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_V2_WRITES_DISABLE   (0x00000000U)
-#define NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_V2_WRITES_ENABLE    (0x00000001U)
-#define NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_V2_WRITES_ALLOW      3:3
-#define NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_V2_WRITES_ALLOW_NO  (0x00000000U)
-#define NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_V2_WRITES_ALLOW_YES (0x00000001U)
-
-
-/*
- * NV2080_CTRL_CMD_FB_SET_GPU_CACHE_ALLOC_POLICY_V2
- *
- * This command sets the state of the cache allocation policy on a specific
- * engine, if supported.
- *
- * Possible status values returned are:
- *   NV_OK
- *   NV_ERR_NOT_SUPPORTED
- *   NV_ERR_INVALID_ARGUMENT
- */
-#define NV2080_CTRL_CMD_FB_SET_GPU_CACHE_ALLOC_POLICY_V2          (0x20801318U) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_FB_INTERFACE_ID << 8) | NV2080_CTRL_FB_SET_GPU_CACHE_ALLOC_POLICY_V2_PARAMS_MESSAGE_ID" */
-
-#define NV2080_CTRL_FB_SET_GPU_CACHE_ALLOC_POLICY_V2_PARAMS_MESSAGE_ID (0x18U)
-
-typedef NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_V2_PARAMS NV2080_CTRL_FB_SET_GPU_CACHE_ALLOC_POLICY_V2_PARAMS;
-
-/*
- * NV2080_CTRL_CMD_FB_GET_GPU_CACHE_ALLOC_POLICY (deprecated; use NV2080_CTRL_CMD_FB_GET_GPU_CACHE_ALLOC_POLICY_V2 instead)
- *
- * This command gets the state of the cache allocation policy on a specific
- * engine, if supported.
- *
- * Possible status values returned are:
- *   NV_OK
- *   NV_ERR_NOT_SUPPORTED
- *   NV_ERR_INVALID_ARGUMENT
- */
-#define NV2080_CTRL_CMD_FB_GET_GPU_CACHE_ALLOC_POLICY (0x20801312U) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_FB_INTERFACE_ID << 8) | NV2080_CTRL_FB_GET_GPU_CACHE_ALLOC_POLICY_PARAMS_MESSAGE_ID" */
-
-#define NV2080_CTRL_FB_GET_GPU_CACHE_ALLOC_POLICY_PARAMS_MESSAGE_ID (0x12U)
-
-typedef NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_PARAMS NV2080_CTRL_FB_GET_GPU_CACHE_ALLOC_POLICY_PARAMS;
-
-/*
- * NV2080_CTRL_CMD_FB_GET_GPU_CACHE_ALLOC_POLICY_V2
- *
- * This command gets the state of the cache allocation policy on a specific
- * engine, if supported.
- *
- * Possible status values returned are:
- *   NV_OK
- *   NV_ERR_NOT_SUPPORTED
- *   NV_ERR_INVALID_ARGUMENT
- */
-#define NV2080_CTRL_CMD_FB_GET_GPU_CACHE_ALLOC_POLICY_V2 (0x20801319U) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_FB_INTERFACE_ID << 8) | NV2080_CTRL_FB_GET_GPU_CACHE_ALLOC_POLICY_V2_PARAMS_MESSAGE_ID" */
-
-#define NV2080_CTRL_FB_GET_GPU_CACHE_ALLOC_POLICY_V2_PARAMS_MESSAGE_ID (0x19U)
-
-typedef NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_V2_PARAMS NV2080_CTRL_FB_GET_GPU_CACHE_ALLOC_POLICY_V2_PARAMS;
-
-
-/*
  * NV2080_CTRL_CMD_FB_IS_KIND
  *
  * This command is used to perform various operations like 'IS_KIND_VALID',
@@ -880,7 +728,7 @@ typedef NV2080_CTRL_FB_GPU_CACHE_ALLOC_POLICY_V2_PARAMS NV2080_CTRL_FB_GET_GPU_C
  *   NV_OK
  *   NV_ERR_INVALID_ARGUMENT
  */
-#define NV2080_CTRL_CMD_FB_IS_KIND (0x20801313U) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_FB_INTERFACE_ID << 8) | NV2080_CTRL_FB_IS_KIND_PARAMS_MESSAGE_ID" */
+#define NV2080_CTRL_CMD_FB_IS_KIND                                    (0x20801313U) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_FB_INTERFACE_ID << 8) | NV2080_CTRL_FB_IS_KIND_PARAMS_MESSAGE_ID" */
 
 #define NV2080_CTRL_FB_IS_KIND_PARAMS_MESSAGE_ID (0x13U)
 
@@ -958,65 +806,6 @@ typedef struct NV2080_CTRL_FB_GET_GPU_CACHE_INFO_PARAMS {
 #define NV2080_CTRL_FB_GET_GPU_CACHE_INFO_RCM_STATE_ZERO_CACHE    (0x00000003U)
 
 /*
- * NV2080_CTRL_FB_GPU_CACHE_PROMOTION_POLICY
- *
- * These commands access the cache promotion policy on a specific
- * engine, if supported by the hardware.
- *
- * Cache promotion refers to the GPU promoting a memory read to a larger
- * size to preemptively fill the cache so future reads to nearby memory
- * addresses will hit in the cache.
- *
- *   engine
- *     Specifies the target engine.  Possible values are defined in
- *     NV2080_ENGINE_TYPE.
- *   promotionPolicy
- *     Specifies the promotion policy of the cache on the specified
- *     engine. Possible values are defined by
- *     NV2080_CTRL_FB_GPU_CACHE_PROMOTION_POLICY_*.  These values are in terms
- *     of the hardware cache line size.
- *
- */
-typedef struct NV2080_CTRL_FB_GPU_CACHE_PROMOTION_POLICY_PARAMS {
-    NvU32 engine;
-    NvU32 promotionPolicy;
-} NV2080_CTRL_FB_GPU_CACHE_PROMOTION_POLICY_PARAMS;
-
-/* valid values for promotionPolicy */
-#define NV2080_CTRL_FB_GPU_CACHE_PROMOTION_POLICY_NONE    (0x00000000U)
-#define NV2080_CTRL_FB_GPU_CACHE_PROMOTION_POLICY_QUARTER (0x00000001U)
-#define NV2080_CTRL_FB_GPU_CACHE_PROMOTION_POLICY_HALF    (0x00000002U)
-#define NV2080_CTRL_FB_GPU_CACHE_PROMOTION_POLICY_FULL    (0x00000003U)
-
-
-/*
- * NV2080_CTRL_CMD_FB_SET_GPU_CACHE_PROMOTION_POLICY
- *
- * This command sets the cache promotion policy on a specific engine, if
- * supported by the hardware.
- *
- * Possible status values returned are:
- *   NV_OK
- *   NV_ERR_NOT_SUPPORTED
- *   NV_ERR_INVALID_ARGUMENT
- */
-#define NV2080_CTRL_CMD_FB_SET_GPU_CACHE_PROMOTION_POLICY (0x20801316U) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_FB_INTERFACE_ID << 8) | 0x16" */ // Deprecated, removed form RM
-
-
-/*
- * NV2080_CTRL_CMD_FB_GET_GPU_CACHE_PROMOTION_POLICY
- *
- * This command gets the cache promotion policy on a specific engine, if
- * supported by the hardware.
- *
- * Possible status values returned are:
- *   NV_OK
- *   NV_ERR_NOT_SUPPORTED
- *   NV_ERR_INVALID_ARGUMENT
- */
-#define NV2080_CTRL_CMD_FB_GET_GPU_CACHE_PROMOTION_POLICY (0x20801317U) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_FB_INTERFACE_ID << 8) | 0x17" */ // Deprecated, removed form RM
-
-/*
  * NV2080_CTRL_FB_CMD_GET_FB_REGION_INFO
  *
  * This command returns the FB memory region characteristics.
@@ -1058,9 +847,9 @@ typedef struct NV2080_CTRL_FB_GPU_CACHE_PROMOTION_POLICY_PARAMS {
  *     NV_OK
  *     NV_ERR_NOT_SUPPORTED
  */
-#define NV2080_CTRL_CMD_FB_GET_FB_REGION_INFO             (0x20801320U) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_FB_INTERFACE_ID << 8) | NV2080_CTRL_CMD_FB_GET_FB_REGION_INFO_PARAMS_MESSAGE_ID" */
+#define NV2080_CTRL_CMD_FB_GET_FB_REGION_INFO                     (0x20801320U) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_FB_INTERFACE_ID << 8) | NV2080_CTRL_CMD_FB_GET_FB_REGION_INFO_PARAMS_MESSAGE_ID" */
 
-#define NV2080_CTRL_CMD_FB_GET_FB_REGION_INFO_MEM_TYPES   17U
+#define NV2080_CTRL_CMD_FB_GET_FB_REGION_INFO_MEM_TYPES           17U
 
 typedef NvBool NV2080_CTRL_CMD_FB_GET_FB_REGION_SURFACE_MEM_TYPE_FLAG[NV2080_CTRL_CMD_FB_GET_FB_REGION_INFO_MEM_TYPES];
 
@@ -2022,9 +1811,8 @@ typedef struct NV2080_CTRL_FB_PATCH_PBR_FOR_MINING_PARAMS {
  *
  * Get memory alignment. Replacement for NVOS32_FUNCTION_GET_MEM_ALIGNMENT
  */
-#define NV2080_CTRL_CMD_FB_GET_MEM_ALIGNMENT       (0x20801342U) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_FB_INTERFACE_ID << 8) | NV2080_CTRL_FB_GET_MEM_ALIGNMENT_PARAMS_MESSAGE_ID" */
+#define NV2080_CTRL_CMD_FB_GET_MEM_ALIGNMENT (0x20801342U) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_FB_INTERFACE_ID << 8) | NV2080_CTRL_FB_GET_MEM_ALIGNMENT_PARAMS_MESSAGE_ID" */
 
-#define NV2080_CTRL_FB_GET_MEM_ALIGNMENT_MAX_BANKS (4U)
 #define NV2080_CTRL_FB_GET_MEM_ALIGNMENT_PARAMS_MESSAGE_ID (0x42U)
 
 typedef struct NV2080_CTRL_FB_GET_MEM_ALIGNMENT_PARAMS {
@@ -2038,8 +1826,6 @@ typedef struct NV2080_CTRL_FB_GET_MEM_ALIGNMENT_PARAMS {
     NvU32 alignPitch;
     NvU32 alignPad;
     NvU32 alignMask;
-    NvU32 alignOutputFlags[NV2080_CTRL_FB_GET_MEM_ALIGNMENT_MAX_BANKS];
-    NvU32 alignBank[NV2080_CTRL_FB_GET_MEM_ALIGNMENT_MAX_BANKS];
     NvU32 alignKind;
     NvU32 alignAdjust;                                // Output -- If non-zero the amount we need to adjust the offset
     NvU32 alignAttr2;
@@ -2151,7 +1937,7 @@ typedef struct NV2080_CTRL_FB_FS_INFO_INVALID_QUERY_PARAMS {
  */
 typedef struct NV2080_CTRL_FB_FS_INFO_FBP_MASK_PARAMS {
     /*!
-     * [IN]: swizzId
+     * [in]: swizzId
      * PartitionID associated with a created smc partition. Currently used only for a
      * device monitoring client to get the physical values of the FB. The client needs to pass
      * 'NV2080_CTRL_GPU_PARTITION_ID_INVALID' explicitly if it wants RM to ignore the swizzId.
@@ -2160,7 +1946,7 @@ typedef struct NV2080_CTRL_FB_FS_INFO_FBP_MASK_PARAMS {
      */
     NvU32 swizzId;
     /*!
-     * [OUT]: physical/local fbp mask.
+     * [out]: physical/local fbp mask.
      */
     NV_DECLARE_ALIGNED(NvU64 fbpEnMask, 8);
 } NV2080_CTRL_FB_FS_INFO_FBP_MASK_PARAMS;
@@ -2170,11 +1956,11 @@ typedef struct NV2080_CTRL_FB_FS_INFO_FBP_MASK_PARAMS {
  */
 typedef struct NV2080_CTRL_FB_FS_INFO_LTC_MASK_PARAMS {
     /*!
-     * [IN]: physical/local FB partition index.
+     * [in]: physical/local FB partition index.
      */
     NvU32 fbpIndex;
     /*!
-     * [OUT]: physical/local ltc mask.
+     * [out]: physical/local ltc mask.
      */
     NvU32 ltcEnMask;
 } NV2080_CTRL_FB_FS_INFO_LTC_MASK_PARAMS;
@@ -2184,11 +1970,11 @@ typedef struct NV2080_CTRL_FB_FS_INFO_LTC_MASK_PARAMS {
  */
 typedef struct NV2080_CTRL_FB_FS_INFO_LTS_MASK_PARAMS {
     /*!
-     * [IN]: physical/local FB partition index.
+     * [in]: physical/local FB partition index.
      */
     NvU32 fbpIndex;
     /*!
-     * [OUT]: physical/local lts mask.
+     * [out]: physical/local lts mask.
      * Note that lts bits are flattened out for all ltc with in a fbp.
      */
     NvU32 ltsEnMask;
@@ -2199,11 +1985,11 @@ typedef struct NV2080_CTRL_FB_FS_INFO_LTS_MASK_PARAMS {
  */
 typedef struct NV2080_CTRL_FB_FS_INFO_FBPA_MASK_PARAMS {
     /*!
-     * [IN]: physical/local FB partition index.
+     * [in]: physical/local FB partition index.
      */
     NvU32 fbpIndex;
     /*!
-     * [OUT]: physical/local FBPA mask.
+     * [out]: physical/local FBPA mask.
      */
     NvU32 fbpaEnMask;
 } NV2080_CTRL_FB_FS_INFO_FBPA_MASK_PARAMS;
@@ -2213,11 +1999,11 @@ typedef struct NV2080_CTRL_FB_FS_INFO_FBPA_MASK_PARAMS {
  */
 typedef struct NV2080_CTRL_FB_FS_INFO_FBPA_SUBP_MASK_PARAMS {
     /*!
-     * [IN]: physical/local FB partition index.
+     * [in]: physical/local FB partition index.
      */
     NvU32 fbpIndex;
     /*!
-     * [OUT]: physical/local FBPA-SubPartition mask.
+     * [out]: physical/local FBPA-SubPartition mask.
      */
     NvU32 fbpaSubpEnMask;
 } NV2080_CTRL_FB_FS_INFO_FBPA_SUBP_MASK_PARAMS;
@@ -2227,11 +2013,11 @@ typedef struct NV2080_CTRL_FB_FS_INFO_FBPA_SUBP_MASK_PARAMS {
  */
 typedef struct NV2080_CTRL_FB_FS_INFO_FBP_LOGICAL_MAP_PARAMS {
     /*!
-     * [IN]: physical/local FB partition index.
+     * [in]: physical/local FB partition index.
      */
     NvU32 fbpIndex;
     /*!
-     * [OUT]: Logical/local FBP index
+     * [out]: Logical/local FBP index
      */
     NvU32 fbpLogicalIndex;
 } NV2080_CTRL_FB_FS_INFO_FBP_LOGICAL_MAP_PARAMS;
@@ -2241,30 +2027,48 @@ typedef struct NV2080_CTRL_FB_FS_INFO_FBP_LOGICAL_MAP_PARAMS {
  */
 typedef struct NV2080_CTRL_FB_FS_INFO_ROP_MASK_PARAMS {
     /*!
-     * [IN]: physical/local FB partition index.
+     * [in]: physical/local FB partition index.
      */
     NvU32 fbpIndex;
     /*!
-     * [OUT]: physical/local ROP mask.
+     * [out]: physical/local ROP mask.
      */
     NvU32 ropEnMask;
 } NV2080_CTRL_FB_FS_INFO_ROP_MASK_PARAMS;
+
+/*!
+ * Structure holding the in/out params for NV2080_CTRL_FB_FS_INFO_SYS_MASK.
+ */
+typedef struct NV2080_CTRL_FB_FS_INFO_SYS_MASK_PARAMS {
+    /*!
+     * [in]: swizzId
+     * PartitionID associated with a created smc partition. Currently used only for a
+     * device monitoring client to get the physical values of the sys. The client needs to pass
+     * 'NV2080_CTRL_GPU_PARTITION_ID_INVALID' explicitly if it wants RM to ignore the swizzId.
+     * RM will consider this request similar to a legacy case.
+     */
+    NvU32 swizzId;
+    /*!
+     * [out]: physical/local sys mask.
+     */
+    NV_DECLARE_ALIGNED(NvU64 sysEnMask, 8);
+} NV2080_CTRL_FB_FS_INFO_SYS_MASK_PARAMS;
 
 /*!
  * Structure holding the in/out params for NV2080_CTRL_FB_FS_INFO_PROFILER_MON_LTC_MASK.
  */
 typedef struct NV2080_CTRL_FB_FS_INFO_PROFILER_MON_LTC_MASK_PARAMS {
     /*!
-     * [IN]: Physical FB partition index.
+     * [in]: Physical FB partition index.
      */
     NvU32 fbpIndex;
     /*!
-     * [IN]: swizzId
+     * [in]: swizzId
      * PartitionID associated with a created smc partition.
      */
     NvU32 swizzId;
     /*!
-     * [OUT]: physical ltc mask.
+     * [out]: physical ltc mask.
      */
     NvU32 ltcEnMask;
 } NV2080_CTRL_FB_FS_INFO_PROFILER_MON_LTC_MASK_PARAMS;
@@ -2274,16 +2078,16 @@ typedef struct NV2080_CTRL_FB_FS_INFO_PROFILER_MON_LTC_MASK_PARAMS {
  */
 typedef struct NV2080_CTRL_FB_FS_INFO_PROFILER_MON_LTS_MASK_PARAMS {
     /*!
-     * [IN]: Physical FB partition index.
+     * [in]: Physical FB partition index.
      */
     NvU32 fbpIndex;
     /*!
-     * [IN]: swizzId
+     * [in]: swizzId
      * PartitionID associated with a created smc partition.
      */
     NvU32 swizzId;
     /*!
-     * [OUT]: physical lts mask.
+     * [out]: physical lts mask.
      */
     NvU32 ltsEnMask;
 } NV2080_CTRL_FB_FS_INFO_PROFILER_MON_LTS_MASK_PARAMS;
@@ -2293,16 +2097,16 @@ typedef struct NV2080_CTRL_FB_FS_INFO_PROFILER_MON_LTS_MASK_PARAMS {
  */
 typedef struct NV2080_CTRL_FB_FS_INFO_PROFILER_MON_FBPA_MASK_PARAMS {
     /*!
-     * [IN]: Physical FB partition index.
+     * [in]: Physical FB partition index.
      */
     NvU32 fbpIndex;
     /*!
-     * [IN]: swizzId
+     * [in]: swizzId
      * PartitionID associated with a created smc partition.
      */
     NvU32 swizzId;
     /*!
-     * [OUT]: physical fbpa mask.
+     * [out]: physical fbpa mask.
      */
     NvU32 fbpaEnMask;
 } NV2080_CTRL_FB_FS_INFO_PROFILER_MON_FBPA_MASK_PARAMS;
@@ -2312,16 +2116,16 @@ typedef struct NV2080_CTRL_FB_FS_INFO_PROFILER_MON_FBPA_MASK_PARAMS {
  */
 typedef struct NV2080_CTRL_FB_FS_INFO_PROFILER_MON_ROP_MASK_PARAMS {
     /*!
-     * [IN]: Physical FB partition index.
+     * [in]: Physical FB partition index.
      */
     NvU32 fbpIndex;
     /*!
-     * [IN]: swizzId
+     * [in]: swizzId
      * PartitionID associated with a created smc partition.
      */
     NvU32 swizzId;
     /*!
-     * [OUT]: physical rop mask.
+     * [out]: physical rop mask.
      */
     NvU32 ropEnMask;
 } NV2080_CTRL_FB_FS_INFO_PROFILER_MON_ROP_MASK_PARAMS;
@@ -2331,11 +2135,11 @@ typedef struct NV2080_CTRL_FB_FS_INFO_PROFILER_MON_ROP_MASK_PARAMS {
  */
 typedef struct NV2080_CTRL_FB_FS_INFO_PROFILER_MON_FBPA_SUBP_MASK_PARAMS {
     /*!
-     * [IN]: Physical FB partition index.
+     * [in]: Physical FB partition index.
      */
     NvU32 fbpIndex;
     /*!
-     * [IN]: swizzId
+     * [in]: swizzId
      * PartitionID associated with a created smc partition. Currently used only for a
      * device monitoring client to get the physical values of the FB. The client needs to pass
      * 'NV2080_CTRL_GPU_PARTITION_ID_INVALID' explicitly if it wants RM to ignore the swizzId.
@@ -2344,7 +2148,7 @@ typedef struct NV2080_CTRL_FB_FS_INFO_PROFILER_MON_FBPA_SUBP_MASK_PARAMS {
      */
     NvU32 swizzId;
     /*!
-     * [OUT]: physical FBPA_SubPartition mask associated with requested partition.
+     * [out]: physical FBPA_SubPartition mask associated with requested partition.
      */
     NV_DECLARE_ALIGNED(NvU64 fbpaSubpEnMask, 8);
 } NV2080_CTRL_FB_FS_INFO_PROFILER_MON_FBPA_SUBP_MASK_PARAMS;
@@ -2354,45 +2158,97 @@ typedef struct NV2080_CTRL_FB_FS_INFO_PROFILER_MON_FBPA_SUBP_MASK_PARAMS {
  */
 typedef struct NV2080_CTRL_SYSL2_FS_INFO_SYSLTC_MASK_PARAMS {
     /*!
-     * [IN]: physical/local sys Id.
+     * [in]: physical/local sys Id.
      */
     NvU32 sysIdx;
     /*!
-     * [OUT]: physical/local sysltc mask.
+     * [out]: physical/local sysltc mask.
      */
     NvU32 sysl2LtcEnMask;
 } NV2080_CTRL_SYSL2_FS_INFO_SYSLTC_MASK_PARAMS;
+
+/*!
+ * Structure holding the in/out params for NV2080_CTRL_SYSL2_FS_INFO_SYSLTS_MASK.
+ */
+typedef struct NV2080_CTRL_SYSL2_FS_INFO_SYSLTS_MASK_PARAMS {
+   /*!
+    * [IN]: physical/local SYS index.
+    */
+    NvU32 sysIdx;
+   /*!
+    * [OUT]: physical/local lts mask.
+    * Note: this lts mask should be flattened out within a sys chiplet
+    */
+    NV_DECLARE_ALIGNED(NvU64 sysl2LtsEnMask, 8);
+} NV2080_CTRL_SYSL2_FS_INFO_SYSLTS_MASK_PARAMS;
 
 /*!
  * Structure holding the in/out params for NV2080_CTRL_FB_FS_INFO_PAC_MASK.
  */
 typedef struct NV2080_CTRL_FB_FS_INFO_PAC_MASK_PARAMS {
     /*!
-     * [IN]: physical/local FB partition index.
+     * [in]: physical/local FB partition index.
      */
     NvU32 fbpIndex;
     /*!
-     * [OUT]: physical/local PAC mask.
+     * [out]: physical/local PAC mask.
      */
     NvU32 pacEnMask;
 } NV2080_CTRL_FB_FS_INFO_PAC_MASK_PARAMS;
 
+/*!
+ * Structure holding the in/out params for NV2080_CTRL_FB_FS_INFO_LOGICAL_LTC_MASK.
+ */
+typedef struct NV2080_CTRL_FB_FS_INFO_LOGICAL_LTC_MASK_PARAMS {
+    /*!
+     * [in]: physical/local FB partition index.
+     */
+    NvU32 fbpIndex;
+    /*!
+     * [out]: logical/local ltc mask.
+     */
+    NV_DECLARE_ALIGNED(NvU64 logicalLtcEnMask, 8);
+} NV2080_CTRL_FB_FS_INFO_LOGICAL_LTC_MASK_PARAMS;
+
+/*!
+ * Structure holding the in/out params for NV2080_CTRL_FB_FS_INFO_PROFILER_MON_LOGICAL_LTC_MASK.
+ */
+typedef struct NV2080_CTRL_FB_FS_INFO_PROFILER_MON_LOGICAL_LTC_MASK_PARAMS {
+    /*!
+     * [in]: Physical FB partition index.
+     */
+    NvU32 fbpIndex;
+    /*!
+     * [in]: swizzId
+     * PartitionID associated with a created smc partition.
+     */
+    NvU32 swizzId;
+    /*!
+     * [out]: logical ltc mask.
+     */
+    NV_DECLARE_ALIGNED(NvU64 logicalLtcEnMask, 8);
+} NV2080_CTRL_FB_FS_INFO_PROFILER_MON_LOGICAL_LTC_MASK_PARAMS;
+
 // Possible values for queryType
-#define NV2080_CTRL_FB_FS_INFO_INVALID_QUERY               0x0U
-#define NV2080_CTRL_FB_FS_INFO_FBP_MASK                    0x1U
-#define NV2080_CTRL_FB_FS_INFO_LTC_MASK                    0x2U
-#define NV2080_CTRL_FB_FS_INFO_LTS_MASK                    0x3U
-#define NV2080_CTRL_FB_FS_INFO_FBPA_MASK                   0x4U
-#define NV2080_CTRL_FB_FS_INFO_ROP_MASK                    0x5U
-#define NV2080_CTRL_FB_FS_INFO_PROFILER_MON_LTC_MASK       0x6U
-#define NV2080_CTRL_FB_FS_INFO_PROFILER_MON_LTS_MASK       0x7U
-#define NV2080_CTRL_FB_FS_INFO_PROFILER_MON_FBPA_MASK      0x8U
-#define NV2080_CTRL_FB_FS_INFO_PROFILER_MON_ROP_MASK       0x9U
-#define NV2080_CTRL_FB_FS_INFO_FBPA_SUBP_MASK              0xAU
-#define NV2080_CTRL_FB_FS_INFO_PROFILER_MON_FBPA_SUBP_MASK 0xBU
-#define NV2080_CTRL_FB_FS_INFO_FBP_LOGICAL_MAP             0xCU
-#define NV2080_CTRL_SYSL2_FS_INFO_SYSLTC_MASK              0xDU
-#define NV2080_CTRL_FB_FS_INFO_PAC_MASK                    0xEU
+#define NV2080_CTRL_FB_FS_INFO_INVALID_QUERY                 0x0U
+#define NV2080_CTRL_FB_FS_INFO_FBP_MASK                      0x1U
+#define NV2080_CTRL_FB_FS_INFO_LTC_MASK                      0x2U
+#define NV2080_CTRL_FB_FS_INFO_LTS_MASK                      0x3U
+#define NV2080_CTRL_FB_FS_INFO_FBPA_MASK                     0x4U
+#define NV2080_CTRL_FB_FS_INFO_ROP_MASK                      0x5U
+#define NV2080_CTRL_FB_FS_INFO_PROFILER_MON_LTC_MASK         0x6U
+#define NV2080_CTRL_FB_FS_INFO_PROFILER_MON_LTS_MASK         0x7U
+#define NV2080_CTRL_FB_FS_INFO_PROFILER_MON_FBPA_MASK        0x8U
+#define NV2080_CTRL_FB_FS_INFO_PROFILER_MON_ROP_MASK         0x9U
+#define NV2080_CTRL_FB_FS_INFO_FBPA_SUBP_MASK                0xAU
+#define NV2080_CTRL_FB_FS_INFO_PROFILER_MON_FBPA_SUBP_MASK   0xBU
+#define NV2080_CTRL_FB_FS_INFO_FBP_LOGICAL_MAP               0xCU
+#define NV2080_CTRL_SYSL2_FS_INFO_SYSLTC_MASK                0xDU
+#define NV2080_CTRL_FB_FS_INFO_PAC_MASK                      0xEU
+#define NV2080_CTRL_FB_FS_INFO_LOGICAL_LTC_MASK              0xFU
+#define NV2080_CTRL_FB_FS_INFO_PROFILER_MON_LOGICAL_LTC_MASK 0x10U
+#define NV2080_CTRL_SYSL2_FS_INFO_SYSLTS_MASK                0x11U
+#define NV2080_CTRL_FB_FS_INFO_SYS_MASK                      0x12U
 
 typedef struct NV2080_CTRL_FB_FS_INFO_QUERY {
     NvU16 queryType;
@@ -2414,6 +2270,10 @@ typedef struct NV2080_CTRL_FB_FS_INFO_QUERY {
         NV2080_CTRL_FB_FS_INFO_FBP_LOGICAL_MAP_PARAMS        fbpLogicalMap;
         NV2080_CTRL_SYSL2_FS_INFO_SYSLTC_MASK_PARAMS         sysl2Ltc;
         NV2080_CTRL_FB_FS_INFO_PAC_MASK_PARAMS               pac;
+        NV_DECLARE_ALIGNED(NV2080_CTRL_FB_FS_INFO_LOGICAL_LTC_MASK_PARAMS logicalLtc, 8);
+        NV_DECLARE_ALIGNED(NV2080_CTRL_FB_FS_INFO_PROFILER_MON_LOGICAL_LTC_MASK_PARAMS dmLogicalLtc, 8);
+        NV_DECLARE_ALIGNED(NV2080_CTRL_SYSL2_FS_INFO_SYSLTS_MASK_PARAMS sysl2Lts, 8);
+        NV_DECLARE_ALIGNED(NV2080_CTRL_FB_FS_INFO_SYS_MASK_PARAMS sys, 8);
     } queryParams;
 } NV2080_CTRL_FB_FS_INFO_QUERY;
 
@@ -2761,6 +2621,30 @@ typedef struct NV2080_CTRL_CMD_FB_STATS_ENTRY {
     NV_DECLARE_ALIGNED(NvU64 freeSize, 8);
 } NV2080_CTRL_CMD_FB_STATS_ENTRY;
 
+/*
+ * NV2080_CTRL_CMD_GMMU_COMMIT_TLB_INVALIDATE
+ *
+ * This control command is used by clients to commit TLB invalidates
+ *
+ * gfid[OUT]
+ *     - Specifices GPU function ID.
+ *
+ * invalidateAll[OUT]
+ *     - Specifies whether to invalidate all using boolean
+ *
+ * @returns Possible status values returned are:
+ *   NV_OK
+ *   NV_ERR_NOT_SUPPORTED
+ *
+ */
+#define NV2080_CTRL_CMD_GMMU_COMMIT_TLB_INVALIDATE (0x20801353U) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_FB_INTERFACE_ID << 8) | NV2080_CTRL_GMMU_COMMIT_TLB_INVALIDATE_PARAMS_MESSAGE_ID" */
+#define NV2080_CTRL_GMMU_COMMIT_TLB_INVALIDATE_PARAMS_MESSAGE_ID (0x53U)
+
+typedef struct NV2080_CTRL_GMMU_COMMIT_TLB_INVALIDATE_PARAMS {
+    NvU32  gfid;
+    NvBool invalidateAll;
+} NV2080_CTRL_GMMU_COMMIT_TLB_INVALIDATE_PARAMS;
+
 typedef struct NV2080_CTRL_CMD_FB_STATS_OWNER_INFO {
     //! Total allocated size for this owner
     NV_DECLARE_ALIGNED(NvU64 allocSize, 8);
@@ -2794,5 +2678,170 @@ typedef struct NV2080_CTRL_CMD_FB_STATS_GET_PARAMS {
     //! Level 2 owner info table
     NV_DECLARE_ALIGNED(NV2080_CTRL_CMD_FB_STATS_OWNER_INFO fbBlockInfo[NV2080_CTRL_CMD_FB_STATS_MAX_OWNER], 8);
 } NV2080_CTRL_CMD_FB_STATS_GET_PARAMS;
+
+/*
+ * NV2080_CTRL_CMD_FB_GET_STATIC_BAR1_INFO
+ *
+ * This command returns the GPU static BAR1 Info
+ * This is for general P2P DMA. NV50_P2P is for GPU P2P.
+ *
+ * @params [OUT] NvBool bStaticBar1Enabled:
+ *      This field indicates the static BAR1 mode is enabled. All the following fields are valid
+ *      only if static BAR1 mode is enabled.
+  * @params [OUT] NvU64 staticBar1StartOffset:
+ *      Static BAR1 may start at nonzero BAR1 address.
+ *      This field indicates the start offset of the static BAR1.
+ * @params [OUT] NvU64 staticBar1Size:
+ *      This field indicates the size of the static BAR1.
+ *
+ * Possible status values returned are
+ *   NV_OK
+ *   NV_ERR_INVALID_PARAM_STRUCT
+ *   NV_ERR_NOT_SUPPORTED
+ *   NV_ERR_INVALID_ARGUMENT
+ */
+#define NV2080_CTRL_CMD_FB_GET_STATIC_BAR1_INFO (0x20801354U) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_FB_INTERFACE_ID << 8) | NV2080_CTRL_FB_GET_STATIC_BAR1_INFO_PARAMS_MESSAGE_ID" */
+
+#define NV2080_CTRL_FB_GET_STATIC_BAR1_INFO_PARAMS_MESSAGE_ID (0x54U)
+
+typedef struct NV2080_CTRL_FB_GET_STATIC_BAR1_INFO_PARAMS {
+    NvBool bStaticBar1Enabled;
+    NV_DECLARE_ALIGNED(NvU64 staticBar1StartOffset, 8);
+    NV_DECLARE_ALIGNED(NvU64 staticBar1Size, 8);
+} NV2080_CTRL_FB_GET_STATIC_BAR1_INFO_PARAMS;
+
+/*
+ * NV2080_CTRL_CMD_FB_QUERY_DRAM_ENCRYPTION_PENDING_CONFIGURATION
+ *
+ * This command returns the current DRAM encryption configuration
+ * setting for a GPU given its subdevice handle.  The value returned
+ * is the current DRAM encryption setting for the GPU stored in non-volatile
+ * memory on the board.
+ *
+ *   currentConfiguration
+ *      The current DRAM encryption configuration setting.
+ *
+ * Possible status return values are:
+ *   NV_OK
+ *   NV_ERR_NOT_SUPPORTED
+ *   NV_ERR_INVALID_STATE
+ */
+#define NV2080_CTRL_CMD_FB_QUERY_DRAM_ENCRYPTION_PENDING_CONFIGURATION      (0x20801355U) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_FB_INTERFACE_ID << 8) | NV2080_CTRL_FB_QUERY_DRAM_ENCRYPTION_PENDING_CONFIGURATION_PARAMS_MESSAGE_ID" */
+
+#define NV2080_CTRL_FB_QUERY_DRAM_ENCRYPTION_PENDING_CONFIGURATION_DISABLED (0x00000000U)
+#define NV2080_CTRL_FB_QUERY_DRAM_ENCRYPTION_PENDING_CONFIGURATION_ENABLED  (0x00000001U)
+
+#define NV2080_CTRL_FB_QUERY_DRAM_ENCRYPTION_PENDING_CONFIGURATION_PARAMS_MESSAGE_ID (0x55U)
+
+typedef struct NV2080_CTRL_FB_QUERY_DRAM_ENCRYPTION_PENDING_CONFIGURATION_PARAMS {
+    NvU32 currentConfiguration;
+} NV2080_CTRL_FB_QUERY_DRAM_ENCRYPTION_PENDING_CONFIGURATION_PARAMS;
+
+/*
+ * NV2080_CTRL_CMD_FB_SET_DRAM_ENCRYPTION_CONFIGURATION
+ *
+ * This command changes the DRAM encryption configuration setting for
+ * a GPU given its subdevice handle.  The value specified is stored
+ * in non-volatile memory on the board and will take effect with the
+ * next GPU reset.
+ *
+ *   newConfiguration
+ *     The new configuration setting to take effect with
+ *     the next GPU reset.
+ *
+ * Possible status return values are:
+ *   NV_OK
+ *   NV_ERR_INVALID_ARGUMENT
+ *   NV_ERR_NOT_SUPPORTED
+ */
+#define NV2080_CTRL_CMD_FB_SET_DRAM_ENCRYPTION_CONFIGURATION     (0x20801356U) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_FB_INTERFACE_ID << 8) | NV2080_CTRL_FB_SET_DRAM_ENCRYPTION_CONFIGURATION_PARAMS_MESSAGE_ID" */
+
+#define NV2080_CTRL_FB_SET_DRAM_ENCRYPTION_CONFIGURATION_DISABLE (0x00000000U)
+#define NV2080_CTRL_FB_SET_DRAM_ENCRYPTION_CONFIGURATION_ENABLE  (0x00000001U)
+
+#define NV2080_CTRL_FB_SET_DRAM_ENCRYPTION_CONFIGURATION_PARAMS_MESSAGE_ID (0x56U)
+
+typedef struct NV2080_CTRL_FB_SET_DRAM_ENCRYPTION_CONFIGURATION_PARAMS {
+    NvU32 newConfiguration;
+} NV2080_CTRL_FB_SET_DRAM_ENCRYPTION_CONFIGURATION_PARAMS;
+
+/*
+ * NV2080_CTRL_CMD_FB_QUERY_DRAM_ENCRYPTION_INFOROM_SUPPORT
+ *
+ * This command returns whether or not DRAM encryption config object is supported via the InfoROM.
+ *
+ *  isSupported [OUT]
+ *     This parameter returns whether the DRAM Encryption inforom object is present in the inforom.
+ *     The various values of isSupported is:
+ *         1. NV2080_CTRL_CMD_FB_QUERY_DRAM_ENCRYPTION_INFOROM_SUPPORT_DISABLED
+ *         2. NV2080_CTRL_CMD_FB_QUERY_DRAM_ENCRYPTION_INFOROM_SUPPORT_ENABLED
+ *
+ * Possible status return values are:
+ *   NV_OK
+ *   NV_ERR_NOT_SUPPORTED
+ */
+#define NV2080_CTRL_CMD_FB_QUERY_DRAM_ENCRYPTION_INFOROM_SUPPORT          (0x20801357U) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_FB_INTERFACE_ID << 8) | NV2080_CTRL_FB_DRAM_ENCRYPTION_INFOROM_SUPPORT_PARAMS_MESSAGE_ID" */
+
+#define NV2080_CTRL_CMD_FB_QUERY_DRAM_ENCRYPTION_INFOROM_SUPPORT_DISABLED (0x00000000U)
+#define NV2080_CTRL_CMD_FB_QUERY_DRAM_ENCRYPTION_INFOROM_SUPPORT_ENABLED  (0x00000001U)
+
+#define NV2080_CTRL_FB_DRAM_ENCRYPTION_INFOROM_SUPPORT_PARAMS_MESSAGE_ID (0x57U)
+
+typedef struct NV2080_CTRL_FB_DRAM_ENCRYPTION_INFOROM_SUPPORT_PARAMS {
+    NvU32 isSupported;
+} NV2080_CTRL_FB_DRAM_ENCRYPTION_INFOROM_SUPPORT_PARAMS;
+
+/*
+ * NV2080_CTRL_CMD_FB_QUERY_DRAM_ENCRYPTION_STATUS
+ *
+ * This command returns the current DRAM encryption status.
+ *
+ *   currentStatus
+ *      The current DRAM encryption status.
+ *
+ * Possible status return values are:
+ *   NV_OK
+ *   NV_ERR_NOT_SUPPORTED
+ *   NV_ERR_INVALID_STATE
+ */
+#define NV2080_CTRL_CMD_FB_QUERY_DRAM_ENCRYPTION_STATUS          (0x20801358U) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_FB_INTERFACE_ID << 8) | NV2080_CTRL_FB_QUERY_DRAM_ENCRYPTION_STATUS_PARAMS_MESSAGE_ID" */
+
+#define NV2080_CTRL_CMD_FB_QUERY_DRAM_ENCRYPTION_STATUS_DISABLED (0x00000000U)
+#define NV2080_CTRL_CMD_FB_QUERY_DRAM_ENCRYPTION_STATUS_ENABLED  (0x00000001U)
+
+#define NV2080_CTRL_FB_QUERY_DRAM_ENCRYPTION_STATUS_PARAMS_MESSAGE_ID (0x58U)
+
+typedef struct NV2080_CTRL_FB_QUERY_DRAM_ENCRYPTION_STATUS_PARAMS {
+    NvU32 currentStatus;
+} NV2080_CTRL_FB_QUERY_DRAM_ENCRYPTION_STATUS_PARAMS;
+
+/*
+ * NV2080_CTRL_CMD_FB_GET_MEMORY_BOOT_TRAINING_FLAGS
+ *
+ * This command returns the memory boot training flags from VBIOS table.
+ *
+ *  flagCollectSchmooData
+ *  flagWrTrHybridVrefEn
+ *  flagWrTrHybridNonVrefEn
+ *  flagRdTrHybridVrefEn
+ *  flagRdTrHybridNonVrefEn
+ *  skipBootTraining
+ *
+ * Possible status return values are:
+ *   NV_OK
+ *   NV_ERR_NOT_SUPPORTED
+ */
+#define NV2080_CTRL_CMD_FB_GET_MEMORY_BOOT_TRAINING_FLAGS (0x20801359U) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_FB_INTERFACE_ID << 8) | NV2080_CTRL_FB_GET_MEMORY_BOOT_TRAINING_FLAGS_PARAMS_MESSAGE_ID" */
+
+#define NV2080_CTRL_FB_GET_MEMORY_BOOT_TRAINING_FLAGS_PARAMS_MESSAGE_ID (0x59U)
+
+typedef struct NV2080_CTRL_FB_GET_MEMORY_BOOT_TRAINING_FLAGS_PARAMS {
+    NvBool flagCollectSchmooData;
+    NvBool flagWrTrHybridVrefEn;
+    NvBool flagWrTrHybridNonVrefEn;
+    NvBool flagRdTrHybridVrefEn;
+    NvBool flagRdTrHybridNonVrefEn;
+    NvBool skipBootTraining;
+} NV2080_CTRL_FB_GET_MEMORY_BOOT_TRAINING_FLAGS_PARAMS;
 
 /* _ctrl2080fb_h_ */

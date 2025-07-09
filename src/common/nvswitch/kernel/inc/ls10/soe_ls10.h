@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2020-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2020-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -50,5 +50,9 @@ void      nvswitch_heartbeat_soe_callback_ls10(nvswitch_device *device, RM_FLCN_
 NvlStatus nvswitch_soe_set_nport_interrupts_ls10(nvswitch_device *device, NvU32 nport, NvBool bEnable);
 void      nvswitch_soe_disable_nport_fatal_interrupts_ls10(nvswitch_device *device, NvU32 nport,
                                                         NvU32 nportIntrEnable, NvU8 nportIntrType);
-
+NvlStatus nvswitch_soe_issue_ingress_stop_ls10(nvswitch_device *device, NvU32 nport, NvBool bStop);
+NvlStatus nvswitch_soe_update_intr_report_en_ls10(nvswitch_device *device, RM_SOE_CORE_ENGINE_ID eng_id, NvU32 eng_instance, RM_SOE_CORE_ENGINE_REPORT_EN_REGISTER reg, NvU32 data);
+NvlStatus nvswitch_soe_clear_engine_interrupt_counter_ls10(nvswitch_device *device, RM_SOE_CORE_ENGINE_ID eng_id, RM_SOE_CORE_ENGINE_INTR_COUNTER_TYPE engineIntrType, NvU32 instance);
+NvlStatus nvswitch_soe_reg_wr_32_ls10(nvswitch_device *device, NvU32 offset, NvU32 data);
+NvlStatus nvswitch_soe_eng_wr_32_ls10(nvswitch_device *device, NVSWITCH_ENGINE_ID  eng_id, NvU32 eng_bcast, NvU32 eng_instance, NvU32 base_addr, NvU32 offset, NvU32 data);
 #endif //_SOE_LS10_H_

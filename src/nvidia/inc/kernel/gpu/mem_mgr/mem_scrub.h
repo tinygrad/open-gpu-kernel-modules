@@ -55,6 +55,8 @@ struct OBJCHANNEL;
 #define SCRUB_MAX_BYTES_PER_LINE                  0xffffffffULL
 #define MAX_SCRUB_ITEMS                           4096 // 4K scrub items
 
+#define SCRUBBER_SUBMIT_FLAGS_LOCALIZED_SCRUB NVBIT(0)
+
 // structure to store the details of a scrubbing work
 typedef struct SCRUB_NODE {
     // The 64 bit ID assigned to each work
@@ -94,12 +96,12 @@ typedef struct OBJMEMSCRUB {
     Sec2Utils                         *pSec2Utils;
 #endif //  !defined(SRT_BUILD)
     // Engine used for scrubbing 
-    NvU32                              engineType;
+    NvBool                             bIsEngineTypeSec2;
 
     struct OBJGPU                     *pGpu;
     VGPU_GUEST_PMA_SCRUB_BUFFER_RING   vgpuScrubBuffRing;
     NvBool                             bVgpuScrubberEnabled;
-} OBJMEMSCRUB, *POBJMEMSCRUB;
+} OBJMEMSCRUB;
 
 ct_assert(VGPU_GUEST_PMA_MAX_SCRUB_ITEMS == MAX_SCRUB_ITEMS);
 
@@ -161,7 +163,7 @@ NV_STATUS scrubCheck(OBJMEMSCRUB *pScrubber, PSCRUB_NODE *ppList, NvU64 *size);
  */
 
 NV_STATUS scrubSubmitPages(OBJMEMSCRUB *pScrubber, NvU64 chunkSize, NvU64* pages,
-                           NvU64 pageCount, PSCRUB_NODE *ppList, NvU64 *size);
+                           NvU64 pageCount, PSCRUB_NODE *ppList, NvU64 *size, NvU32 flags);
 
 /**
  *  This function waits for the memory scrubber to wait for the scrubbing of

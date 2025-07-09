@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -159,17 +159,16 @@ serverInterMap_Prologue
     if (((offset + length) < offset) ||
         ((offset + length) > pSrcMemDesc->Size))
     {
-        NV_PRINTF(LEVEL_ERROR,
+        NV_PRINTF(LEVEL_NOTICE,
                   "Mapping offset 0x%llX or length 0x%llX out of bounds!\n",
                   offset, length);
-        DBG_BREAKPOINT();
         return NV_ERR_INVALID_LIMIT;
     }
 
     if (memdescGetFlag(memdescGetMemDescFromGpu(pSrcMemDesc, pGpu), MEMDESC_FLAGS_DEVICE_READ_ONLY) &&
         !FLD_TEST_DRF(OS46, _FLAGS, _ACCESS, _READ_ONLY, pParams->flags))
     {
-        NV_PRINTF(LEVEL_ERROR, "Attempting to map READ_ONLY surface as READ_WRITE / WRITE_ONLY!\n");
+        NV_PRINTF(LEVEL_NOTICE, "Attempting to map READ_ONLY surface as READ_WRITE / WRITE_ONLY!\n");
         return NV_ERR_INVALID_ARGUMENT;
     }
 
@@ -381,6 +380,17 @@ rmapiMapWithSecInfo
     lockInfo.flags |= RM_LOCK_FLAGS_GPU_GROUP_LOCK |
                       RM_LOCK_FLAGS_NO_GPUS_LOCK;
 
+    //
+    // In the RTD3 case, the API lock isn't taken since it can be initiated
+    // from another thread that holds the API lock and because we now hold
+    // the GPU lock.
+    //
+    if (rmapiInRtd3PmPath())
+    {
+        lockInfo.flags |= RM_LOCK_FLAGS_NO_API_LOCK;
+        lockInfo.state &= ~RM_LOCK_STATES_API_LOCK_ACQUIRED;
+    }
+
     LOCK_METER_DATA(MAPMEM_DMA, flags, 0, 0);
 
 
@@ -413,7 +423,7 @@ rmapiMapWithSecInfo
     }
     else
     {
-        NV_PRINTF(LEVEL_ERROR, "Nv04Map: map failed; status: %s (0x%08x)\n",
+        NV_PRINTF(LEVEL_INFO, "Nv04Map: map failed; status: %s (0x%08x)\n",
                   nvstatusToString(status), status);
     }
 
@@ -518,7 +528,7 @@ rmapiUnmapWithSecInfo
     }
     else
     {
-        NV_PRINTF(LEVEL_ERROR,
+        NV_PRINTF(LEVEL_INFO,
                   "Nv04Unmap: ummap failed; status: %s (0x%08x)\n",
                   nvstatusToString(status), status);
     }

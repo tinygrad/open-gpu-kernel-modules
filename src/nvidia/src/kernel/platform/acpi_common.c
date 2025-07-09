@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2000-2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2000-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -34,11 +34,15 @@
 #include "gps.h"
 #include "nvop.h"
 #include "nvhybridacpi.h"
+#include "nvmisc.h"
 #include "jt.h"
 #include "pex.h"
 #include "mxm_spec.h"
 #include "gpu/gsp/gsp_static_config.h"
 #include "platform/nbsi/nbsi_read.h"
+#include "nvrm_registry.h"
+
+#include "gpu/disp/kern_disp.h"
 
 //
 // DSM ACPI Routines common routines for Linux
@@ -475,7 +479,7 @@ remapDsmFunctionAndSubFunction
 
     // Loop through (in precendence order) to find the GUID/subfunction until we find one that supports the call.
     testDSMfuncIndex = 0;
-    while(testDSMfuncIndex < sizeof(dsmOrderOfPrecedenceList)/sizeof(dsmOrderOfPrecedenceList[0]))
+    while(testDSMfuncIndex < NV_ARRAY_ELEMENTS(dsmOrderOfPrecedenceList))
     {
         // remap the generic subfunction number of the one that matches this function.
         if ((_getRemappedDsmSubfunction(dsmOrderOfPrecedenceList[testDSMfuncIndex], *pRemappedDsmSubFunction, &remappedDSMSubFunction)) == NV_OK)
@@ -554,7 +558,7 @@ getDsmGetObjectSubfunction
             if (remapDsmFunctionAndSubFunction(pGpu, &curFuncForGetAllObjects, &dummySubFunc) == NV_OK)
             {
                 testDSMfuncIndex = 0;
-                while(testDSMfuncIndex < sizeof(dsmOrderOfPrecedenceList)/sizeof(dsmOrderOfPrecedenceList[0]))
+                while(testDSMfuncIndex < NV_ARRAY_ELEMENTS(dsmOrderOfPrecedenceList))
                 {
                     if (dsmOrderOfPrecedenceList[testDSMfuncIndex] == curFuncForGetObjByType)
                     {
@@ -704,6 +708,17 @@ checkDsmCall
     NV_ASSERT_OR_RETURN(pAcpiDsmSubFunction, NV_ERR_INVALID_ARGUMENT);
     NV_ASSERT_OR_RETURN(pInOut, NV_ERR_INVALID_ARGUMENT);
     NV_ASSERT_OR_RETURN(pSize, NV_ERR_INVALID_ARGUMENT);
+
+    KernelDisplay *pKernelDisplay = GPU_GET_KERNEL_DISPLAY(pGpu);
+
+    if (pKernelDisplay != NULL
+        && pKernelDisplay->getProperty(pKernelDisplay, PDB_PROP_KDISP_INTERNAL_PANEL_DISCONNECTED))
+    {
+        if (*pAcpiDsmFunction == ACPI_DSM_FUNCTION_NBCI)
+        {
+            return NV_ERR_NOT_SUPPORTED;
+        } 
+    }
 
     // Do any remapping of subfunction if function is current
     if (remapDsmFunctionAndSubFunction(pGpu, pAcpiDsmFunction, pAcpiDsmSubFunction) != NV_OK)
@@ -888,7 +903,7 @@ _acpiDsmCallbackInit
 
     // Loop through the list of GUIDs that support callbacks in priority order
     for (testDSMfuncIndex = 0;
-         testDSMfuncIndex < (sizeof(callbackOrderOfPrecedenceList)/sizeof(callbackOrderOfPrecedenceList[0]));
+         testDSMfuncIndex < (NV_ARRAY_ELEMENTS(callbackOrderOfPrecedenceList));
          testDSMfuncIndex++)
     {
         func = callbackOrderOfPrecedenceList[testDSMfuncIndex];

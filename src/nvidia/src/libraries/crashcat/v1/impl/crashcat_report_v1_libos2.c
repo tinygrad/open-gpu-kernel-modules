@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -27,6 +27,8 @@
 #include "libos_v2_crashcat.h"
 #include "utils/nvprintf.h"
 #include "nv-crashcat-decoder.h"
+
+#include "g_all_dcl_pb.h"
 
 static inline const char *crashcatReportModeToString_LIBOS2(NV_CRASHCAT_RISCV_MODE mode)
 {
@@ -120,7 +122,7 @@ void crashcatReportLogReporter_V1_LIBOS2(CrashCatReport *pReport)
     //
     if (taskId == NV_CRASHCAT_REPORT_V1_REPORTER_ID_LIBOS2_TASK_ID_UNSPECIFIED)
     {
-        CRASHCAT_REPORT_LOG_PACKET_TYPE(pReport, "Reported by libos kernel v%u.%u [%u] @ %u",
+        CRASHCAT_REPORT_LOG_PACKET_TYPE(pReport, "Reported by libos kernel v%u.%u [%u] @ %u\n",
             crashcatReportV1ReporterVersionLibos2Major(pReportV1),
             crashcatReportV1ReporterVersionLibos2Minor(pReportV1),
             crashcatReportV1ReporterVersionLibos2Cl(pReportV1),
@@ -128,10 +130,19 @@ void crashcatReportLogReporter_V1_LIBOS2(CrashCatReport *pReport)
     }
     else
     {
-        CRASHCAT_REPORT_LOG_PACKET_TYPE(pReport, "Reported by libos task:%u v%u.%u [%u] @ ts:%u",
+        CRASHCAT_REPORT_LOG_PACKET_TYPE(pReport, "Reported by libos task:%u v%u.%u [%u] @ ts:%u\n",
             taskId, crashcatReportV1ReporterVersionLibos2Major(pReportV1),
             crashcatReportV1ReporterVersionLibos2Minor(pReportV1),
             crashcatReportV1ReporterVersionLibos2Cl(pReportV1),
             crashcatReportV1ReporterTimestamp(pReportV1));
     }
+}
+
+void crashcatReportLogVersionProtobuf_V1_LIBOS2(CrashCatReport *pReport, PRB_ENCODER *pCrashcatProtobufData)
+{
+    NvCrashCatReport_V1 *pReportV1 = &pReport->v1.report;
+
+    prbEncAddUInt32(pCrashcatProtobufData, CRASHCAT_REPORT_LIBOSVERSIONMAJOR, crashcatReportV1ReporterVersionLibos2Major(pReportV1));
+    prbEncAddUInt32(pCrashcatProtobufData, CRASHCAT_REPORT_LIBOSVERSIONMINOR, crashcatReportV1ReporterVersionLibos2Minor(pReportV1));
+    prbEncAddUInt32(pCrashcatProtobufData, CRASHCAT_REPORT_LIBOSVERSIONCL, crashcatReportV1ReporterVersionLibos2Cl(pReportV1));
 }

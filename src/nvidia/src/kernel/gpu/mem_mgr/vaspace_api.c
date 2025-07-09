@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2012-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2012-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -83,6 +83,15 @@ vaspaceapiConstruct_IMPL
     NvU64                             originalVaSize;
     NvU32                             gfid                  = 0;
 
+    if (rmGpuLockIsOwner() && rmapiInRtd3PmPath())
+    {
+        //
+        // RTD3 exit codepath may only take the GPU lock, hence it becomes
+        // necessary to release the GPU lock here.
+        //
+        rmGpuLocksRelease(GPUS_LOCK_FLAGS_NONE, NULL);
+    }
+
     if (RS_IS_COPY_CTOR(pParams))
     {
         NV_ASSERT_OK_OR_RETURN(rmGpuGroupLockAcquire(pGpu->gpuInstance,
@@ -99,7 +108,7 @@ vaspaceapiConstruct_IMPL
     }
 
     if (gpuIsSriovEnabled(pGpu))
-	    NV_ASSERT_OK_OR_RETURN(vgpuGetCallingContextGfid(pGpu, &gfid));
+        NV_ASSERT_OK_OR_RETURN(vgpuGetCallingContextGfid(pGpu, &gfid));
 
     pNvVASpaceAllocParams = pParams->pAllocParams;
     allocFlags            = pNvVASpaceAllocParams->flags;
@@ -123,7 +132,7 @@ vaspaceapiConstruct_IMPL
     if (rmDeviceGpuLockIsOwner(pGpu->gpuInstance))
     {
         NV_PRINTF(LEVEL_ERROR, "VASpace alloc should be called without acquiring GPU lock\n");
-        LOCK_ASSERT_AND_RETURN(0);
+        NV_ASSERT_OR_RETURN(0, NV_ERR_INVALID_LOCK_STATE);
     }
 
     if (pNvVASpaceAllocParams->index == NV_VASPACE_ALLOCATION_INDEX_GPU_HOST)
@@ -133,6 +142,16 @@ vaspaceapiConstruct_IMPL
     else
     {
         gpuMask = gpumgrGetGpuMask(pGpu);
+    }
+
+    if ((pMemoryManager != NULL) &&
+        memmgrIsPmaInitialized(pMemoryManager) &&
+        memmgrAreClientPageTablesPmaManaged(pMemoryManager) &&
+        !(allocFlags & NV_VASPACE_ALLOCATION_FLAGS_IS_EXTERNALLY_OWNED) &&
+        !(allocFlags & NV_VASPACE_ALLOCATION_FLAGS_IS_FLA) &&
+        !(allocFlags & NV_VASPACE_ALLOCATION_FLAGS_PTETABLE_HEAP_MANAGED))
+    {
+        flags |= VASPACE_FLAGS_PTETABLE_PMA_MANAGED;
     }
 
     status = _vaspaceapiManagePageLevelsForSplitVaSpace(pGpu, pDevice, gpuMask, flags, VASPACEAPI_MANAGE_PAGE_LEVELS_RESERVE);
@@ -310,16 +329,6 @@ vaspaceapiConstruct_IMPL
             }
         }
 
-        if ((pMemoryManager != NULL) &&
-            memmgrIsPmaInitialized(pMemoryManager) &&
-            memmgrAreClientPageTablesPmaManaged(pMemoryManager) &&
-            !(allocFlags & NV_VASPACE_ALLOCATION_FLAGS_IS_EXTERNALLY_OWNED) &&
-            !(allocFlags & NV_VASPACE_ALLOCATION_FLAGS_IS_FLA) &&
-            !(allocFlags & NV_VASPACE_ALLOCATION_FLAGS_PTETABLE_HEAP_MANAGED))
-        {
-            flags |= VASPACE_FLAGS_PTETABLE_PMA_MANAGED;
-        }
-
         // Get flags for the requested big page size
         flags |= translatePageSizeToVASpaceFlags(pNvVASpaceAllocParams);
 
@@ -365,7 +374,7 @@ vaspaceapiConstruct_IMPL
             NV_PRINTF(LEVEL_ERROR,
                       "Could not construct VA space. Status %x\n", status);
             pVAS = NULL;
-            NV_ASSERT_OR_GOTO(0, done);
+            goto done;
         }
     }
 
@@ -451,11 +460,6 @@ vaspaceapiCopyConstruct_IMPL
 
     vaspaceIncRefCnt(pVAS);
     pVaspaceApi->pVASpace = pVAS;
-    //
-    // Mark the VAS to be duped, so that we can free it when FLA Memory is freed
-    // This is hacked for now, to make sure the duped VAS is freed with the duped VA
-    //
-    pVaspaceApi->bDuped = NV_TRUE;
 
     return status;
 
@@ -531,7 +535,7 @@ skip_destroy:
     if ((IS_VIRTUAL(pGpu) || IS_GSP_CLIENT(pGpu)) && !bBar1VA && !bFlaVA)
     {
         NV_RM_RPC_FREE(pGpu, hClient, hParent, hVASpace, status);
-        NV_ASSERT(NV_OK == status);
+        NV_ASSERT((status == NV_OK) || (status == NV_ERR_GPU_IN_FULLCHIP_RESET));
     }
 
     NV_PRINTF(LEVEL_INFO,
@@ -704,7 +708,7 @@ _vaspaceapiManagePageLevelsForSplitVaSpace
     if ((!IS_VIRTUAL_WITH_SRIOV(pGpu) && !IS_GSP_CLIENT(pGpu)) ||
         !RMCFG_FEATURE_PMA ||
         !memmgrIsPmaInitialized(pMemoryManager) ||
-        !memmgrAreClientPageTablesPmaManaged(pMemoryManager) ||
+        !(flags & VASPACE_FLAGS_PTETABLE_PMA_MANAGED) ||
         !!(flags & VASPACE_FLAGS_DISABLE_SPLIT_VAS))
     {
         return NV_OK;

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -40,6 +40,7 @@
 #include "mem_mgr/mem.h"
 #include "kernel/gpu/gpu_engine_type.h"
 #include "platform/sli/sli.h"
+#include "gpu/timer/objtmr.h"
 
 #include "kernel/gpu/mig_mgr/kernel_mig_manager.h"
 
@@ -50,7 +51,16 @@ typedef struct
     EVENTNOTIFICATION *pEventNotify;
     Memory *pMemory;
     ListNode eventNotificationListNode;
+
+    // Protected by event list spinlock
     ListNode pendingEventNotifyListNode;
+    NvBool bInPendingNotifyList;
+
+    //
+    // Incremented under event list spinlock when a notification is pending for
+    // this event, decremented for each notification sent (not under spinlock).
+    //
+    volatile NvS32 pendingNotifyCount;
 } ENGINE_EVENT_NOTIFICATION;
 
 //
@@ -74,10 +84,10 @@ struct GpuEngineEventNotificationList
     PendingEventNotifyList pendingEventNotifyList;
 
     //
-    // Set to non-zero under pSpinlock, set to zero outside of the lock in ISR
-    // Insertions/removals on eventNotificationList are blocked while non-zero
+    // Accessed under pSpinlock, incremented when a thread starts the notify
+    // Decremented when the thread finishes notification
     //
-    volatile NvU32 pendingEventNotifyCount;
+    volatile NvU32 activeNotifyThreads;
 };
 
 static NV_STATUS _insertEventNotification
@@ -132,7 +142,7 @@ NV_STATUS gpuEngineEventNotificationListCreate
     listInitIntrusive(&pEventNotificationList->eventNotificationList);
     listInitIntrusive(&pEventNotificationList->pendingEventNotifyList);
 
-    portAtomicSetU32(&pEventNotificationList->pendingEventNotifyCount, 0);
+    pEventNotificationList->activeNotifyThreads = 0;
 
     *ppEventNotificationList = pEventNotificationList;
 
@@ -151,7 +161,7 @@ void gpuEngineEventNotificationListDestroy
     if (pEventNotificationList == NULL)
         return;
 
-    NV_ASSERT(pEventNotificationList->pendingEventNotifyCount == 0);
+    NV_ASSERT(pEventNotificationList->activeNotifyThreads == 0);
 
     NV_ASSERT(listCount(&pEventNotificationList->pendingEventNotifyList) == 0);
     listDestroy(&pEventNotificationList->pendingEventNotifyList);
@@ -181,7 +191,7 @@ static void _gpuEngineEventNotificationListLockPreemptible
         // preemption, to guarantee that _gpuEngineEventNotificationListNotify()
         // can make forward progress to drain the pending notifications list.
         //
-        if (pEventNotificationList->pendingEventNotifyCount == 0)
+        if (pEventNotificationList->activeNotifyThreads == 0)
             return;
 
         portSyncSpinlockRelease(pEventNotificationList->pSpinlock);
@@ -191,7 +201,7 @@ static void _gpuEngineEventNotificationListLockPreemptible
         // This can only be done in a preemptible context (i.e., add
         // or remove notification in a thread context).
         //
-        while (pEventNotificationList->pendingEventNotifyCount > 0)
+        while (pEventNotificationList->activeNotifyThreads > 0)
             osSpinLoop();
     } while (NV_TRUE);
 }
@@ -276,6 +286,7 @@ static NV_STATUS _gpuEngineEventNotificationListNotify
     NV_STATUS status = NV_OK;
     PendingEventNotifyList *pPending =
         &pEventNotificationList->pendingEventNotifyList;
+    ENGINE_EVENT_NOTIFICATION *pIter, *pTail;
 
     //
     // Acquire engine list spinlock before traversing the list. Note that this
@@ -284,12 +295,7 @@ static NV_STATUS _gpuEngineEventNotificationListNotify
     //
     portSyncSpinlockAcquire(pEventNotificationList->pSpinlock);
     {
-        // We don't expect this to be called multiple times in parallel
-        NV_ASSERT_OR_ELSE(pEventNotificationList->pendingEventNotifyCount == 0,
-        {
-            portSyncSpinlockRelease(pEventNotificationList->pSpinlock);
-            return NV_ERR_INVALID_STATE;
-        });
+        pEventNotificationList->activeNotifyThreads++;
 
         EngineEventNotificationListIter it =
             listIterAll(&pEventNotificationList->eventNotificationList);
@@ -347,43 +353,97 @@ static NV_STATUS _gpuEngineEventNotificationListNotify
                 }
             }
 
+            portAtomicIncrementS32(&pEngineEventNotification->pendingNotifyCount);
+
             //
             // Queue up this event notification to be completed outside of the
             // critical section, as the osNotifyEvent implementation may need
             // to be preemptible.
             //
-            listAppendExisting(pPending, pEngineEventNotification);
+            if (!pEngineEventNotification->bInPendingNotifyList)
+            {
+                pEngineEventNotification->bInPendingNotifyList = NV_TRUE;
+                listAppendExisting(pPending, pEngineEventNotification);
+            }
         }
 
-        portAtomicSetU32(&pEventNotificationList->pendingEventNotifyCount,
-                         listCount(pPending));
+        //
+        // We can't use the list iterator, because listIterNext() will assert
+        // if a node is appended to the list after the iterator has been
+        // initialized. For the loop below, it's safe to iterate over the list,
+        // (up to the point of the last node appended above), since nodes can't
+        // be removed from the list while the list's `activeNotifyThreads` is
+        // non-zero.
+        //
+        pIter = listHead(pPending);
+        pTail = listTail(pPending);
     }
     portSyncSpinlockRelease(pEventNotificationList->pSpinlock);
 
     //
     // Iterate through the pending notifications and call the OS to send them.
-    // Note that osNotifyEvent may need to be preemptible, so this is done
-    // outside of the spinlock-protected critical section.
+    // pIter and pTail are initialized to the list head and tail respectively,
+    // under the spinlock above.
     //
-    PendingEventNotifyListIter it = listIterAll(pPending);
-    while (listIterNext(&it))
+    while (pIter != NULL)
     {
-        NV_ASSERT_OK_OR_CAPTURE_FIRST_ERROR(status,
-            osNotifyEvent(pGpu, it.pValue->pEventNotify, 0, 0, NV_OK));
+        //
+        // Don't miss firing events - latch the pending count.
+        // This can race with the `portAtomicIncrementS32()` above.
+        //  - If the increment wins, then the next thread to call the
+        //    portAtomicCompareAndSwap32 with the incremented value will send
+        //    all of the notifications. Example: thread A is preempted by ISR
+        //    here, ISR will run through and send all notifications. Thread A
+        //    will get pendingNotifyCount = 0 when it resumes and skip this
+        //    element.
+        //  - If this loop wins, thread A will proceed to send N notifications,
+        //    and thread B will increment the pendingNotifyCount from 0 to 1.
+        //    Thread B will service its own notification when it reaches this
+        //    loop.
+        //
+        NvS32 pendingNotifyCount;
+        do
+            pendingNotifyCount = pIter->pendingNotifyCount;
+        while ((pendingNotifyCount > 0) &&
+                !portAtomicCompareAndSwapS32(&pIter->pendingNotifyCount, 0, pendingNotifyCount));
+
+        while (pendingNotifyCount--)
+            NV_ASSERT_OK_OR_CAPTURE_FIRST_ERROR(status,
+                osNotifyEvent(pGpu, pIter->pEventNotify, 0, 0, NV_OK));
+
+        if (pIter == pTail)
+            break;
+
+        pIter = listNext(pPending, pIter);
     }
 
-    // Remove all entries from the pending event notify list
-    ENGINE_EVENT_NOTIFICATION *pIter, *pNext;
-    for (pIter = listHead(pPending); pIter != NULL; pIter = pNext)
+    portSyncSpinlockAcquire(pEventNotificationList->pSpinlock);
     {
-        pNext = listNext(pPending, pIter);
-        listRemove(pPending, pIter);
+        //
+        // The last active notify thread drains the pending notify list.
+        // Otherwise, we could be removing list nodes while it's being
+        // iterated over by another thread above, outside of the protection of
+        // the spinlock.
+        //
+        if (--pEventNotificationList->activeNotifyThreads == 0)
+        {
+            ENGINE_EVENT_NOTIFICATION *pNext;
+            for (pIter = listHead(pPending); pIter != NULL; pIter = pNext)
+            {
+                pNext = listNext(pPending, pIter);
+
+                //
+                // There should not be any unsent notifications at this point,
+                // since we are the last active thread.
+                //
+                NV_ASSERT(pIter->pendingNotifyCount == 0);
+
+                pIter->bInPendingNotifyList = NV_FALSE;
+                listRemove(pPending, pIter);
+            }
+        }
     }
-
-    NV_ASSERT(listCount(pPending) == 0);
-
-    // Mark the event notifications as drained so preemptible code can continue
-    portAtomicSetU32(&pEventNotificationList->pendingEventNotifyCount, 0);
+    portSyncSpinlockRelease(pEventNotificationList->pSpinlock);
 
     return status;
 }
@@ -452,6 +512,36 @@ eventGetEngineTypeFromSubNotifyIndex
         case NV2080_NOTIFIERS_CE9:
             *pRmEngineId = RM_ENGINE_TYPE_COPY9;
             break;
+        case NV2080_NOTIFIERS_CE10:
+            *pRmEngineId = RM_ENGINE_TYPE_COPY10;
+            break;
+        case NV2080_NOTIFIERS_CE11:
+            *pRmEngineId = RM_ENGINE_TYPE_COPY11;
+            break;
+        case NV2080_NOTIFIERS_CE12:
+            *pRmEngineId = RM_ENGINE_TYPE_COPY12;
+            break;
+        case NV2080_NOTIFIERS_CE13:
+            *pRmEngineId = RM_ENGINE_TYPE_COPY13;
+            break;
+        case NV2080_NOTIFIERS_CE14:
+            *pRmEngineId = RM_ENGINE_TYPE_COPY14;
+            break;
+        case NV2080_NOTIFIERS_CE15:
+            *pRmEngineId = RM_ENGINE_TYPE_COPY15;
+            break;
+        case NV2080_NOTIFIERS_CE16:
+            *pRmEngineId = RM_ENGINE_TYPE_COPY16;
+            break;
+        case NV2080_NOTIFIERS_CE17:
+            *pRmEngineId = RM_ENGINE_TYPE_COPY17;
+            break;
+        case NV2080_NOTIFIERS_CE18:
+            *pRmEngineId = RM_ENGINE_TYPE_COPY18;
+            break;
+        case NV2080_NOTIFIERS_CE19:
+            *pRmEngineId = RM_ENGINE_TYPE_COPY19;
+            break;
         case NV2080_NOTIFIERS_GR0:
             *pRmEngineId = RM_ENGINE_TYPE_GR0;
             break;
@@ -517,6 +607,10 @@ eventGetEngineTypeFromSubNotifyIndex
         case NV2080_NOTIFIERS_NVENC2:
             *pRmEngineId = RM_ENGINE_TYPE_NVENC2;
             break;
+// Bug 4175886 - Use this new value for all chips once GB20X is released
+        case NV2080_NOTIFIERS_NVENC3:
+            *pRmEngineId = RM_ENGINE_TYPE_NVENC3;
+            break;
         case NV2080_NOTIFIERS_SEC2:
             *pRmEngineId = RM_ENGINE_TYPE_SEC2;
             break;
@@ -546,6 +640,9 @@ eventGetEngineTypeFromSubNotifyIndex
             break;
         case NV2080_NOTIFIERS_OFA0:
             *pRmEngineId = RM_ENGINE_TYPE_OFA0;
+            break;
+        case NV2080_NOTIFIERS_OFA1:
+            *pRmEngineId = RM_ENGINE_TYPE_OFA1;
             break;
         default:
             NV_PRINTF(LEVEL_WARNING,
@@ -743,6 +840,10 @@ static NV_STATUS _insertEventNotification
     EventNotify->NotifyTriggerCount = 0;
     EventNotify->bUserOsEventHandle = bUserOsEventHandle;
 
+    // These fields are set by NV0004_CTRL_CMD_TMR_SET_ALARM_NOTIFY for graceful TMR_EVENT teardown
+    EventNotify->pGpu = NULL;
+    EventNotify->pTmrEvent = NULL;
+
     //
     // Now insert the event into the event chain of this object.
     // Order doesn't really matter.
@@ -904,6 +1005,15 @@ static NV_STATUS _removeEventNotification
     // delete the event if it was found
     if (found)
     {
+        if (nextEvent->pTmrEvent != NULL)
+        {
+            NV_ASSERT_OR_RETURN((nextEvent->pGpu != NULL), NV_ERR_INVALID_STATE);
+
+            tmrEventDestroy(GPU_GET_TIMER(nextEvent->pGpu), nextEvent->pTmrEvent);
+            nextEvent->pGpu = NULL;
+            nextEvent->pTmrEvent = NULL;
+        }
+
         if (nextEvent->bUserOsEventHandle)
             osDereferenceObjectCount(NvP64_VALUE(nextEvent->Data));
 

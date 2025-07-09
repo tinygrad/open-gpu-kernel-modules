@@ -1,5 +1,5 @@
 /*******************************************************************************
-    Copyright (c) 2016-2023 NVIDIA Corporation
+    Copyright (c) 2016-2024 NVIDIA Corporation
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"), to
@@ -115,14 +115,10 @@ static NV_STATUS verify_mapping_info(uvm_va_space_t *va_space,
 
     TEST_CHECK_RET(skip);
 
-    memory_owning_gpu = uvm_va_space_get_gpu_by_uuid(va_space, &memory_info->uuid);
-    if (memory_owning_gpu == NULL)
+    memory_owning_gpu = uvm_va_space_get_gpu_by_mem_info(va_space, memory_info);
+    if (!memory_owning_gpu)
         return NV_ERR_INVALID_DEVICE;
 
-    // TODO: Bug 1903234: Once RM supports indirect peer mappings, we'll need to
-    //       update this test since the aperture will be SYS. Depending on how
-    //       RM implements things, we might not be able to compare the physical
-    //       addresses either.
     aperture = get_aperture(va_space, memory_owning_gpu, memory_mapping_gpu, memory_info, sli_supported);
 
     if (is_cacheable(ext_mapping_info, aperture))
@@ -133,7 +129,8 @@ static NV_STATUS verify_mapping_info(uvm_va_space_t *va_space,
     phys_offset = mapping_offset;
 
     // Add the physical offset for nvswitch connected peer mappings
-    if (uvm_aperture_is_peer(aperture) && uvm_gpus_are_nvswitch_connected(memory_mapping_gpu, memory_owning_gpu))
+    if (uvm_aperture_is_peer(aperture) &&
+        uvm_parent_gpus_are_nvswitch_connected(memory_mapping_gpu->parent, memory_owning_gpu->parent))
         phys_offset += memory_owning_gpu->parent->nvswitch_info.fabric_memory_window_start;
 
     for (index = 0; index < ext_mapping_info->numWrittenPtes; index++) {

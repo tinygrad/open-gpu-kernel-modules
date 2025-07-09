@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2015-2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2015-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -21,6 +21,7 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+#pragma once
 #include "g_rs_client_nvoc.h"
 
 #ifndef _RS_CLIENT_H_
@@ -222,6 +223,14 @@ public:
     virtual NV_STATUS clientValidate(RsClient *pClient, const API_SECURITY_INFO * pSecInfo);
 
     /**
+     * Validate that current process has the required locks to use this client
+     * @param[in]   pClient This client
+     * @param[in]   pServer Resource Server instance
+     * @param[in]   pClientEntry Client entry of the client
+     */
+    virtual NV_STATUS clientValidateLocks(RsClient *pClient, RsServer *pServer, const CLIENT_ENTRY *pClientEntry);
+
+    /**
      * Stub virtual function
      * @param[in] NvHandle hClient
      */
@@ -266,7 +275,8 @@ public:
      * @param[in] pClient This client
      * @param[in] pResourceRef The reference to free
      */
-    virtual NV_STATUS clientDestructResourceRef(RsClient *pClient, RsServer *pServer, RsResourceRef *pResourceRef);
+    virtual NV_STATUS clientDestructResourceRef(RsClient *pClient, RsServer *pServer, RsResourceRef *pResourceRef,
+                                                RS_LOCK_INFO *pLockInfo, API_SECURITY_INFO *pSecInfo);
 
    /**
      * Unmap a mapping that belongs to a resource reference in this client.

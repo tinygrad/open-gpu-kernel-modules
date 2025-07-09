@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -30,7 +30,7 @@
 
 #include "core/core.h"
 #include "gpu/gpu.h"
-#include "gpu/mem_mgr/mem_mgr.h"
+#include "mem_mgr/mem.h"
 #include "gpu/mem_mgr/virt_mem_allocator_common.h"
 #include "gpu/mem_mgr/context_dma.h"
 #include "gpu/mem_mgr/mem_desc.h"
@@ -88,7 +88,9 @@ _ctxdmaDestroyFBMappings
 
             if(pGpu->getProperty(pGpu, PDB_PROP_GPU_COHERENT_CPU_MAPPING))
             {
-                kbusUnmapCoherentCpuMapping_HAL(pGpu, pKernelBus, pContextDma->pMemDesc);
+                kbusUnmapCoherentCpuMapping_HAL(pGpu, pKernelBus, pContextDma->pMemDesc,
+                                                pContextDma->KernelVAddr[gpuSubDevInst],
+                                                pContextDma->KernelPriv);
             }
             else
             {
@@ -106,10 +108,10 @@ _ctxdmaDestroyFBMappings
             if (!IS_VIRTUAL(pGpu) && !IS_GSP_CLIENT(pGpu) &&
                 (pContextDma->FbApertureLen[gpuSubDevInst] != 0))
             {
-                kbusUnmapFbAperture_HAL(pGpu, pKernelBus, pContextDma->pMemDesc,
-                                        pContextDma->FbAperture[gpuSubDevInst],
-                                        pContextDma->FbApertureLen[gpuSubDevInst],
-                                        BUS_MAP_FB_FLAGS_MAP_UNICAST);
+                kbusUnmapFbApertureSingle(pGpu, pKernelBus, pContextDma->pMemDesc,
+                                          pContextDma->FbAperture[gpuSubDevInst],
+                                          pContextDma->FbApertureLen[gpuSubDevInst],
+                                          BUS_MAP_FB_FLAGS_MAP_UNICAST);
                 pContextDma->FbAperture[gpuSubDevInst]    = (NvU64)-1;
                 pContextDma->FbApertureLen[gpuSubDevInst] = 0;
             }
@@ -450,7 +452,6 @@ _ctxdmaConstruct
     NV_STATUS           rmStatus        = NV_OK;
     Memory             *pMemory         = NULL;
     OBJGPU             *pGpu            = NULL;
-    MemoryManager      *pMemoryManager  = NULL;
     MEMORY_DESCRIPTOR  *pMemDesc        = NULL;
     NvHandle            hDevice         = 0;
     NvHandle            hClient         = pClient->hClient;
@@ -497,8 +498,6 @@ _ctxdmaConstruct
     hDevice = RES_GET_HANDLE(pDevice);
 
     API_GPU_FULL_POWER_SANITY_CHECK(pGpu, NV_TRUE, NV_FALSE);
-
-    pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
 
     pMemDesc = pMemory->pMemDesc;
 
@@ -552,15 +551,6 @@ _ctxdmaConstruct
         }
     }
 
-    if (FLD_TEST_DRF(OS03, _FLAGS, _PTE_KIND, _BL, flags))
-    {
-        memdescSetPteKind(pContextDma->pMemDesc, memmgrGetPteKindBl_HAL(pGpu, pMemoryManager));
-    }
-    else if (FLD_TEST_DRF(OS03, _FLAGS, _PTE_KIND, _PITCH, flags))
-    {
-        memdescSetPteKind(pContextDma->pMemDesc, memmgrGetPteKindPitch_HAL(pGpu, pMemoryManager));
-    }
-
     //
     // If this ctxdma is a notifier AND it is in vidmem, create a kernel mapping to
     // it for use later in case a SW method needs to update it.
@@ -599,45 +589,52 @@ _ctxdmaConstruct
             }
             else if (pGpu->getProperty(pGpu, PDB_PROP_GPU_COHERENT_CPU_MAPPING))
             {
-                NvP64 pMap = kbusMapCoherentCpuMapping_HAL(pGpu, pKernelBus, pMemDesc);
-                if (pMap == NULL)
+                //
+                // Don't add the offset again, as the base address of pContextDma->pMemDesc
+                // already has the offset applied.
+                //
+                rmStatus = kbusMapCoherentCpuMapping_HAL(pGpu,
+                                                         pKernelBus,
+                                                         pContextDma->pMemDesc,
+                                                         0, // Offset already applied.
+                                                         pContextDma->Limit + 1,
+                                                         NV_PROTECT_READ_WRITE,
+                                                         &pContextDma->KernelVAddr[gpuSubDevInst],
+                                                         &pContextDma->KernelPriv);
+
+                if (rmStatus != NV_OK)
                 {
-                    rmStatus = NV_ERR_GENERIC;
+                    SLI_LOOP_GOTO(done);
                 }
-                else
-                {
-                    rmStatus = NV_OK;
-                    pMap = NvP64_PLUS_OFFSET(pMap, offset);
-                }
-                pContextDma->KernelVAddr[gpuSubDevInst] = pMap;
             }
             else
             {
-                rmStatus = kbusMapFbAperture_HAL(pGpu, pKernelBus,
-                                                 pMemDesc, offset,
-                                                 &pContextDma->FbAperture[gpuSubDevInst],
-                                                 &pContextDma->FbApertureLen[gpuSubDevInst],
-                                                 BUS_MAP_FB_FLAGS_MAP_UNICAST, pDevice);
-            }
-            if (rmStatus != NV_OK)
-            {
-                pContextDma->FbApertureLen[gpuSubDevInst] = 0;
-                SLI_LOOP_GOTO(done);
-            }
+                rmStatus = kbusMapFbApertureSingle(pGpu, pKernelBus,
+                                                   pMemDesc, offset,
+                                                   &pContextDma->FbAperture[gpuSubDevInst],
+                                                   &pContextDma->FbApertureLen[gpuSubDevInst],
+                                                   BUS_MAP_FB_FLAGS_MAP_UNICAST, pDevice);
 
-            memdescSetPageSize(pContextDma->pMemDesc, AT_GPU,
-                           memdescGetPageSize(pMemDesc, AT_GPU));
+                if (rmStatus != NV_OK)
+                {
+                    pContextDma->FbApertureLen[gpuSubDevInst] = 0;
+                    SLI_LOOP_GOTO(done);
+                }
 
-            rmStatus = osMapPciMemoryKernelOld(pGpu,
-                                              gpumgrGetGpuPhysFbAddr(pGpu) + pContextDma->FbAperture[gpuSubDevInst],
-                                              pContextDma->Limit+1,
-                                              NV_PROTECT_READ_WRITE,
-                                              &pContextDma->KernelVAddr[gpuSubDevInst],
-                                              NV_MEMORY_WRITECOMBINED);
-            if (rmStatus != NV_OK)
-            {
-                // Force out of the SLI loop
-                SLI_LOOP_BREAK;
+                memdescSetPageSize(pContextDma->pMemDesc, AT_GPU,
+                            memdescGetPageSize(pMemDesc, AT_GPU));
+
+                rmStatus = osMapPciMemoryKernelOld(pGpu,
+                                                gpumgrGetGpuPhysFbAddr(pGpu) + pContextDma->FbAperture[gpuSubDevInst],
+                                                pContextDma->Limit+1,
+                                                NV_PROTECT_READ_WRITE,
+                                                &pContextDma->KernelVAddr[gpuSubDevInst],
+                                                NV_MEMORY_WRITECOMBINED);
+                if (rmStatus != NV_OK)
+                {
+                    // Force out of the SLI loop
+                    SLI_LOOP_BREAK;
+                }
             }
 
             {

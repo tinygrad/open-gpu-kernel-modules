@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2017-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2017-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -149,28 +149,53 @@ kflcnIsRiscvActive_TU102
 }
 
 /*!
+ * Returns true if the RISC-V core is selected.
+ */
+NvBool
+kflcnIsRiscvSelected_TU102
+(
+    OBJGPU *pGpu,
+    KernelFalcon *pKernelFlcn
+)
+{
+    //
+    // There is no explicit core select on TU10x/GA100. Use the "is the RISC-V core active" check,
+    // even though:
+    //  (a) this can theoretically race with the ucode switching into a Falcon mode
+    //  (b) this returns a false negative if the RISC-V core has halted
+    // since there is no need to support either of these cases on TU10x/GA100.
+    //
+    return kflcnIsRiscvActive_HAL(pGpu, pKernelFlcn);
+}
+
+/*!
  * Reset falcon using secure reset.
  * This leaves the falcon in falcon mode after reset.
  */
-void
+NV_STATUS
 kflcnReset_TU102
 (
     OBJGPU *pGpu,
     KernelFalcon *pKernelFlcn
 )
 {
-    NV_ASSERT_OR_RETURN_VOID(kflcnPreResetWait_HAL(pGpu, pKernelFlcn) == NV_OK);
+    NV_STATUS status;
+    NV_ASSERT_OK_OR_RETURN(kflcnPreResetWait_HAL(pGpu, pKernelFlcn));
     NV_ASSERT_OK(kflcnResetHw(pGpu, pKernelFlcn));
-    kflcnWaitForResetToFinish_HAL(pGpu, pKernelFlcn);
+    status = kflcnWaitForResetToFinish_HAL(pGpu, pKernelFlcn);
+    NV_ASSERT_OR_RETURN((status == NV_OK) || (status == NV_ERR_GPU_IN_FULLCHIP_RESET), status);
+    if (status == NV_ERR_GPU_IN_FULLCHIP_RESET)
+        return status;
     kflcnSwitchToFalcon_HAL(pGpu, pKernelFlcn);
     kflcnRegWrite_HAL(pGpu, pKernelFlcn, NV_PFALCON_FALCON_RM,
                       pGpu->chipId0);
+    return NV_OK;
 }
 
 /*!
  * Reset falcon using secure reset, ready to run riscv.
  */
-void
+NV_STATUS
 kflcnResetIntoRiscv_TU102
 (
     OBJGPU *pGpu,
@@ -181,7 +206,26 @@ kflcnResetIntoRiscv_TU102
     // Turing and GA100 do not have an explicit core switch,
     // the core will be ready to run riscv after reset.
     //
-    kflcnReset_TU102(pGpu, pKernelFlcn);
+    NV_ASSERT_OK_OR_RETURN(kflcnReset_TU102(pGpu, pKernelFlcn));
+    kflcnSetRiscvMode(pKernelFlcn, NV_TRUE);
+    return NV_OK;
+}
+
+/*!
+ * Switch the core to FALCON mode.
+ */
+void
+kflcnSwitchToFalcon_TU102
+(
+    OBJGPU *pGpu,
+    KernelFalcon *pKernelFlcn
+)
+{
+    //
+    // Turing and GA100 do not have an explicit core switch,
+    // so simply update the software state tracking the expected mode.
+    //
+    kflcnSetRiscvMode(pKernelFlcn, NV_FALSE);
 }
 
 /*!
@@ -314,7 +358,7 @@ kflcnWaitForHalt_TU102
 }
 
 /*!
- * Read the IRQ status of the RISCV Falcon.
+ * Read the IRQ status of the Falcon.
  *
  * @return IRQ status mask
  */
@@ -325,12 +369,26 @@ kflcnReadIntrStatus_TU102
     KernelFalcon *pKernelFlcn
 )
 {
-    return ((kflcnRegRead_HAL(pGpu, pKernelFlcn, NV_PFALCON_FALCON_IRQSTAT) &
-             kflcnRegRead_HAL(pGpu, pKernelFlcn, NV_PFALCON_FALCON_IRQMASK) &
-             kflcnRegRead_HAL(pGpu, pKernelFlcn, NV_PFALCON_FALCON_IRQDEST)) |
-            (kflcnRegRead_HAL(pGpu, pKernelFlcn, NV_PFALCON_FALCON_IRQSTAT) &
-             kflcnRiscvRegRead_HAL(pGpu, pKernelFlcn, NV_PRISCV_RISCV_IRQMASK) &
-             kflcnRiscvRegRead_HAL(pGpu, pKernelFlcn, NV_PRISCV_RISCV_IRQDEST)));
+    return (kflcnRegRead_HAL(pGpu, pKernelFlcn, NV_PFALCON_FALCON_IRQSTAT) &
+            kflcnRegRead_HAL(pGpu, pKernelFlcn, NV_PFALCON_FALCON_IRQMASK) &
+            kflcnRegRead_HAL(pGpu, pKernelFlcn, NV_PFALCON_FALCON_IRQDEST));
+}
+
+/*!
+ * Read the IRQ status of the Falcon in RISC-V mode.
+ *
+ * @return IRQ status mask
+ */
+NvU32
+kflcnRiscvReadIntrStatus_TU102
+(
+    OBJGPU *pGpu,
+    KernelFalcon *pKernelFlcn
+)
+{
+    return (kflcnRegRead_HAL(pGpu, pKernelFlcn, NV_PFALCON_FALCON_IRQSTAT) &
+            kflcnRiscvRegRead_HAL(pGpu, pKernelFlcn, NV_PRISCV_RISCV_IRQMASK) &
+            kflcnRiscvRegRead_HAL(pGpu, pKernelFlcn, NV_PRISCV_RISCV_IRQDEST));
 }
 
 

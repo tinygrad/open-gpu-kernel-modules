@@ -1,13 +1,22 @@
+
 #ifndef _G_HOST_ENG_NVOC_H_
 #define _G_HOST_ENG_NVOC_H_
+
+// Version of generated metadata structures
+#ifdef NVOC_METADATA_VERSION
+#undef NVOC_METADATA_VERSION
+#endif
+#define NVOC_METADATA_VERSION 2
+
 #include "nvoc/runtime.h"
+#include "nvoc/rtti.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2013-2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2013-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -29,6 +38,7 @@ extern "C" {
  * DEALINGS IN THE SOFTWARE.
  */
 
+#pragma once
 #include "g_host_eng_nvoc.h"
 
 #ifndef HOST_ENG_H
@@ -44,8 +54,6 @@ extern "C" {
 
 #include "kernel/gpu/fifo/kernel_channel.h"
 
-typedef struct OBJHOSTENG *POBJHOSTENG;
-
 /*!
  * Interface class for all Hosteng modules.
  */
@@ -59,10 +67,34 @@ typedef struct OBJHOSTENG *POBJHOSTENG;
 #define PRIVATE_FIELD(x) NVOC_PRIVATE_FIELD(x)
 #endif
 
+
+// Metadata with per-class RTTI and vtable
+struct NVOC_METADATA__OBJHOSTENG;
+struct NVOC_VTABLE__OBJHOSTENG;
+
+
 struct OBJHOSTENG {
-    const struct NVOC_RTTI *__nvoc_rtti;
-    struct OBJHOSTENG *__nvoc_pbase_OBJHOSTENG;
-    NV_STATUS (*__hostengHaltAndReset__)(struct OBJGPU *, struct OBJHOSTENG *, RMTIMEOUT *);
+
+    // Metadata starts with RTTI structure.
+    union {
+         const struct NVOC_METADATA__OBJHOSTENG *__nvoc_metadata_ptr;
+         const struct NVOC_RTTI *__nvoc_rtti;
+    };
+
+    // Ancestor object pointers for `staticCast` feature
+    struct OBJHOSTENG *__nvoc_pbase_OBJHOSTENG;    // hosteng
+};
+
+
+// Vtable with 1 per-class function pointer
+struct NVOC_VTABLE__OBJHOSTENG {
+    NV_STATUS (*__hostengHaltAndReset__)(struct OBJGPU *, struct OBJHOSTENG * /*this*/, RMTIMEOUT *);  // virtual
+};
+
+// Metadata with per-class RTTI and vtable
+struct NVOC_METADATA__OBJHOSTENG {
+    const struct NVOC_RTTI rtti;
+    const struct NVOC_VTABLE__OBJHOSTENG vtable;
 };
 
 #ifndef __NVOC_CLASS_OBJHOSTENG_TYPEDEF__
@@ -74,18 +106,18 @@ typedef struct OBJHOSTENG OBJHOSTENG;
 #define __nvoc_class_id_OBJHOSTENG 0xb356e7
 #endif /* __nvoc_class_id_OBJHOSTENG */
 
+// Casting support
 extern const struct NVOC_CLASS_DEF __nvoc_class_def_OBJHOSTENG;
 
 #define __staticCast_OBJHOSTENG(pThis) \
     ((pThis)->__nvoc_pbase_OBJHOSTENG)
 
 #ifdef __nvoc_host_eng_h_disabled
-#define __dynamicCast_OBJHOSTENG(pThis) ((OBJHOSTENG*)NULL)
+#define __dynamicCast_OBJHOSTENG(pThis) ((OBJHOSTENG*) NULL)
 #else //__nvoc_host_eng_h_disabled
 #define __dynamicCast_OBJHOSTENG(pThis) \
-    ((OBJHOSTENG*)__nvoc_dynamicCast(staticCast((pThis), Dynamic), classInfo(OBJHOSTENG)))
+    ((OBJHOSTENG*) __nvoc_dynamicCast(staticCast((pThis), Dynamic), classInfo(OBJHOSTENG)))
 #endif //__nvoc_host_eng_h_disabled
-
 
 NV_STATUS __nvoc_objCreateDynamic_OBJHOSTENG(OBJHOSTENG**, Dynamic*, NvU32, va_list);
 
@@ -93,12 +125,17 @@ NV_STATUS __nvoc_objCreate_OBJHOSTENG(OBJHOSTENG**, Dynamic*, NvU32);
 #define __objCreate_OBJHOSTENG(ppNewObj, pParent, createFlags) \
     __nvoc_objCreate_OBJHOSTENG((ppNewObj), staticCast((pParent), Dynamic), (createFlags))
 
-#define hostengHaltAndReset(pGpu, pHosteng, pRmTimeout) hostengHaltAndReset_DISPATCH(pGpu, pHosteng, pRmTimeout)
-NV_STATUS hostengHaltAndReset_IMPL(struct OBJGPU *pGpu, struct OBJHOSTENG *pHosteng, RMTIMEOUT *pRmTimeout);
 
+// Wrapper macros
+#define hostengHaltAndReset_FNPTR(pHosteng) pHosteng->__nvoc_metadata_ptr->vtable.__hostengHaltAndReset__
+#define hostengHaltAndReset(pGpu, pHosteng, pRmTimeout) hostengHaltAndReset_DISPATCH(pGpu, pHosteng, pRmTimeout)
+
+// Dispatch functions
 static inline NV_STATUS hostengHaltAndReset_DISPATCH(struct OBJGPU *pGpu, struct OBJHOSTENG *pHosteng, RMTIMEOUT *pRmTimeout) {
-    return pHosteng->__hostengHaltAndReset__(pGpu, pHosteng, pRmTimeout);
+    return pHosteng->__nvoc_metadata_ptr->vtable.__hostengHaltAndReset__(pGpu, pHosteng, pRmTimeout);
 }
+
+NV_STATUS hostengHaltAndReset_IMPL(struct OBJGPU *pGpu, struct OBJHOSTENG *pHosteng, RMTIMEOUT *pRmTimeout);
 
 #undef PRIVATE_FIELD
 

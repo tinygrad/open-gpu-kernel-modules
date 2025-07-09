@@ -83,11 +83,16 @@ NvBool nvDpyIsAdaptiveSyncDefaultlisted(const NVDpyEvoRec *pDpyEvo);
 enum NvKmsDpyAttributeDigitalSignalValue
 nvGetDefaultDpyAttributeDigitalSignalValue(const NVConnectorEvoRec *pConnectorEvo);
 
-NVColorFormatInfoRec nvGetColorFormatInfo(const NVDpyEvoRec *pDpyEvo);
+NvKmsDpyOutputColorFormatInfo nvDpyGetOutputColorFormatInfo(
+    const NVDpyEvoRec *pDpyEvo);
 
 NvU32 nvDpyGetPossibleApiHeadsMask(const NVDpyEvoRec *pDpyEvo);
 
 NvBool nvDpyIsHDRCapable(const NVDpyEvoRec *pDpyEvo);
+
+void nvConstructDpVscSdp(const NVDispHeadInfoFrameStateEvoRec *pInfoFrame,
+                         const NVDpyAttributeColor *pDpyColor,
+                         DPSDP_DP_VSC_SDP_DESCRIPTOR *sdp);
 
 #ifdef __cplusplus
 };

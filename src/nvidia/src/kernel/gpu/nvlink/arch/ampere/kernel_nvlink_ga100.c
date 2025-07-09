@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -51,24 +51,24 @@ knvlinkOverrideConfig_GA100
     NV_STATUS status = NV_OK;
     NvU32     i;
 
-    pKernelNvlink->pLinkConnection = portMemAllocNonPaged(sizeof(NvU32) * NVLINK_MAX_LINKS_SW);
+    pKernelNvlink->pLinkConnection = portMemAllocNonPaged(sizeof(NvU32) * pKernelNvlink->maxSupportedLinks);
     if (pKernelNvlink->pLinkConnection == NULL)
         return NV_ERR_NO_MEMORY;
 
-    portMemSet(pKernelNvlink->pLinkConnection, 0, sizeof(NvU32) * NVLINK_MAX_LINKS_SW);
+    portMemSet(pKernelNvlink->pLinkConnection, 0, sizeof(NvU32) * pKernelNvlink->maxSupportedLinks);
 
     //
     // To deal with the nonlegacy force config reg keys, we need to now fill
     // in the default phys links, use a unity 1/1 map.
     //
-    for (i = 0; i < NVLINK_MAX_LINKS_SW; i++)
+    for (i = 0; i < pKernelNvlink->maxSupportedLinks; i++)
     {
         // The physical link is guaranteed valid in all cases
         pKernelNvlink->pLinkConnection[i] = DRF_NUM(_NVLINK, _ARCH_CONNECTION, _PHYSICAL_LINK, i);
     }
 
     // Check to see if there are chiplib overrides for nvlink configuration
-    status = osGetForcedNVLinkConnection(pGpu, NVLINK_MAX_LINKS_SW, pKernelNvlink->pLinkConnection);
+    status = osGetForcedNVLinkConnection(pGpu, pKernelNvlink->maxSupportedLinks, pKernelNvlink->pLinkConnection);
     if ((NV_OK != status) || pKernelNvlink->bForceAutoconfig)
     {
         // A non-OK status implies there are no overrides.
@@ -79,19 +79,19 @@ knvlinkOverrideConfig_GA100
         return NV_OK;
     }
 
-    NV2080_CTRL_NVLINK_PROCESS_FORCED_CONFIGS_PARAMS forcedConfigParams;
+    NV2080_CTRL_INTERNAL_NVLINK_PROCESS_FORCED_CONFIGS_PARAMS forcedConfigParams;
     portMemSet(&forcedConfigParams, 0, sizeof(forcedConfigParams));
 
     forcedConfigParams.bLegacyForcedConfig = NV_FALSE;
-    portMemCopy(&forcedConfigParams.linkConnection, (sizeof(NvU32) * NVLINK_MAX_LINKS_SW),
-                pKernelNvlink->pLinkConnection,     (sizeof(NvU32) * NVLINK_MAX_LINKS_SW));
+    portMemCopy(&forcedConfigParams.linkConnection, (sizeof(NvU32) * pKernelNvlink->maxSupportedLinks),
+                pKernelNvlink->pLinkConnection,     (sizeof(NvU32) * pKernelNvlink->maxSupportedLinks));
 
     //
     // RPC to GSP-RM to for GSP-RM to process the forced NVLink configurations. This includes
     // setting up of HSHUB state and programming the memory subsystem registers.
     //
     status = knvlinkExecGspRmRpc(pGpu, pKernelNvlink,
-                                 NV2080_CTRL_CMD_NVLINK_PROCESS_FORCED_CONFIGS,
+                                 NV2080_CTRL_CMD_INTERNAL_NVLINK_PROCESS_FORCED_CONFIGS,
                                  (void *)&forcedConfigParams,
                                  sizeof(forcedConfigParams));
     if (status != NV_OK)
@@ -137,25 +137,25 @@ knvlinkRemoveMapping_GA100
     NvU32     peerId;
     NvBool    bBufferReady = NV_FALSE;
 
-    NV2080_CTRL_NVLINK_REMOVE_NVLINK_MAPPING_PARAMS params;
+    NV2080_CTRL_INTERNAL_NVLINK_REMOVE_NVLINK_MAPPING_PARAMS params;
     portMemSet(&params, 0, sizeof(params));
 
     params.bL2Entry = bL2Entry;
 
     if (bAllMapping)
     {
-        params.mapTypeMask = NV2080_CTRL_NVLINK_REMOVE_NVLINK_MAPPING_TYPE_SYSMEM |
-                             NV2080_CTRL_NVLINK_REMOVE_NVLINK_MAPPING_TYPE_PEER;
+        params.mapTypeMask = NV2080_CTRL_INTERNAL_NVLINK_REMOVE_NVLINK_MAPPING_TYPE_SYSMEM |
+                             NV2080_CTRL_INTERNAL_NVLINK_REMOVE_NVLINK_MAPPING_TYPE_PEER;
         params.peerMask    = (1 << NVLINK_MAX_PEERS_SW) - 1;
     }
     else
     {
-        params.mapTypeMask = NV2080_CTRL_NVLINK_REMOVE_NVLINK_MAPPING_TYPE_PEER;
+        params.mapTypeMask = NV2080_CTRL_INTERNAL_NVLINK_REMOVE_NVLINK_MAPPING_TYPE_PEER;
         params.peerMask    = peerMask;
     }
 
     status = knvlinkExecGspRmRpc(pGpu, pKernelNvlink,
-                                 NV2080_CTRL_CMD_NVLINK_REMOVE_NVLINK_MAPPING,
+                                 NV2080_CTRL_CMD_INTERNAL_NVLINK_REMOVE_NVLINK_MAPPING,
                                  (void *)&params, sizeof(params));
     if (status != NV_OK)
         return status;
@@ -176,7 +176,7 @@ knvlinkRemoveMapping_GA100
     {
         FOR_EACH_INDEX_IN_MASK(32, peerId, peerMask)
         {
-            if (pKernelNvlink->initializedLinks & pKernelNvlink->peerLinkMasks[peerId])
+            if (pKernelNvlink->initializedLinks & KNVLINK_GET_MASK(pKernelNvlink, peerLinkMasks[peerId], 32))
             {
                 bBufferReady = NV_TRUE;
                 break;

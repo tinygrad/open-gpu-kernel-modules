@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -65,10 +65,14 @@ memmgrGetDeviceCaps
 {
     NvU8 tempCaps[NV0080_CTRL_FB_CAPS_TBL_SIZE], temp;
     KernelMemorySystem *pKernelMemorySystem = GPU_GET_KERNEL_MEMORY_SYSTEM(pGpu);
-    const MEMORY_SYSTEM_STATIC_CONFIG *pMemorySystemConfig =
-        kmemsysGetStaticConfig(pGpu, pKernelMemorySystem);
+    const MEMORY_SYSTEM_STATIC_CONFIG *pMemorySystemConfig;
 
     NV_ASSERT(!gpumgrGetBcEnabledStatus(pGpu));
+
+    if (pKernelMemorySystem == NULL)
+        return;
+
+    pMemorySystemConfig = kmemsysGetStaticConfig(pGpu, pKernelMemorySystem);
 
     portMemSet(tempCaps, 0, NV0080_CTRL_FB_CAPS_TBL_SIZE);
 
@@ -125,6 +129,12 @@ memmgrGetDeviceCaps
         RMCTRL_SET_CAP(tempCaps, NV0080_CTRL_FB_CAPS, _PLC_BUG_3046774);
     }
 
+    if (!IS_VIRTUAL(pGpu) || IS_VIRTUAL_WITH_FULL_SRIOV(pGpu))
+    {
+        // Legacy SRIOV modes lack the partial unmap plumbing
+        RMCTRL_SET_CAP(tempCaps, NV0080_CTRL_FB_CAPS, _PARTIAL_UNMAP);
+    }
+
     // If we don't have existing caps with which to reconcile, then just return
     if (!bCapsInitialized)
     {
@@ -169,6 +179,8 @@ memmgrGetDeviceCaps
                    NV0080_CTRL_FB_CAPS, _DISABLE_PLC_GLOBALLY);
     RMCTRL_OR_CAP(pFbCaps, tempCaps, temp,
                    NV0080_CTRL_FB_CAPS, _PLC_BUG_3046774);
+    RMCTRL_AND_CAP(pFbCaps, tempCaps, temp,
+                   NV0080_CTRL_FB_CAPS, _PARTIAL_UNMAP);
 
     return;
 }
@@ -211,7 +223,7 @@ deviceCtrlCmdFbGetCaps_IMPL
     OBJGPU   *pGpu = GPU_RES_GET_GPU(pDevice);
     NvU8     *pFbCaps = NvP64_VALUE(pFbCapsParams->capsTbl);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     // sanity check array size
     if (pFbCapsParams->capsTblSize != NV0080_CTRL_FB_CAPS_TBL_SIZE)
@@ -242,7 +254,7 @@ deviceCtrlCmdFbGetCapsV2_IMPL
     NvU8     *pFbCaps  = pFbCapsParams->capsTbl;
     NV_STATUS rmStatus;
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     // now accumulate caps for entire device
     rmStatus = memmgrGetFbCaps(pGpu, pFbCaps);
@@ -263,7 +275,7 @@ deviceCtrlCmdSetDefaultVidmemPhysicality_IMPL
     NV0080_CTRL_FB_SET_DEFAULT_VIDMEM_PHYSICALITY_PARAMS *pParams
 )
 {
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
     NvU32 override;
 
     switch (pParams->value)
@@ -306,14 +318,16 @@ subdeviceCtrlCmdFbGetBar1Offset_IMPL
     NvU64         offset;
     RsCpuMapping *pCpuMapping = NULL;
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     pCpuMapping = CliFindMappingInClient(hClient, hDevice, pFbMemParams->cpuVirtAddress);
     if (pCpuMapping == NULL)
         return NV_ERR_INVALID_ARGUMENT;
 
+    NV_ASSERT_OR_RETURN(pCpuMapping->pPrivate->memArea.numRanges == 1, NV_ERR_INVALID_ARGUMENT);
+
     offset = (NvU64)pFbMemParams->cpuVirtAddress - (NvU64)pCpuMapping->pLinearAddress;
-    pFbMemParams->gpuVirtAddress = pCpuMapping->pPrivate->gpuAddress + offset;
+    pFbMemParams->gpuVirtAddress = pCpuMapping->pPrivate->memArea.pRanges[0].start + offset;
 
     return NV_OK;
 }
@@ -336,7 +350,7 @@ subdeviceCtrlCmdFbIsKind_IMPL
     NV_STATUS      status         = NV_OK;
     NvBool         rmResult;
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     // perform appropriate RM operation based on the supported sdk operations
     switch (pIsKindParams->operation)
@@ -394,7 +408,6 @@ subdeviceCtrlCmdFbGetMemAlignment_IMPL
     NvHandle                hObject    = RES_GET_HANDLE(pSubdevice);
     Heap                   *pHeap      = vidmemGetHeap(pGpu, pDevice, NV_FALSE, NV_FALSE);
     HEAP_ALLOC_HINT_PARAMS  AllocHint  = {0};
-    NvU32                   i;
     NvU64                   _size, _alignment;
     NV_STATUS               status = NV_OK;
 
@@ -414,7 +427,6 @@ subdeviceCtrlCmdFbGetMemAlignment_IMPL
     AllocHint.pWidth = &pParams->alignWidth;
     AllocHint.pPitch = &pParams->alignPitch;
     AllocHint.pKind = &pParams->alignKind;
-    AllocHint.alignAdjust = 0x0;
 
     status = heapAllocHint(pGpu, pHeap, hClient, hObject, &AllocHint);
     if (status != NV_OK)
@@ -427,36 +439,9 @@ subdeviceCtrlCmdFbGetMemAlignment_IMPL
     pParams->alignMask = (NvU32)_alignment;
     pParams->alignSize = _size;
 
-    if (NV_FALSE == AllocHint.ignoreBankPlacement)
-    {
-        for (i=0; i<MEM_NUM_BANKS_TO_TRY; i++)
-        {
-            if (MEM_NO_BANK_SELECTION == (AllocHint.bankPlacement & MEM_NO_BANK_SELECTION))
-            {
-                pParams->alignBank[i] = 0x0;
-                pParams->alignOutputFlags[i] = NVAL_MAP_DIRECTION_UP;
-            }
-            else
-            {
-                pParams->alignBank[i] = (AllocHint.bankPlacement & MEM_BANK_MASK) + 1;
-                pParams->alignOutputFlags[i] = (BANK_MEM_GROW_DOWN == (AllocHint.bankPlacement & BANK_MEM_GROW_MASK)) ? NVAL_MAP_DIRECTION_DOWN: NVAL_MAP_DIRECTION_UP;
-            }
-            AllocHint.bankPlacement >>= MEM_BANK_DATA_SIZE;
-        }
-
-    }
-    else
-    {
-        for (i=0; i<NVAL_MAX_BANKS; i++)
-        {
-            pParams->alignBank[i] = 0x0;
-            pParams->alignOutputFlags[i] = NVAL_MAP_DIRECTION_UP;
-        }
-    }
-
     // Keep Track of resources that we have allocated
     pParams->alignPad = (NvU32)AllocHint.pad;//XXX64b
-    pParams->alignAdjust = (NvU32)AllocHint.alignAdjust;//XXX64b
+    pParams->alignAdjust = 0;
 
     return NV_OK;
 }
@@ -647,19 +632,6 @@ free_mem:
 }
 #endif // defined(DEBUG) || defined(DEVELOP) || defined(NV_VERIF_FEATURES) || defined(NV_MODS)
 
-/*!
- *  @brief Get heap reservation size needed by different module
- */
-NV_STATUS
-subdeviceCtrlCmdFbGetHeapReservationSize_IMPL
-(
-    Subdevice *pSubdevice,
-    NV2080_CTRL_INTERNAL_FB_GET_HEAP_RESERVATION_SIZE_PARAMS *pParams
-)
-{
-    NV_ASSERT_OR_RETURN(0, NV_ERR_NOT_SUPPORTED);
-}
-
 //
 // subdeviceCtrlCmdFbGetFBRegionInfo
 //
@@ -682,7 +654,7 @@ subdeviceCtrlCmdFbGetFBRegionInfo_IMPL
     ct_assert(NV2080_CTRL_CMD_FB_GET_FB_REGION_INFO_MEM_TYPES >= NVOS32_NUM_MEM_TYPES);
     ct_assert(NV2080_CTRL_CMD_FB_GET_FB_REGION_INFO_MAX_ENTRIES >= MAX_FB_REGIONS);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     pGFBRIParams->numFBRegions = 0;
 
@@ -763,85 +735,19 @@ subdeviceCtrlCmdFbGetFBRegionInfo_IMPL
 }
 
 NV_STATUS
-subdeviceCtrlCmdInternalMemmgrGetVgpuHostRmReservedFb_IMPL
-(
-    Subdevice *pSubdevice,
-    NV2080_CTRL_INTERNAL_MEMMGR_GET_VGPU_CONFIG_HOST_RESERVED_FB_PARAMS *pParams
-)
-{
-    OBJGPU *pGpu = GPU_RES_GET_GPU(pSubdevice);
-    MemoryManager *pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
-
-    pParams->hostReservedFb = memmgrGetVgpuHostRmReservedFb_HAL(pGpu, pMemoryManager, pParams->vgpuTypeId);
-
-    return NV_OK;
-}
-
-/*!
- * @brief   This command gets the offset into FB that ECC asynchronous scrubber
- *          has completed up to. As well as if the scrubber has finished its job.
- *
- * @param[in]       pDiagApi
- * @param[in,out]   pParams
- *                  attribute:  The attribute whose support is to be determined.
- *                  value:      The new value of the specified attribute to be applied.
- * @return  Returns NV_STATUS
- *          NV_OK                     Success
- *
- */
-NV_STATUS
-diagapiCtrlCmdFbEccScrubDiag_IMPL
-(
-    DiagApi *pDiagApi,
-    NV208F_CTRL_CMD_FB_ECC_SCRUB_DIAG_PARAMS *pConfig
-)
-{
-    OBJGPU *pGpu = GPU_RES_GET_GPU(pDiagApi);
-    MemoryManager *pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
-
-    memmgrGetScrubState_HAL(pGpu, pMemoryManager, &(pConfig->fbOffsetCompleted),
-                            &(pConfig->fbEndOffset), &(pConfig->bAsyncScrubDisabled));
-
-    return NV_OK;
-}
-
-/*!
- * @brief   This command launches the asynchronous scrubber on the region specified
- *          by beginBlock and endBlock. beginBlock is the lesser block index
- *          of the region to be scrubbed.
- *
- * @param[in]       pDiagApi
- * @param[in,out]   pParams
- *                  attribute:  The attribute whose support is to be determined.
- *                  value:      The new value of the specified attribute to be applied.
- * @return  Returns NV_STATUS
- *          NV_OK                     Success
- *
- */
-NV_STATUS
-diagapiCtrlCmdFbEccAsyncScrubRegion_IMPL
-(
-    DiagApi *pDiagApi,
-    NV208F_CTRL_CMD_FB_ECC_ASYNC_SCRUB_REGION_PARAMS *pConfig
-)
-{
-    OBJGPU *pGpu = GPU_RES_GET_GPU(pDiagApi);
-    MemoryManager *pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
-
-    memmgrAsyncScrubRegion_HAL(pGpu, pMemoryManager, pConfig->startBlock, pConfig->endBlock);
-
-    return NV_OK;
-}
-
-NV_STATUS
 subdeviceCtrlCmdGbGetSemaphoreSurfaceLayout_IMPL
 (
     Subdevice *pSubdevice,
     NV2080_CTRL_FB_GET_SEMAPHORE_SURFACE_LAYOUT_PARAMS *pParams
 )
 {
-    MemoryManager *pMemoryManager = GPU_GET_MEMORY_MANAGER(GPU_RES_GET_GPU(pSubdevice));
+    OBJGPU *pGpu = GPU_RES_GET_GPU(pSubdevice);
+    MemoryManager *pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
 
+    // Semaphore surfaces are not supported with legacy Sli.
+    if (IsSLIEnabled(pGpu))
+        return NV_ERR_NOT_SUPPORTED;
+    
     pParams->caps = 0;
 
     if (pMemoryManager->bMonitoredFenceSupported)

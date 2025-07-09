@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -33,7 +33,7 @@
 #include "vgpu/vgpu_events.h"
 #include "platform/chipset/chipset.h"
 #include "platform/p2p/p2p_caps.h"
-#include "nvRmReg.h"
+#include "nvrm_registry.h"
 #include "nvlimits.h"
 #include "nvdevid.h"
 
@@ -72,21 +72,25 @@ p2pGetCaps
     NvU32 gpuMask,
     NvBool *pP2PWriteCapable,
     NvBool *pP2PReadCapable,
+    NvBool *pP2PAtomicsCapable,
     P2P_CONNECTIVITY *pConnectivity
 )
 {
     NvU8 p2PWriteCapsStatus;
     NvU8 p2PReadCapsStatus;
+    NvU8 p2PAtomicsCapsStatus;
     NV_STATUS status;
     P2P_CONNECTIVITY connectivity;
 
-    if ((pP2PWriteCapable == NULL) || (pP2PReadCapable == NULL))
+    if ((pP2PWriteCapable == NULL) || (pP2PReadCapable == NULL) ||
+        (pP2PAtomicsCapable == NULL))
     {
         return NV_ERR_INVALID_ARGUMENT;
     }
 
     status = p2pGetCapsStatus(gpuMask, &p2PWriteCapsStatus,
-                              &p2PReadCapsStatus, &connectivity
+                              &p2PReadCapsStatus, &p2PAtomicsCapsStatus,
+                              &connectivity
                               );
     if (status != NV_OK)
     {
@@ -107,6 +111,7 @@ p2pGetCaps
 
     *pP2PWriteCapable = (p2PWriteCapsStatus == NV0000_P2P_CAPS_STATUS_OK);
     *pP2PReadCapable = (p2PReadCapsStatus == NV0000_P2P_CAPS_STATUS_OK);
+    *pP2PAtomicsCapable = (p2PAtomicsCapsStatus == NV0000_P2P_CAPS_STATUS_OK);
 
     if (pConnectivity != NULL)
     {
@@ -226,6 +231,7 @@ _gpumgrGetP2PCapsStatusOverNvLink
                 {
                     NV_PRINTF(LEVEL_ERROR,
                             "Links failed to train for the given gpu pairs!\n");
+                    knvlinkLogAliDebugMessages(pFirstGpu, pKernelNvlink, NV_TRUE);
                     return status;
                 }
             }
@@ -266,7 +272,8 @@ _kp2pCapsCheckStatusOverridesForPcie
 (
     NvU32 gpuMask,
     NvU8 *pP2PWriteCapStatus,
-    NvU8 *pP2PReadCapStatus
+    NvU8 *pP2PReadCapStatus,
+    NvU8 *pP2PAtomicsCapStatus
 )
 {
     KernelBif *pKernelBif  = NULL;
@@ -298,6 +305,18 @@ _kp2pCapsCheckStatusOverridesForPcie
                     break;
                 case NV_REG_STR_CL_FORCE_P2P_WRITE_ENABLE:
                     *pP2PWriteCapStatus = NV0000_P2P_CAPS_STATUS_OK;
+                    break;
+                default:
+                    break;
+            }
+
+            switch(DRF_VAL(_REG_STR, _CL_FORCE_P2P, _ATOMICS, pKernelBif->p2pOverride))
+            {
+                case NV_REG_STR_CL_FORCE_P2P_ATOMICS_DISABLE:
+                    *pP2PAtomicsCapStatus = NV0000_P2P_CAPS_STATUS_DISABLED_BY_REGKEY;
+                    break;
+                case NV_REG_STR_CL_FORCE_P2P_ATOMICS_ENABLE:
+                    *pP2PAtomicsCapStatus = NV0000_P2P_CAPS_STATUS_OK;
                     break;
                 default:
                     break;
@@ -347,10 +366,11 @@ _kp2pCapsGetStatusOverPcie
     NvU32 lockedGpuMask = 0;
     NV_STATUS status = NV_OK;
     OBJHYPERVISOR *pHypervisor = SYS_GET_HYPERVISOR(pSys);
+    NvU8 unused; // atomics are never supported for mailbox PCIe.
 
     // Check if any overrides are enabled.
     if (_kp2pCapsCheckStatusOverridesForPcie(gpuMask, pP2PWriteCapStatus,
-                                            pP2PReadCapStatus))
+                                            pP2PReadCapStatus, &unused))
     {
         return NV_OK;
     }
@@ -371,6 +391,14 @@ _kp2pCapsGetStatusOverPcie
     {
         *pP2PReadCapStatus = NV0000_P2P_CAPS_STATUS_OK;
         *pP2PWriteCapStatus = NV0000_P2P_CAPS_STATUS_OK;
+        goto done;
+    }
+
+    // If the PCIE topology cannot be accessed do not allow P2P
+    if (!pCl->ChipsetInitialized)
+    {
+        *pP2PReadCapStatus = NV0000_P2P_CAPS_STATUS_NOT_SUPPORTED;
+        *pP2PWriteCapStatus= NV0000_P2P_CAPS_STATUS_NOT_SUPPORTED;
         goto done;
     }
 
@@ -592,6 +620,27 @@ _p2pCapsGetHostSystemStatusOverPcieBar1
 }
 
 /**
+ * @brief Cross check the PCIe routing for each GPU described by the mask
+ * to verify whether the PCIe topology supports BAR1 atomics.
+ *
+ * @param[in]  pGpu                           OBJGPU pointer
+ * @param[out] pP2PAtomicsCapStatus           Pointer to get the P2P atomics capability
+ *
+ * @returns NV_OK, if GPUs support atomics
+ *          NV_ERR_NOT_SUPPORTED, if atomics are not supported
+ */
+static NV_STATUS
+_p2pCapsGetPcieToplogySupportForBar1Atomics
+(
+    NvU32 gpuMask,
+    NvU8 *pP2PAtomicsCapStatus
+)
+{
+    // TODO: Bug 4648955 RM needs to perform discovery of PCIe topology support for atomics.
+    return NV_ERR_NOT_SUPPORTED;
+}
+
+/**
  * @brief Check GPU Pcie BAR1 P2P capability
  *
  * @param[in]  pGpu                         OBJGPU pointer
@@ -608,6 +657,7 @@ _kp2pCapsGetStatusOverPcieBar1
     NvU32   gpuMask,
     NvU8   *pP2PWriteCapStatus,
     NvU8   *pP2PReadCapStatus,
+    NvU8   *pP2PAtomicsCapStatus,
     NvBool  bCommonPciSwitchFound
 )
 {
@@ -617,17 +667,15 @@ _kp2pCapsGetStatusOverPcieBar1
     KernelBif *pKernelBif  = GPU_GET_KERNEL_BIF(pFirstGpu);
     NvU8 writeCapStatus = *pP2PWriteCapStatus;
     NvU8 readCapStatus = *pP2PReadCapStatus;
+    NvU8 atomicsCapStatus = *pP2PAtomicsCapStatus;
 
-    if ((pKernelBif->forceP2PType != NV_REG_STR_RM_FORCE_P2P_TYPE_BAR1P2P))
+    if (((pKernelBif->forceP2PType != NV_REG_STR_RM_FORCE_P2P_TYPE_DEFAULT) &&
+         (pKernelBif->forceP2PType != NV_REG_STR_RM_FORCE_P2P_TYPE_PCIEP2P))
+        ||
+        ((pKernelBif->pcieP2PType != NV_REG_STR_RM_PCIEP2P_TYPE_BAR1) &&
+         (pKernelBif->pcieP2PType != NV_REG_STR_RM_PCIEP2P_TYPE_AUTO)))
     {
         return NV_ERR_NOT_SUPPORTED;
-    }
-
-    // Check if any overrides are enabled.
-    if (_kp2pCapsCheckStatusOverridesForPcie(gpuMask, pP2PWriteCapStatus,
-                                            pP2PReadCapStatus))
-    {
-        return NV_OK;
     }
 
     //
@@ -643,6 +691,14 @@ _kp2pCapsGetStatusOverPcieBar1
         {
             return NV_ERR_NOT_SUPPORTED;
         }
+    }
+
+    // Check if any overrides are enabled.
+    if (_kp2pCapsCheckStatusOverridesForPcie(gpuMask, pP2PWriteCapStatus,
+                                             pP2PReadCapStatus,
+                                             pP2PAtomicsCapStatus))
+    {
+        return NV_OK;
     }
 
     NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
@@ -661,6 +717,14 @@ _kp2pCapsGetStatusOverPcieBar1
         return NV_ERR_NOT_SUPPORTED;
     }
 
+    // If p2p traffic is supported, check the PCIe topology for atomics capability
+    _p2pCapsGetPcieToplogySupportForBar1Atomics(gpuMask, &atomicsCapStatus);
+
+    if (atomicsCapStatus == NV0000_P2P_CAPS_STATUS_OK)
+    {
+        *pP2PAtomicsCapStatus = atomicsCapStatus;
+    }
+
     return NV_OK;
 }
 
@@ -670,6 +734,7 @@ p2pGetCapsStatus
     NvU32 gpuMask,
     NvU8 *pP2PWriteCapStatus,
     NvU8 *pP2PReadCapStatus,
+    NvU8 *pP2PAtomicsCapStatus,
     P2P_CONNECTIVITY *pConnectivity
 )
 {
@@ -690,6 +755,7 @@ p2pGetCapsStatus
     // Default values
     *pP2PWriteCapStatus = NV0000_P2P_CAPS_STATUS_NOT_SUPPORTED;
     *pP2PReadCapStatus = NV0000_P2P_CAPS_STATUS_NOT_SUPPORTED;
+    *pP2PAtomicsCapStatus = NV0000_P2P_CAPS_STATUS_NOT_SUPPORTED;
     *pConnectivity = P2P_CONNECTIVITY_UNKNOWN;
 
     // MIG-Nvlink-P2P can be incompatible, so check compatibility for all GPUs
@@ -719,6 +785,7 @@ p2pGetCapsStatus
             *pP2PReadCapStatus == NV0000_P2P_CAPS_STATUS_OK)
         {
             *pConnectivity = P2P_CONNECTIVITY_NVLINK;
+            *pP2PAtomicsCapStatus = NV0000_P2P_CAPS_STATUS_OK;
             return NV_OK;
         }
     }
@@ -740,6 +807,7 @@ p2pGetCapsStatus
         {
             *pP2PReadCapStatus = NV0000_P2P_CAPS_STATUS_NOT_SUPPORTED;
             *pP2PWriteCapStatus = NV0000_P2P_CAPS_STATUS_NOT_SUPPORTED;
+            *pP2PAtomicsCapStatus = NV0000_P2P_CAPS_STATUS_NOT_SUPPORTED;
             return NV_OK;
         }
     }
@@ -752,6 +820,7 @@ p2pGetCapsStatus
             (*pP2PReadCapStatus == NV0000_P2P_CAPS_STATUS_OK))
         {
             *pConnectivity = P2P_CONNECTIVITY_NVLINK_INDIRECT;
+            *pP2PAtomicsCapStatus = NV0000_P2P_CAPS_STATUS_OK;
             return NV_OK;
         }
     }
@@ -771,14 +840,16 @@ p2pGetCapsStatus
         {
             NvU8 bar1P2PWriteCapStatus = *pP2PWriteCapStatus;
             NvU8 bar1P2PReadCapStatus = *pP2PReadCapStatus;
+            NvU8 bar1P2PAtomicsCapStatus = NV0000_P2P_CAPS_STATUS_NOT_SUPPORTED;
 
             *pConnectivity = P2P_CONNECTIVITY_PCIE_PROPRIETARY;
 
             if (_kp2pCapsGetStatusOverPcieBar1(gpuMask, &bar1P2PWriteCapStatus,
-                    &bar1P2PReadCapStatus, bCommonSwitchFound) == NV_OK)
+                    &bar1P2PReadCapStatus, &bar1P2PAtomicsCapStatus, bCommonSwitchFound) == NV_OK)
             {
                 *pP2PWriteCapStatus = bar1P2PWriteCapStatus;
                 *pP2PReadCapStatus = bar1P2PReadCapStatus;
+                *pP2PAtomicsCapStatus = bar1P2PAtomicsCapStatus;
                 *pConnectivity = P2P_CONNECTIVITY_PCIE_BAR1;
             }
 
@@ -787,132 +858,6 @@ p2pGetCapsStatus
     }
 
     return NV_OK;
-}
-
-static NV_STATUS
-_removeP2PPeerGpuCapsByGpuId
-(
-    OBJGPU *pGpu,
-    NvU32 peerGpuId
-)
-{
-    GPU_P2P_PEER_GPU_CAPS *pLocalPeerCaps = NULL;
-
-    pLocalPeerCaps = gpuFindP2PPeerGpuCapsByGpuId(pGpu, peerGpuId);
-    NV_CHECK_OR_RETURN(LEVEL_WARNING, pLocalPeerCaps != NULL, NV_ERR_OBJECT_NOT_FOUND);
-
-    // Swap the target element with the last element and remove the last.
-    // pLocalPeerCaps points to an item in the pGpu->P2PPeerGpuCaps array.
-    NV_ASSERT(pGpu->P2PPeerGpuCount != 0);
-    pGpu->P2PPeerGpuCount--;
-
-    portMemMove(pLocalPeerCaps,
-                sizeof(GPU_P2P_PEER_GPU_CAPS),
-                &pGpu->P2PPeerGpuCaps[pGpu->P2PPeerGpuCount],
-                sizeof(GPU_P2P_PEER_GPU_CAPS));
-
-    return NV_OK;
-}
-
-NV_STATUS
-subdeviceCtrlCmdInternalSetP2pCaps_IMPL
-(
-    Subdevice *pSubdevice,
-    NV2080_CTRL_INTERNAL_SET_P2P_CAPS_PARAMS *pParams
-)
-{
-    NV_STATUS status = NV_OK;
-    NvU32 i;
-    NvU32 failingIndex;
-    OBJGPU *pGpu = gpumgrGetGpuFromSubDeviceInst(pSubdevice->deviceInst,
-                                                 pSubdevice->subDeviceInst);
-
-    // TODO: GPUSWSEC-1433 remove this check to enable this control for baremetal
-    if (!IS_VGPU_GSP_PLUGIN_OFFLOAD_ENABLED(pGpu))
-        return NV_ERR_NOT_SUPPORTED;
-
-    NV_CHECK_OR_RETURN(LEVEL_ERROR,
-                       pParams->peerGpuCount <= NV_ARRAY_ELEMENTS(pGpu->P2PPeerGpuCaps),
-                       NV_ERR_INVALID_ARGUMENT);
-
-    for (i = 0; i < pParams->peerGpuCount; i++)
-    {
-        NV2080_CTRL_INTERNAL_SET_P2P_CAPS_PEER_INFO *pParamsPeerInfo = &pParams->peerGpuInfos[i];
-        GPU_P2P_PEER_GPU_CAPS *pLocalPeerCaps = NULL;
-
-        // Try to find the existing entry
-        pLocalPeerCaps = gpuFindP2PPeerGpuCapsByGpuId(pGpu, pParamsPeerInfo->gpuId);
-
-        // If no entry has been found, add a new one instead
-        if (pLocalPeerCaps == NULL)
-        {
-            NV_CHECK_OR_ELSE(LEVEL_ERROR,
-                             pGpu->P2PPeerGpuCount < NV_ARRAY_ELEMENTS(pGpu->P2PPeerGpuCaps),
-                             status = NV_ERR_INSUFFICIENT_RESOURCES; goto fail);
-
-            pLocalPeerCaps = &pGpu->P2PPeerGpuCaps[pGpu->P2PPeerGpuCount];
-            pLocalPeerCaps->peerGpuId = pParamsPeerInfo->gpuId;
-
-            pGpu->P2PPeerGpuCount++;
-        }
-
-        pLocalPeerCaps->peerGpuInstance = pParamsPeerInfo->gpuInstance;
-        pLocalPeerCaps->p2pCaps = pParamsPeerInfo->p2pCaps;
-        pLocalPeerCaps->p2pOptimalReadCEs = pParamsPeerInfo->p2pOptimalReadCEs;
-        pLocalPeerCaps->p2pOptimalWriteCEs = pParamsPeerInfo->p2pOptimalWriteCEs;
-        pLocalPeerCaps->busPeerId = pParamsPeerInfo->busPeerId;
-
-        portMemCopy(pLocalPeerCaps->p2pCapsStatus,
-                    sizeof(pLocalPeerCaps->p2pCapsStatus),
-                    pParamsPeerInfo->p2pCapsStatus,
-                    sizeof(pParamsPeerInfo->p2pCapsStatus));
-    }
-
-    goto done;
-
-fail:
-    // Remove the successfully set caps
-    failingIndex = i;
-    for (i = 0; i < failingIndex; i++)
-    {
-        NV_STATUS ignoredStatus;
-        NV_CHECK_OK(ignoredStatus, LEVEL_ERROR,
-                    _removeP2PPeerGpuCapsByGpuId(pGpu, pParams->peerGpuInfos[i].gpuId));
-    }
-
-done:
-    return status;
-}
-
-NV_STATUS
-subdeviceCtrlCmdInternalRemoveP2pCaps_IMPL
-(
-    Subdevice *pSubdevice,
-    NV2080_CTRL_INTERNAL_REMOVE_P2P_CAPS_PARAMS *pParams
-)
-{
-    NV_STATUS status = NV_OK;
-    NvU32 i;
-    OBJGPU *pGpu = gpumgrGetGpuFromSubDeviceInst(pSubdevice->deviceInst,
-                                                 pSubdevice->subDeviceInst);
-
-    // TODO: GPUSWSEC-1433 remove this check to enable this control for baremetal
-    if (!IS_VGPU_GSP_PLUGIN_OFFLOAD_ENABLED(pGpu))
-        return NV_ERR_NOT_SUPPORTED;
-
-    NV_CHECK_OR_RETURN(LEVEL_ERROR,
-                       pParams->peerGpuIdCount <= NV_ARRAY_ELEMENTS(pGpu->P2PPeerGpuCaps),
-                       NV_ERR_INVALID_ARGUMENT);
-
-    for (i = 0; i < pParams->peerGpuIdCount; i++)
-    {
-        // Capture only the first error here, as trying to remove all caps
-        // is the best effort here.
-        NV_CHECK_OK_OR_CAPTURE_FIRST_ERROR(status, LEVEL_ERROR,
-                  _removeP2PPeerGpuCapsByGpuId(pGpu, pParams->peerGpuIds[i]));
-    }
-
-    return status;
 }
 
 static NV_STATUS
@@ -1065,6 +1010,7 @@ subdeviceCtrlCmdGetP2pCaps_IMPL
             pParamsPeerInfo->p2pOptimalReadCEs = 0;
             pParamsPeerInfo->p2pOptimalWriteCEs = 0;
             pParamsPeerInfo->busPeerId = NV0000_CTRL_SYSTEM_GET_P2P_CAPS_INVALID_PEER;
+            pParamsPeerInfo->busEgmPeerId = NV0000_CTRL_SYSTEM_GET_P2P_CAPS_INVALID_PEER;
 
             portMemSet(pParamsPeerInfo->p2pCapsStatus,
                        NV0000_P2P_CAPS_STATUS_NOT_SUPPORTED,
@@ -1076,6 +1022,7 @@ subdeviceCtrlCmdGetP2pCaps_IMPL
             pParamsPeerInfo->p2pOptimalReadCEs = pLocalPeerCaps->p2pOptimalReadCEs;
             pParamsPeerInfo->p2pOptimalWriteCEs = pLocalPeerCaps->p2pOptimalWriteCEs;
             pParamsPeerInfo->busPeerId = pLocalPeerCaps->busPeerId;
+            pParamsPeerInfo->busEgmPeerId = pLocalPeerCaps->busEgmPeerId;
 
             portMemCopy(pParamsPeerInfo->p2pCapsStatus,
                         sizeof(pParamsPeerInfo->p2pCapsStatus),

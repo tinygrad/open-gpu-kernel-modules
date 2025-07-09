@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2019-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2019-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -34,7 +34,7 @@ extern "C" {
 
 #        define LIBOS_LOG_TO_NVLOG 1
 
-#    define LIBOS_LOG_MAX_LOGS      5   // Max logs per GPU
+#    define LIBOS_LOG_MAX_LOGS      7   // Max logs per GPU
 
 #elif defined(LIBOS_LOG_OFFLINE_DECODER)
 #    include "nvlog_decoder.h"
@@ -42,7 +42,7 @@ extern "C" {
 #    define LIBOS_LOG_DECODE_ENABLE 1
 #    define LIBOS_LOG_TO_NVLOG      0
 
-#    define LIBOS_LOG_MAX_LOGS    160   // Max logs for all GPUs for offline decoder
+#    define LIBOS_LOG_MAX_LOGS    3840   // Max logs for all GPUs for offline decoder
 
 #else
 #    error "Need to define either NVRM or LIBOS_LOG_OFFLINE_DECODER."
@@ -88,18 +88,44 @@ ct_assert((LIBOS_LOG_DECODE_RECORD_BASE * sizeof(NvU64)) == (sizeof(LIBOS_LOG_DE
 
 #define ELF_SECTION_NAME_MAX   (32) // In bytes
 
+#define BUILD_ID_MAX_LENGTH 32
+
+typedef struct
+{
+    NvU32 gpuArch;
+    NvU32 gpuImpl;
+    NvU32 version;
+    NvU32 rsvd1;
+    char taskPrefix[TASK_NAME_MAX_LENGTH]; // Prefix string printed before each line.
+    NvU8 data[0];
+} LIBOS_LOG_NVLOG_BUFFER_V0;
+
 // NvLog buffer
 typedef struct
 {
     NvU32 gpuArch;
     NvU32 gpuImpl;
-    NvU32 rsvd1;
-    NvU32 rsvd2;
+    NvU32 version;
+    NvU32 buildIdLength;
     char taskPrefix[TASK_NAME_MAX_LENGTH]; // Prefix string printed before each line.
+    NvU64 localToGlobalTimerDelta;
+    NvU8 buildId[BUILD_ID_MAX_LENGTH];
     NvU8 data[0];
-} LIBOS_LOG_NVLOG_BUFFER;
+} LIBOS_LOG_NVLOG_BUFFER_V1;
+
+#define LIBOS_LOG_NVLOG_BUFFER_VERSION_0 0
+#define LIBOS_LOG_NVLOG_BUFFER_VERSION_1 1
+
+#define LIBOS_LOG_NVLOG_BUFFER_VERSION LIBOS_LOG_NVLOG_BUFFER_VERSION_1
+
+typedef LIBOS_LOG_NVLOG_BUFFER_V1 LIBOS_LOG_NVLOG_BUFFER;
 
 #define LIBOS_LOG_NVLOG_BUFFER_SIZE(dataSize) (NV_OFFSETOF(LIBOS_LOG_NVLOG_BUFFER, data) + (dataSize))
+
+// Flag to avoid nvlog buffer alloc when adding the libos log. This flag has no
+// impact if LIBOS_LOG_TO_NVLOG is not set.
+// The default value for this flag is 0
+#define LIBOS_LOG_DECODE_LOG_FLAG_NVLOG_DISABLED    0x1
 
 struct LIBOS_LOG_DECODE_LOG
 {
@@ -111,6 +137,8 @@ struct LIBOS_LOG_DECODE_LOG
     NvU32 gpuInstance;               // GPU that this log is associated with.
     char taskPrefix[TASK_NAME_MAX_LENGTH];     // Prefix string printed before each line.
     char elfSectionName[ELF_SECTION_NAME_MAX]; // Task section name in container logging ELF serving as ID.
+    NvU32 flags;
+    NvU64 localToGlobalTimerDelta;
 
 #if LIBOS_LOG_TO_NVLOG
     NvU32 hNvLogNoWrap;  // No wrap buffer captures first records.
@@ -165,8 +193,8 @@ void libosLogCreate(LIBOS_LOG_DECODE *logDecode);
 void libosLogCreateEx(LIBOS_LOG_DECODE *logDecode, const char *pSourceName);
 #endif
 
-void libosLogAddLogEx(LIBOS_LOG_DECODE *logDecode, void *buffer, NvU64 bufferSize, NvU32 gpuInstance, NvU32 gpuArch, NvU32 gpuImpl, const char *name, const char *elfSectionName);
-void libosLogAddLog(LIBOS_LOG_DECODE *logDecode, void *buffer, NvU64 bufferSize, NvU32 gpuInstance, const char *name, const char *elfSectionName);
+void libosLogAddLogEx(LIBOS_LOG_DECODE *logDecode, void *buffer, NvU64 bufferSize, NvU32 gpuInstance, NvU32 gpuArch, NvU32 gpuImpl, const char *name, const char *elfSectionName, NvU32 libosLogFlags, void *buildId);
+void libosLogAddLog(LIBOS_LOG_DECODE *logDecode, void *buffer, NvU64 bufferSize, NvU32 gpuInstance, const char *name, const char *elfSectionName, NvU32 libosLogFlags);
 
 #if LIBOS_LOG_DECODE_ENABLE
 void libosLogInit(LIBOS_LOG_DECODE *logDecode, LibosElf64Header *elf, NvU64 elfSize);
@@ -180,13 +208,22 @@ void libosLogInitEx(
     NvBool bDecodeStrFmt, NvU64 elfSize);
 #endif // LIBOS_LOG_DECODE_ENABLE
 
-NvBool libosLogSymbolicateAddress(LIBOS_LOG_DECODE *logDecode, char *decodedLine, NvLength decodedLineSize, NvUPtr addr);
+void libosLogUpdateTimerDelta(LIBOS_LOG_DECODE *logDecode, NvU64 localToGlobalTimerDelta);
+
+NvBool libosLogSymbolicateAddress(LIBOS_LOG_DECODE *logDecode, char *decodedLine, NvLength decodedLineSize, NvUPtr addr, NvBool bPrintDirectory);
 
 void libosLogDestroy(LIBOS_LOG_DECODE *logDecode);
 
 void libosExtractLogs(LIBOS_LOG_DECODE *logDecode, NvBool bSyncNvLog);
 
 void libosPreserveLogs(LIBOS_LOG_DECODE *pLogDecode);
+NvBool isLibosPreserveLogBufferFull(LIBOS_LOG_DECODE *pLogDecode, NvU32 gpuInstance);
+
+void *libosLogGetDataPointer(LIBOS_LOG_NVLOG_BUFFER *pLibosBuf);
+
+NvU32 libosLogGetDataSize(LIBOS_LOG_NVLOG_BUFFER *pLibosBuf, NVLOG_BUFFER *pBuffer);
+
+NvU32 libosLogGetDataOffset(LIBOS_LOG_NVLOG_BUFFER *pLibosBuf);
 
 #ifdef __cplusplus
 }

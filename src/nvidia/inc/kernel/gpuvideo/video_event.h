@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2020-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2020-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -94,8 +94,7 @@ typedef enum
 } VIDEO_ENGINE_EVENT_ID;
 
 /*!
-* Defines types of the log data of video events if VIDEO_ENGINE_EVENT__LOG_DATA_MAGIC present
-* as first DWORD of log data.
+* Defines types of the log data of video events
 */
 typedef enum
 {
@@ -143,18 +142,9 @@ typedef struct
 {
     NvU8     engine_type;
     NvU8     engine_id;
-    NvU16    codec_id;
+    NvU16    type;              /* VIDEO_ENGINE_EVENT_LOG_DATA_TYPE */
     NvU32    size;              /* size of data being logged in NvU32 */
 } VIDEO_ENGINE_EVENT__LOG_DATA;
-
-#define VIDEO_ENGINE_EVENT__LOG_DATA_MAGIC  RM_VIDEO_TRACE_EVENT_MAGIC_HI
-
-typedef struct
-{
-    NvU32   magic;
-    VIDEO_ENGINE_EVENT_LOG_DATA_TYPE type;
-    NvU32   data[];
-} VIDEO_ENGINE_EVENT__LOG_DATA_HDR;
 
 /*!
 * Defines the struct for a full trace record contains various event structs.
@@ -199,6 +189,10 @@ typedef struct
 } VIDEO_ENGINE_EVENT__RECORD;
 
 #define VIDEO_ENGINE_EVENT__LOG_DATA_SIZE(s) (sizeof(VIDEO_ENGINE_EVENT__RECORD) + s.event_log_data.size)
+
+#define VIDEO_ENGINE_EVENT__TRACE_ADDR__OFFSET_LO  (0xF90UL)
+#define VIDEO_ENGINE_EVENT__TRACE_ADDR__OFFSET_HI  (0xF94UL)
+#define VIDEO_ENGINE_EVENT__TRACE_ADDR__MEM_TARGET (0xF98UL)
 
 /*!
 * Client information passing down by RM and saved at offset VIDEO_ENGINE_EVENT__LOG_INFO__OFFSET

@@ -23,7 +23,7 @@
 
 
 #include "diagnostics/gpu_acct.h"
-#include "objtmr.h"
+#include "gpu/timer/objtmr.h"
 #include "kernel/gpu/mig_mgr/kernel_mig_manager.h"
 #include "containers/map.h"
 #include "containers/list.h"
@@ -262,6 +262,7 @@ gpuacctAllocProcEntry
 out:
     if (status != NV_OK)
     {
+        portMemSet(pEntry, 0, sizeof(GPUACCT_PROC_ENTRY));
         portMemFree(pEntry);
     }
     return status;
@@ -287,6 +288,7 @@ gpuacctFreeProcEntry
 
     NV_ASSERT_OR_RETURN(status == NV_OK, status);
 
+    portMemSet(pEntry, 0, sizeof(GPUACCT_PROC_ENTRY));
     portMemFree(pEntry);
 
     return NV_OK;
@@ -869,6 +871,7 @@ gpuacctStopGpuAccounting_IMPL
         status = gpuacctAddProcEntry(pDeadDS, pEntry, NV_FALSE);
         if (status != NV_OK)
         {
+            portMemSet(pEntry, 0, sizeof(GPUACCT_PROC_ENTRY));
             portMemFree(pEntry);
             return status;
         }
@@ -1264,6 +1267,12 @@ gpuacctGetAcctPids_IMPL
 
     if (vmIndex == NV_INVALID_VM_INDEX)
     {
+        // Skip dead info if the requester is not from root namespace.
+        if (osIsInitNs() != NV_TRUE)
+        {
+            goto addLiveProc;
+        }
+
         pList = &pGpuInstanceInfo->deadProcAcctInfo.procList;
     }
     else
@@ -1282,6 +1291,7 @@ gpuacctGetAcctPids_IMPL
         }
     }
 
+addLiveProc:
     if (vmIndex == NV_INVALID_VM_INDEX)
     {
         pList = &pGpuInstanceInfo->liveProcAcctInfo.procList;

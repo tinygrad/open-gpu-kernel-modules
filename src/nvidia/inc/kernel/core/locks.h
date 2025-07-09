@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -106,14 +106,12 @@ typedef struct
 #define GPUS_LOCK_FLAGS_NONE                            (0x00000000)
 // conditional acquire; if lock is already held then return error
 #define GPU_LOCK_FLAGS_COND_ACQUIRE                     NVBIT(0)
-// acquire the lock in read (shared) mode, if applicable
-#define GPU_LOCK_FLAGS_READ                             NVBIT(1)
 // Attempt acquire even if it potentially violates the locking order
 // But do not block in a way that could cause a deadlock
-#define GPU_LOCK_FLAGS_SAFE_LOCK_UPGRADE                NVBIT(2)
+#define GPU_LOCK_FLAGS_SAFE_LOCK_UPGRADE                NVBIT(1)
 // Additionally acquire the GPU alloc lock (implied if locking all GPUs)
 // to prevent the set of lockable GPUs from changing
-#define GPU_LOCK_FLAGS_LOCK_ALLOC                       NVBIT(3)
+#define GPU_LOCK_FLAGS_LOCK_ALLOC                       NVBIT(2)
 
 //
 // RM Lock Related Functions
@@ -167,24 +165,21 @@ NvBool     rmGpuLockIsHidden(OBJGPU *);
 NV_STATUS  rmGpuLockSetOwner(OS_THREAD_HANDLE);
 void       rmGpuLockGetTimes(NV0000_CTRL_SYSTEM_GET_LOCK_TIMES_PARAMS *);
 NV_STATUS  rmGpuGroupLockAcquire(NvU32, GPU_LOCK_GRP_ID, NvU32, NvU32, GPU_MASK *);
-NV_STATUS  rmGpuGroupLockRelease(GPU_MASK, NvU32);
+void       rmGpuGroupLockRelease(GPU_MASK, NvU32);
 NvBool     rmGpuGroupLockIsOwner(NvU32, GPU_LOCK_GRP_ID, GPU_MASK*);
 
 NvBool     rmDeviceGpuLockIsOwner(NvU32);
 NV_STATUS  rmDeviceGpuLockSetOwner(OBJGPU *, OS_THREAD_HANDLE);
 NV_STATUS  rmDeviceGpuLocksAcquire(OBJGPU *, NvU32, NvU32);
 NvU32      rmDeviceGpuLocksRelease(OBJGPU *, NvU32, OBJGPU *);
+NvU32      rmDeviceGpuLocksReleaseAndThreadStateFreeDeferredIntHandlerOptimized(OBJGPU *, NvU32, OBJGPU *);
+
 
 NV_STATUS  rmIntrMaskLockAlloc(NvU32 gpuInst);
 void       rmIntrMaskLockFree(NvU32 gpuInst);
 /// @note The return value is always zero, not the actual IRQL
 NvU64      rmIntrMaskLockAcquire(OBJGPU *pGpu);
 void       rmIntrMaskLockRelease(OBJGPU *pGpu, NvU64 oldIrql);
-
-// wrappers for handling lock-related NV_ASSERT_OR_RETURNs
-#define LOCK_ASSERT_AND_RETURN(cond)                    NV_ASSERT_OR_ELSE_STR((cond), #cond, return NV_ERR_INVALID_LOCK_STATE)
-#define IRQL_ASSERT_AND_RETURN(cond)                    NV_ASSERT_OR_ELSE_STR((cond), #cond, return NV_ERR_INVALID_IRQ_LEVEL)
-#define LOCK_ASSERT_AND_RETURN_BOOL(cond, bRet)         NV_ASSERT_OR_ELSE_STR((cond), #cond, return (bRet))
 
 #define LOCK_METER_OP(f,l,t,d0,d1,d2)
 #define LOCK_METER_DATA(t,d0,d1,d2)

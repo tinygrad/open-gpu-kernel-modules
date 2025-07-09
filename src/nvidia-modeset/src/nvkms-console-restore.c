@@ -187,8 +187,12 @@ static void FlipBaseToNull(NVDevEvoPtr pDevEvo)
                 pRequestApiHead->layer[layer].hdr.specified = TRUE;
 
                 pRequestApiHead->layer[layer].colorSpace.val =
-                    NVKMS_INPUT_COLORSPACE_NONE;
+                    NVKMS_INPUT_COLOR_SPACE_NONE;
                 pRequestApiHead->layer[layer].colorSpace.specified = TRUE;
+
+                pRequestApiHead->layer[layer].tf.val =
+                    NVKMS_INPUT_TF_LINEAR;
+                pRequestApiHead->layer[layer].tf.specified = TRUE;
             }
         }
     }
@@ -197,7 +201,6 @@ static void FlipBaseToNull(NVDevEvoPtr pDevEvo)
                     pFlipApiHead,
                     numFlipApiHeads,
                     TRUE  /* commit */,
-                    FALSE /* allowVrr */,
                     NULL  /* pReply */,
                     FALSE /* skipUpdate */,
                     FALSE /* allowFlipLock */);
@@ -244,6 +247,8 @@ static NvU32 PickApiHead(const NVDpyEvoRec *pDpyEvo,
     const NvU32 activeApiHeadsMask =
         GetActiveApiHeadMask(pDpyEvo->pDispEvo);
 
+    NvU32 head;
+
     if (possibleApiHeads == 0) {
         return NV_INVALID_HEAD;
     }
@@ -254,11 +259,17 @@ static NvU32 PickApiHead(const NVDpyEvoRec *pDpyEvo,
     }
 
     if ((possibleApiHeads & ~activeApiHeadsMask) != 0x0) {
-        return BIT_IDX_32(LOWESTBIT(possibleApiHeads &
-            ~activeApiHeadsMask));
+        head = BIT_IDX_32(LOWESTBIT(possibleApiHeads &
+                                    ~activeApiHeadsMask));
+    } else {
+        head = BIT_IDX_32(LOWESTBIT(possibleApiHeads));
     }
-
-    return BIT_IDX_32(LOWESTBIT(possibleApiHeads));
+    
+    if (head >= NV_MAX_HEADS) {
+        return NV_INVALID_HEAD;
+    }
+    
+    return head;
 }
 
 static NvBool InitModeOneHeadRequest(

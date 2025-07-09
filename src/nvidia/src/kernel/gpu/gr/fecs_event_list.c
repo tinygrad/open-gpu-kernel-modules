@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2018-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2018-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -43,9 +43,9 @@
 #include "kernel/gpu/mem_mgr/mem_mgr.h"
 #include "kernel/gpu/fifo/kernel_channel.h"
 #include "kernel/gpu/subdevice/subdevice.h"
+#include "kernel/gpu/timer/objtmr.h"
 #include "kernel/virtualization/hypervisor/hypervisor.h"
 #include "rmapi/client.h"
-#include "objtmr.h"
 #include "vgpu/sdk-structures.h"
 
 #include "class/cl90cdtypes.h"
@@ -665,7 +665,7 @@ fecsCtxswLoggingInit
         return NV_ERR_NO_MEMORY;
     portMemSet(pFecsTraceInfo, 0, sizeof(*pFecsTraceInfo));
 
-    osGetCurrentTick(&seed);
+    seed = osGetCurrentTick();
     pFecsTraceInfo->pFecsLogPrng = portCryptoPseudoRandomGeneratorCreate(seed);
 
     *ppFecsTraceInfo = pFecsTraceInfo;
@@ -849,7 +849,7 @@ _fecsTimerCallback
 
         if (fecsBufferChanged(pGpu, pKernelGraphics) && _fecsSignalCallbackScheduled(pFecsGlobalTraceInfo))
         {
-            NV_CHECK_OK(status, LEVEL_ERROR, osQueueWorkItemWithFlags(pGpu, _fecsOsWorkItem, NULL, OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_DEVICE_RW));
+            NV_CHECK_OK(status, LEVEL_ERROR, osQueueWorkItemWithFlags(pGpu, _fecsOsWorkItem, NULL, OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_DEVICE));
 
             if (status != NV_OK)
                 _fecsClearCallbackScheduled(pFecsGlobalTraceInfo);
@@ -906,10 +906,44 @@ _fecsTimerDestroy
     {
         OBJTMR *pTmr = GPU_GET_TIMER(pGpu);
 
-        tmrEventCancel(pTmr, pFecsGlobalTraceInfo->pFecsTimerEvent);
         tmrEventDestroy(pTmr, pFecsGlobalTraceInfo->pFecsTimerEvent);
         pFecsGlobalTraceInfo->pFecsTimerEvent = NULL;
     }
+}
+
+NV_STATUS
+fecsHandleFecsLoggingError
+(
+    OBJGPU *pGpu,
+    NvU32 grIdx,
+    FECS_ERROR_EVENT_TYPE errorType
+)
+{
+    KernelGraphics *pKernelGraphics = GPU_GET_KERNEL_GRAPHICS(pGpu, grIdx);
+    NV_STATUS status = NV_OK;
+
+    switch (errorType)
+    {
+        case FECS_ERROR_EVENT_TYPE_BUFFER_RESET_REQUIRED:
+        {
+            fecsBufferDisableHw(pGpu, pKernelGraphics);
+            kgraphicsSetCtxswLoggingEnabled(pGpu, pKernelGraphics, NV_FALSE);
+            fecsBufferReset(pGpu, pKernelGraphics);
+            break;
+        }
+        case FECS_ERROR_EVENT_TYPE_BUFFER_FULL:
+        {
+            nvEventBufferFecsCallback(pGpu, pKernelGraphics);
+            break;
+        }
+        default:
+        {
+            status = NV_ERR_INVALID_ARGUMENT;
+            break;
+        }
+    }
+
+    return status;
 }
 
 /**
@@ -1052,29 +1086,8 @@ nvEventBufferFecsCallback
 
         if (pFecsTraceInfo->fecsTraceCounter > 0)
         {
-            NvHandle hClient;
-            NvHandle hSubdevice;
-            NV2080_CTRL_INTERNAL_GR_SET_FECS_TRACE_RD_OFFSET_PARAMS params;
+            kgraphicsSetFecsTraceRdOffset_HAL(pGpu, pKernelGraphics, fecsReadOffset);
 
-            params.offset = fecsReadOffset;
-            NV_ASSERT_OK_OR_ELSE(
-                status,
-                _fecsLoadInternalRoutingInfo(pGpu,
-                                             pKernelGraphics,
-                                             &hClient,
-                                             &hSubdevice,
-                                             &params.grRouteInfo),
-                return);
-
-            NV_ASSERT_OK_OR_ELSE(
-                status,
-                pRmApi->Control(pRmApi,
-                                hClient,
-                                hSubdevice,
-                                NV2080_CTRL_CMD_INTERNAL_GR_SET_FECS_TRACE_RD_OFFSET,
-                                &params,
-                                sizeof(params)),
-                return);
             pFecsTraceInfo->fecsTraceCounter = 0;
         }
         pFecsTraceInfo->fecsTraceRdOffset = fecsReadOffset;
@@ -1135,7 +1148,8 @@ fecsAddBindpoint
     bSelectLOD = NV_TRUE;
 #endif
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmDeviceGpuLockIsOwner(pGpu->gpuInstance));
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmDeviceGpuLockIsOwner(pGpu->gpuInstance),
+        NV_ERR_INVALID_LOCK_STATE);
 
     // Early bail-out if profiling capability is not enabled on vGPU
     if (IS_VIRTUAL(pGpu))
@@ -1153,7 +1167,7 @@ fecsAddBindpoint
     // On a hypervisor or VM: bail-out early if admin is required
     if (IS_VIRTUAL(pGpu) || hypervisorIsVgxHyper())
     {
-        if (pGpu->bRmProfilingPrivileged && !bAdmin)
+        if (pGpu->bRmProfilingPrivileged && !(bAdmin || osCheckAccess(RS_ACCESS_PERFMON)))
         {
             if (pReasonCode != NULL)
                 *pReasonCode = NV2080_CTRL_GR_FECS_BIND_REASON_CODE_NEED_ADMIN;
@@ -1388,6 +1402,33 @@ fecsRemoveBindpoint
 }
 
 void
+fecsRemoveAllBindpointsForGpu
+(
+    OBJGPU *pGpu
+)
+{
+    KernelGraphicsManager *pKernelGraphicsManager = GPU_GET_KERNEL_GRAPHICS_MANAGER(pGpu);
+    KGRMGR_FECS_GLOBAL_TRACE_INFO *pFecsGlobalTraceInfo = kgrmgrGetFecsGlobalTraceInfo(pGpu, pKernelGraphicsManager);
+    FecsEventBufferBindMultiMapSupermapIter iter;
+
+    NV_CHECK_OR_RETURN_VOID(LEVEL_SILENT, pFecsGlobalTraceInfo != NULL);
+
+    iter = multimapSubmapIterAll(&pFecsGlobalTraceInfo->fecsEventBufferBindingsUid);
+    while (multimapSubmapIterNext(&iter))
+    {
+        FecsEventBufferBindMultiMapSubmap *pSubmap = iter.pValue;
+        FecsEventBufferBindMultiMapIter subIter = multimapSubmapIterItems(&pFecsGlobalTraceInfo->fecsEventBufferBindingsUid, pSubmap);
+        NvU64 uid = mapKey_IMPL(iter.iter.pMap, pSubmap);
+
+        while (multimapItemIterNext(&subIter))
+        {
+            NV_EVENT_BUFFER_BIND_POINT_FECS *pBind = subIter.pValue;
+            fecsRemoveBindpoint(pGpu, uid, pBind);
+        }
+    }
+}
+
+void
 fecsRemoveAllBindpoints
 (
     EventBuffer *pEventBuffer
@@ -1546,31 +1587,29 @@ fecsBufferDisableHw
                                      &getHwEnableParams.grRouteInfo),
         return);
 
-    NV_ASSERT_OK_OR_ELSE(
-        status,
-        pRmApi->Control(pRmApi,
-                        hClient,
-                        hSubdevice,
-                        NV2080_CTRL_CMD_INTERNAL_GR_GET_FECS_TRACE_HW_ENABLE,
-                        &getHwEnableParams,
-                        sizeof(getHwEnableParams)),
-        return);
-
+    status = pRmApi->Control(pRmApi,
+                             hClient,
+                             hSubdevice,
+                             NV2080_CTRL_CMD_INTERNAL_GR_GET_FECS_TRACE_HW_ENABLE,
+                             &getHwEnableParams,
+                             sizeof(getHwEnableParams));
+    NV_ASSERT_OR_RETURN_VOID((status == NV_OK) || (status == NV_ERR_GPU_IN_FULLCHIP_RESET));
+    if (status == NV_ERR_GPU_IN_FULLCHIP_RESET)
+        return;
+ 
     if (getHwEnableParams.bEnable)
     {
         // Copy previously loaded routing info
         setHwEnableParams.grRouteInfo = getHwEnableParams.grRouteInfo;
         setHwEnableParams.bEnable = NV_FALSE;
 
-        NV_ASSERT_OK_OR_ELSE(
-            status,
-            pRmApi->Control(pRmApi,
-                            hClient,
-                            hSubdevice,
-                            NV2080_CTRL_CMD_INTERNAL_GR_SET_FECS_TRACE_HW_ENABLE,
-                            &setHwEnableParams,
-                            sizeof(setHwEnableParams)),
-            return);
+        status = pRmApi->Control(pRmApi,
+                                 hClient,
+                                 hSubdevice,
+                                 NV2080_CTRL_CMD_INTERNAL_GR_SET_FECS_TRACE_HW_ENABLE,
+                                 &setHwEnableParams,
+                                 sizeof(setHwEnableParams));
+        NV_ASSERT_OR_RETURN_VOID((status == NV_OK) || (status == NV_ERR_GPU_IN_FULLCHIP_RESET));
     }
 }
 
@@ -1610,7 +1649,6 @@ fecsBufferMap
     NvU8 *pFecsBufferMapping = NULL;
     NV_STATUS status;
     KGRAPHICS_FECS_TRACE_INFO *pFecsTraceInfo = kgraphicsGetFecsTraceInfo(pGpu, pKernelGraphics);
-    TRANSFER_SURFACE surf = {0};
     MemoryManager *pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
 
     NV_ASSERT_OR_RETURN(pFecsTraceInfo != NULL, NV_ERR_INVALID_STATE);
@@ -1625,13 +1663,9 @@ fecsBufferMap
     if ((status != NV_OK) || (pFecsMemDesc == NULL))
         return NV_ERR_INVALID_STATE;
 
-    surf.pMemDesc = pFecsMemDesc;
-    surf.offset = 0;
-
-    pFecsBufferMapping = memmgrMemBeginTransfer(pMemoryManager, &surf, 
-                                                memdescGetSize(pFecsMemDesc),
-                                                TRANSFER_FLAGS_PREFER_PROCESSOR |
-                                                TRANSFER_FLAGS_PERSISTENT_CPU_MAPPING);
+    pFecsBufferMapping = memmgrMemDescBeginTransfer(pMemoryManager, pFecsMemDesc,
+                                                    TRANSFER_FLAGS_PREFER_PROCESSOR |
+                                                    TRANSFER_FLAGS_PERSISTENT_CPU_MAPPING);
     if (pFecsBufferMapping == NULL)
         return NV_ERR_INSUFFICIENT_RESOURCES;
 
@@ -1650,7 +1684,6 @@ fecsBufferUnmap
     MEMORY_DESCRIPTOR *pFecsMemDesc = NULL;
     NV_STATUS status;
     KGRAPHICS_FECS_TRACE_INFO *pFecsTraceInfo = kgraphicsGetFecsTraceInfo(pGpu, pKernelGraphics);
-    TRANSFER_SURFACE surf = {0};
     MemoryManager *pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
 
     NV_ASSERT_OR_RETURN_VOID(pFecsTraceInfo != NULL);
@@ -1662,15 +1695,11 @@ fecsBufferUnmap
     if ((status != NV_OK) || (pFecsMemDesc == NULL))
         return;
 
-    surf.pMemDesc = pFecsMemDesc;
-    surf.offset = 0;
-
     if (pFecsTraceInfo->pFecsBufferMapping != NULL)
     {
-        memmgrMemEndTransfer(pMemoryManager, &surf,
-                             memdescGetSize(pFecsMemDesc),
-                             TRANSFER_FLAGS_PREFER_PROCESSOR |
-                             TRANSFER_FLAGS_PERSISTENT_CPU_MAPPING);
+        memmgrMemDescEndTransfer(pMemoryManager, pFecsMemDesc,
+                                 TRANSFER_FLAGS_PREFER_PROCESSOR |
+                                 TRANSFER_FLAGS_PERSISTENT_CPU_MAPPING);
 
         pFecsTraceInfo->pFecsBufferMapping = NULL;
     }

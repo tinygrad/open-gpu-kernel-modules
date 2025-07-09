@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -41,6 +41,41 @@ NvU64
 kgmmuGetBigPageSize_GM107(KernelGmmu *pKernelGmmu)
 {
     return pKernelGmmu->defaultBigPageSize;
+}
+
+NV_STATUS
+kgmmuCommitInvalidateTlbTest_GM107
+(
+    OBJGPU                              *pGpu,
+    KernelGmmu                          *pKernelGmmu,
+    COMMIT_TLB_INVALIDATE_TEST_PARAMS   *pTestParams
+)
+{
+    TLB_INVALIDATE_PARAMS params;
+    NvU32 regVal = 0;
+
+    if (pTestParams->invalidateAll != NV_TRUE)
+    {
+        return NV_ERR_NOT_SUPPORTED;
+    }
+
+    portMemSet(&params, 0, sizeof(TLB_INVALIDATE_PARAMS));
+    params.gfid = pTestParams->gfid;
+    gpuSetTimeout(pGpu, GPU_TIMEOUT_DEFAULT, &params.timeout,
+                  GPU_TIMEOUT_FLAGS_BYPASS_THREAD_STATE |
+                  GPU_TIMEOUT_FLAGS_DEFAULT | GPU_TIMEOUT_FLAGS_BYPASS_CPU_YIELD);
+
+    NV_ASSERT_OK_OR_RETURN(kgmmuCheckPendingInvalidates_HAL(pGpu, pKernelGmmu,
+                                                            &params.timeout));
+
+    // Invalidate all VA and PDB
+    regVal = DRF_DEF(_PFB_PRI, _MMU_INVALIDATE, _ALL_VA, _TRUE) |
+             DRF_DEF(_PFB_PRI, _MMU_INVALIDATE, _ALL_PDB, _TRUE) |
+             DRF_DEF(_PFB_PRI, _MMU_INVALIDATE, _TRIGGER, _TRUE);
+
+    params.regVal = regVal;
+
+    return kgmmuCommitTlbInvalidate_HAL(pGpu, pKernelGmmu, &params);
 }
 
 /*!
@@ -138,7 +173,7 @@ kgmmuInvalidateTlb_GM107
         // Set the GFID.
         params.gfid = gfid;
 
-        status = kgmmuCheckPendingInvalidates_HAL(pGpu, pKernelGmmu, &params.timeout, params.gfid);
+        status = kgmmuCheckPendingInvalidates_HAL(pGpu, pKernelGmmu, &params.timeout);
         if (status != NV_OK)
         {
            return;
@@ -270,9 +305,6 @@ kgmmuDetermineMaxVASize_GM107
 /*
  * @brief Checks the system memory address against the PA capabilities of the
  *        GMMU.
- *
- * This will account for the DMA window, if applicable, and strip out any bits
- * that won't fit in the format (since the DMA window will be handling those).
  */
 void
 kgmmuEncodeSysmemAddrs_GM107
@@ -289,15 +321,8 @@ kgmmuEncodeSysmemAddrs_GM107
     for (i = 0; i < count; ++i)
     {
         NvU64 address = pAddresses[i];
-        NvU64 addressAdjusted = address;
 
-        NV_ASSERT(address >= pKernelGmmu->sysmemBaseAddress);
-        NV_ASSERT(address <= pKernelGmmu->sysmemBaseAddress + (NVBIT64(paWidth) - 1));
-
-        addressAdjusted &= (NVBIT64(paWidth) - 1);
-        NV_ASSERT(addressAdjusted == (address - pKernelGmmu->sysmemBaseAddress));
-
-        pAddresses[i] = addressAdjusted;
+        NV_ASSERT(address <= (NVBIT64(paWidth) - 1));
     }
 }
 

@@ -1,6 +1,15 @@
+
 #ifndef _G_DISP_INST_MEM_NVOC_H_
 #define _G_DISP_INST_MEM_NVOC_H_
+
+// Version of generated metadata structures
+#ifdef NVOC_METADATA_VERSION
+#undef NVOC_METADATA_VERSION
+#endif
+#define NVOC_METADATA_VERSION 2
+
 #include "nvoc/runtime.h"
+#include "nvoc/rtti.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -29,6 +38,7 @@ extern "C" {
  * DEALINGS IN THE SOFTWARE.
  */
 
+#pragma once
 #include "g_disp_inst_mem_nvoc.h"
 
 #ifndef DISPLAY_INSTANCE_MEMORY_H
@@ -43,6 +53,7 @@ extern "C" {
 
 /* ------------------------ Forward Declaration ---------------------------- */
 typedef struct OBJEHEAP OBJEHEAP;
+
 struct DispChannel;
 
 #ifndef __NVOC_CLASS_DispChannel_TYPEDEF__
@@ -53,6 +64,7 @@ typedef struct DispChannel DispChannel;
 #ifndef __nvoc_class_id_DispChannel
 #define __nvoc_class_id_DispChannel 0xbd2ff3
 #endif /* __nvoc_class_id_DispChannel */
+
 
 
 struct ContextDma;
@@ -92,18 +104,37 @@ typedef struct
 #define PRIVATE_FIELD(x) NVOC_PRIVATE_FIELD(x)
 #endif
 
+
+// Metadata with per-class RTTI with ancestor(s)
+struct NVOC_METADATA__DisplayInstanceMemory;
+struct NVOC_METADATA__Object;
+
+
 struct DisplayInstanceMemory {
-    const struct NVOC_RTTI *__nvoc_rtti;
+
+    // Metadata starts with RTTI structure.
+    union {
+         const struct NVOC_METADATA__DisplayInstanceMemory *__nvoc_metadata_ptr;
+         const struct NVOC_RTTI *__nvoc_rtti;
+    };
+
+    // Parent (i.e. superclass or base class) objects
     struct Object __nvoc_base_Object;
-    struct Object *__nvoc_pbase_Object;
-    struct DisplayInstanceMemory *__nvoc_pbase_DisplayInstanceMemory;
-    void (*__instmemGetSize__)(OBJGPU *, struct DisplayInstanceMemory *, NvU32 *, NvU32 *);
-    NvU32 (*__instmemGetHashTableBaseAddr__)(OBJGPU *, struct DisplayInstanceMemory *);
-    NvBool (*__instmemIsValid__)(OBJGPU *, struct DisplayInstanceMemory *, NvU32);
-    NvU32 (*__instmemGenerateHashTableData__)(OBJGPU *, struct DisplayInstanceMemory *, NvU32, NvU32, NvU32);
-    NV_STATUS (*__instmemHashFunc__)(OBJGPU *, struct DisplayInstanceMemory *, NvHandle, NvHandle, NvU32, NvU32 *);
-    NV_STATUS (*__instmemCommitContextDma__)(OBJGPU *, struct DisplayInstanceMemory *, struct ContextDma *);
-    NV_STATUS (*__instmemUpdateContextDma__)(OBJGPU *, struct DisplayInstanceMemory *, struct ContextDma *, NvU64 *, NvU64 *, NvHandle, NvU32);
+
+    // Ancestor object pointers for `staticCast` feature
+    struct Object *__nvoc_pbase_Object;    // obj super
+    struct DisplayInstanceMemory *__nvoc_pbase_DisplayInstanceMemory;    // instmem
+
+    // Vtable with 7 per-object function pointers
+    void (*__instmemGetSize__)(OBJGPU *, struct DisplayInstanceMemory * /*this*/, NvU32 *, NvU32 *);  // halified (2 hals) body
+    NvU32 (*__instmemGetHashTableBaseAddr__)(OBJGPU *, struct DisplayInstanceMemory * /*this*/);  // halified (2 hals) body
+    NvBool (*__instmemIsValid__)(OBJGPU *, struct DisplayInstanceMemory * /*this*/, NvU32);  // halified (2 hals) body
+    NvU32 (*__instmemGenerateHashTableData__)(OBJGPU *, struct DisplayInstanceMemory * /*this*/, NvU32, NvU32, NvU32);  // halified (2 hals) body
+    NV_STATUS (*__instmemHashFunc__)(OBJGPU *, struct DisplayInstanceMemory * /*this*/, NvHandle, NvHandle, NvU32, NvU32 *);  // halified (2 hals) body
+    NV_STATUS (*__instmemCommitContextDma__)(OBJGPU *, struct DisplayInstanceMemory * /*this*/, struct ContextDma *);  // halified (2 hals) body
+    NV_STATUS (*__instmemUpdateContextDma__)(OBJGPU *, struct DisplayInstanceMemory * /*this*/, struct ContextDma *, NvU64 *, NvU64 *, NvHandle, NvU32);  // halified (2 hals) body
+
+    // Data members
     NV_ADDRESS_SPACE instMemAddrSpace;
     NvU32 instMemAttr;
     NvU64 instMemBase;
@@ -117,6 +148,13 @@ struct DisplayInstanceMemory {
     OBJEHEAP *pInstHeap;
 };
 
+
+// Metadata with per-class RTTI with ancestor(s)
+struct NVOC_METADATA__DisplayInstanceMemory {
+    const struct NVOC_RTTI rtti;
+    const struct NVOC_METADATA__Object metadata__Object;
+};
+
 #ifndef __NVOC_CLASS_DisplayInstanceMemory_TYPEDEF__
 #define __NVOC_CLASS_DisplayInstanceMemory_TYPEDEF__
 typedef struct DisplayInstanceMemory DisplayInstanceMemory;
@@ -126,18 +164,18 @@ typedef struct DisplayInstanceMemory DisplayInstanceMemory;
 #define __nvoc_class_id_DisplayInstanceMemory 0x8223e2
 #endif /* __nvoc_class_id_DisplayInstanceMemory */
 
+// Casting support
 extern const struct NVOC_CLASS_DEF __nvoc_class_def_DisplayInstanceMemory;
 
 #define __staticCast_DisplayInstanceMemory(pThis) \
     ((pThis)->__nvoc_pbase_DisplayInstanceMemory)
 
 #ifdef __nvoc_disp_inst_mem_h_disabled
-#define __dynamicCast_DisplayInstanceMemory(pThis) ((DisplayInstanceMemory*)NULL)
+#define __dynamicCast_DisplayInstanceMemory(pThis) ((DisplayInstanceMemory*) NULL)
 #else //__nvoc_disp_inst_mem_h_disabled
 #define __dynamicCast_DisplayInstanceMemory(pThis) \
-    ((DisplayInstanceMemory*)__nvoc_dynamicCast(staticCast((pThis), Dynamic), classInfo(DisplayInstanceMemory)))
+    ((DisplayInstanceMemory*) __nvoc_dynamicCast(staticCast((pThis), Dynamic), classInfo(DisplayInstanceMemory)))
 #endif //__nvoc_disp_inst_mem_h_disabled
-
 
 NV_STATUS __nvoc_objCreateDynamic_DisplayInstanceMemory(DisplayInstanceMemory**, Dynamic*, NvU32, va_list);
 
@@ -145,20 +183,59 @@ NV_STATUS __nvoc_objCreate_DisplayInstanceMemory(DisplayInstanceMemory**, Dynami
 #define __objCreate_DisplayInstanceMemory(ppNewObj, pParent, createFlags) \
     __nvoc_objCreate_DisplayInstanceMemory((ppNewObj), staticCast((pParent), Dynamic), (createFlags))
 
+
+// Wrapper macros
+#define instmemGetSize_FNPTR(pInstMem) pInstMem->__instmemGetSize__
 #define instmemGetSize(pGpu, pInstMem, pTotalInstMemSize, pHashTableSize) instmemGetSize_DISPATCH(pGpu, pInstMem, pTotalInstMemSize, pHashTableSize)
 #define instmemGetSize_HAL(pGpu, pInstMem, pTotalInstMemSize, pHashTableSize) instmemGetSize_DISPATCH(pGpu, pInstMem, pTotalInstMemSize, pHashTableSize)
+#define instmemGetHashTableBaseAddr_FNPTR(pInstMem) pInstMem->__instmemGetHashTableBaseAddr__
 #define instmemGetHashTableBaseAddr(pGpu, pInstMem) instmemGetHashTableBaseAddr_DISPATCH(pGpu, pInstMem)
 #define instmemGetHashTableBaseAddr_HAL(pGpu, pInstMem) instmemGetHashTableBaseAddr_DISPATCH(pGpu, pInstMem)
+#define instmemIsValid_FNPTR(pInstMem) pInstMem->__instmemIsValid__
 #define instmemIsValid(pGpu, pInstMem, offset) instmemIsValid_DISPATCH(pGpu, pInstMem, offset)
 #define instmemIsValid_HAL(pGpu, pInstMem, offset) instmemIsValid_DISPATCH(pGpu, pInstMem, offset)
+#define instmemGenerateHashTableData_FNPTR(pInstMem) pInstMem->__instmemGenerateHashTableData__
 #define instmemGenerateHashTableData(pGpu, pInstMem, hClient, offset, dispChannelNum) instmemGenerateHashTableData_DISPATCH(pGpu, pInstMem, hClient, offset, dispChannelNum)
 #define instmemGenerateHashTableData_HAL(pGpu, pInstMem, hClient, offset, dispChannelNum) instmemGenerateHashTableData_DISPATCH(pGpu, pInstMem, hClient, offset, dispChannelNum)
+#define instmemHashFunc_FNPTR(pInstMem) pInstMem->__instmemHashFunc__
 #define instmemHashFunc(pGpu, pInstMem, hClient, hContextDma, dispChannelNum, result) instmemHashFunc_DISPATCH(pGpu, pInstMem, hClient, hContextDma, dispChannelNum, result)
 #define instmemHashFunc_HAL(pGpu, pInstMem, hClient, hContextDma, dispChannelNum, result) instmemHashFunc_DISPATCH(pGpu, pInstMem, hClient, hContextDma, dispChannelNum, result)
+#define instmemCommitContextDma_FNPTR(pInstMem) pInstMem->__instmemCommitContextDma__
 #define instmemCommitContextDma(pGpu, pInstMem, pContextDma) instmemCommitContextDma_DISPATCH(pGpu, pInstMem, pContextDma)
 #define instmemCommitContextDma_HAL(pGpu, pInstMem, pContextDma) instmemCommitContextDma_DISPATCH(pGpu, pInstMem, pContextDma)
+#define instmemUpdateContextDma_FNPTR(pInstMem) pInstMem->__instmemUpdateContextDma__
 #define instmemUpdateContextDma(pGpu, pInstMem, pContextDma, pNewAddress, pNewLimit, hMemory, comprInfo) instmemUpdateContextDma_DISPATCH(pGpu, pInstMem, pContextDma, pNewAddress, pNewLimit, hMemory, comprInfo)
 #define instmemUpdateContextDma_HAL(pGpu, pInstMem, pContextDma, pNewAddress, pNewLimit, hMemory, comprInfo) instmemUpdateContextDma_DISPATCH(pGpu, pInstMem, pContextDma, pNewAddress, pNewLimit, hMemory, comprInfo)
+
+// Dispatch functions
+static inline void instmemGetSize_DISPATCH(OBJGPU *pGpu, struct DisplayInstanceMemory *pInstMem, NvU32 *pTotalInstMemSize, NvU32 *pHashTableSize) {
+    pInstMem->__instmemGetSize__(pGpu, pInstMem, pTotalInstMemSize, pHashTableSize);
+}
+
+static inline NvU32 instmemGetHashTableBaseAddr_DISPATCH(OBJGPU *pGpu, struct DisplayInstanceMemory *pInstMem) {
+    return pInstMem->__instmemGetHashTableBaseAddr__(pGpu, pInstMem);
+}
+
+static inline NvBool instmemIsValid_DISPATCH(OBJGPU *pGpu, struct DisplayInstanceMemory *pInstMem, NvU32 offset) {
+    return pInstMem->__instmemIsValid__(pGpu, pInstMem, offset);
+}
+
+static inline NvU32 instmemGenerateHashTableData_DISPATCH(OBJGPU *pGpu, struct DisplayInstanceMemory *pInstMem, NvU32 hClient, NvU32 offset, NvU32 dispChannelNum) {
+    return pInstMem->__instmemGenerateHashTableData__(pGpu, pInstMem, hClient, offset, dispChannelNum);
+}
+
+static inline NV_STATUS instmemHashFunc_DISPATCH(OBJGPU *pGpu, struct DisplayInstanceMemory *pInstMem, NvHandle hClient, NvHandle hContextDma, NvU32 dispChannelNum, NvU32 *result) {
+    return pInstMem->__instmemHashFunc__(pGpu, pInstMem, hClient, hContextDma, dispChannelNum, result);
+}
+
+static inline NV_STATUS instmemCommitContextDma_DISPATCH(OBJGPU *pGpu, struct DisplayInstanceMemory *pInstMem, struct ContextDma *pContextDma) {
+    return pInstMem->__instmemCommitContextDma__(pGpu, pInstMem, pContextDma);
+}
+
+static inline NV_STATUS instmemUpdateContextDma_DISPATCH(OBJGPU *pGpu, struct DisplayInstanceMemory *pInstMem, struct ContextDma *pContextDma, NvU64 *pNewAddress, NvU64 *pNewLimit, NvHandle hMemory, NvU32 comprInfo) {
+    return pInstMem->__instmemUpdateContextDma__(pGpu, pInstMem, pContextDma, pNewAddress, pNewLimit, hMemory, comprInfo);
+}
+
 static inline void instmemDecommitContextDma_b3696a(OBJGPU *pGpu, struct DisplayInstanceMemory *pInstMem, struct ContextDma *pContextDma) {
     return;
 }
@@ -180,28 +257,16 @@ static inline void instmemGetSize_f2d351(OBJGPU *pGpu, struct DisplayInstanceMem
     NV_ASSERT_PRECOMP(0);
 }
 
-static inline void instmemGetSize_DISPATCH(OBJGPU *pGpu, struct DisplayInstanceMemory *pInstMem, NvU32 *pTotalInstMemSize, NvU32 *pHashTableSize) {
-    pInstMem->__instmemGetSize__(pGpu, pInstMem, pTotalInstMemSize, pHashTableSize);
-}
-
 NvU32 instmemGetHashTableBaseAddr_v03_00(OBJGPU *pGpu, struct DisplayInstanceMemory *pInstMem);
 
 static inline NvU32 instmemGetHashTableBaseAddr_4a4dee(OBJGPU *pGpu, struct DisplayInstanceMemory *pInstMem) {
     return 0;
 }
 
-static inline NvU32 instmemGetHashTableBaseAddr_DISPATCH(OBJGPU *pGpu, struct DisplayInstanceMemory *pInstMem) {
-    return pInstMem->__instmemGetHashTableBaseAddr__(pGpu, pInstMem);
-}
-
 NvBool instmemIsValid_v03_00(OBJGPU *pGpu, struct DisplayInstanceMemory *pInstMem, NvU32 offset);
 
-static inline NvBool instmemIsValid_491d52(OBJGPU *pGpu, struct DisplayInstanceMemory *pInstMem, NvU32 offset) {
-    return ((NvBool)(0 != 0));
-}
-
-static inline NvBool instmemIsValid_DISPATCH(OBJGPU *pGpu, struct DisplayInstanceMemory *pInstMem, NvU32 offset) {
-    return pInstMem->__instmemIsValid__(pGpu, pInstMem, offset);
+static inline NvBool instmemIsValid_3dd2c9(OBJGPU *pGpu, struct DisplayInstanceMemory *pInstMem, NvU32 offset) {
+    return NV_FALSE;
 }
 
 NvU32 instmemGenerateHashTableData_v03_00(OBJGPU *pGpu, struct DisplayInstanceMemory *pInstMem, NvU32 hClient, NvU32 offset, NvU32 dispChannelNum);
@@ -210,18 +275,10 @@ static inline NvU32 instmemGenerateHashTableData_4a4dee(OBJGPU *pGpu, struct Dis
     return 0;
 }
 
-static inline NvU32 instmemGenerateHashTableData_DISPATCH(OBJGPU *pGpu, struct DisplayInstanceMemory *pInstMem, NvU32 hClient, NvU32 offset, NvU32 dispChannelNum) {
-    return pInstMem->__instmemGenerateHashTableData__(pGpu, pInstMem, hClient, offset, dispChannelNum);
-}
-
 NV_STATUS instmemHashFunc_v03_00(OBJGPU *pGpu, struct DisplayInstanceMemory *pInstMem, NvHandle hClient, NvHandle hContextDma, NvU32 dispChannelNum, NvU32 *result);
 
 static inline NV_STATUS instmemHashFunc_46f6a7(OBJGPU *pGpu, struct DisplayInstanceMemory *pInstMem, NvHandle hClient, NvHandle hContextDma, NvU32 dispChannelNum, NvU32 *result) {
     return NV_ERR_NOT_SUPPORTED;
-}
-
-static inline NV_STATUS instmemHashFunc_DISPATCH(OBJGPU *pGpu, struct DisplayInstanceMemory *pInstMem, NvHandle hClient, NvHandle hContextDma, NvU32 dispChannelNum, NvU32 *result) {
-    return pInstMem->__instmemHashFunc__(pGpu, pInstMem, hClient, hContextDma, dispChannelNum, result);
 }
 
 NV_STATUS instmemCommitContextDma_v03_00(OBJGPU *pGpu, struct DisplayInstanceMemory *pInstMem, struct ContextDma *pContextDma);
@@ -230,18 +287,10 @@ static inline NV_STATUS instmemCommitContextDma_46f6a7(OBJGPU *pGpu, struct Disp
     return NV_ERR_NOT_SUPPORTED;
 }
 
-static inline NV_STATUS instmemCommitContextDma_DISPATCH(OBJGPU *pGpu, struct DisplayInstanceMemory *pInstMem, struct ContextDma *pContextDma) {
-    return pInstMem->__instmemCommitContextDma__(pGpu, pInstMem, pContextDma);
-}
-
 NV_STATUS instmemUpdateContextDma_v03_00(OBJGPU *pGpu, struct DisplayInstanceMemory *pInstMem, struct ContextDma *pContextDma, NvU64 *pNewAddress, NvU64 *pNewLimit, NvHandle hMemory, NvU32 comprInfo);
 
 static inline NV_STATUS instmemUpdateContextDma_46f6a7(OBJGPU *pGpu, struct DisplayInstanceMemory *pInstMem, struct ContextDma *pContextDma, NvU64 *pNewAddress, NvU64 *pNewLimit, NvHandle hMemory, NvU32 comprInfo) {
     return NV_ERR_NOT_SUPPORTED;
-}
-
-static inline NV_STATUS instmemUpdateContextDma_DISPATCH(OBJGPU *pGpu, struct DisplayInstanceMemory *pInstMem, struct ContextDma *pContextDma, NvU64 *pNewAddress, NvU64 *pNewLimit, NvHandle hMemory, NvU32 comprInfo) {
-    return pInstMem->__instmemUpdateContextDma__(pGpu, pInstMem, pContextDma, pNewAddress, pNewLimit, hMemory, comprInfo);
 }
 
 NV_STATUS instmemConstruct_IMPL(struct DisplayInstanceMemory *arg_pInstMem);

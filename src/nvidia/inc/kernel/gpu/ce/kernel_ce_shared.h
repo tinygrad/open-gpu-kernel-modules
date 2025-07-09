@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -31,6 +31,9 @@
  */
 
 NvBool ceIsCeGrce(OBJGPU *pGpu, RM_ENGINE_TYPE ceEngineType);
-NvU32 ceCountGrCe(OBJGPU *pGpu);
+NvBool ceIsPartneredWithGr(OBJGPU *pGpu, RM_ENGINE_TYPE ceEngineType, RM_ENGINE_TYPE grEngineType);
+NvU32  ceCountGrCe(OBJGPU *pGpu);
+void cePauseCeUtilsScheduling(OBJGPU *pGpu);
+void ceResumeCeUtilsScheduling(OBJGPU *pGpu);
 
 #endif

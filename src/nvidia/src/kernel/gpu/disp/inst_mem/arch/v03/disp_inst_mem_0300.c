@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2017-2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2017-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -152,11 +152,10 @@ instmemCommitContextDma_v03_00
     MemoryManager      *pMemoryManager  = GPU_GET_MEMORY_MANAGER(pGpu);
     RmPhysAddr          FrameAddr, Limit;
     RmPhysAddr          FrameAddr256Align;
-    RmPhysAddr          Limit256Align;
+    RmPhysAddr          LimitAlign;
     NvU32               ctxDMAFlag;
     NvU32               instoffset;
     NvU8               *pInstMemCpuVA;
-    NvU32               kind;
     NvBool              bIsSurfaceBl    = NV_FALSE;
     TRANSFER_SURFACE    dest = {0};
 
@@ -169,21 +168,36 @@ instmemCommitContextDma_v03_00
     FrameAddr = memdescGetPhysAddr(pMemDesc, AT_GPU, 0);
     Limit     = FrameAddr + pContextDma->Limit;
 
-    kind = memdescGetPteKindForGpu(pMemDesc, pGpu);
-
-    // Cannot bind a Z surface to display.  Bug 439965.
-    if (memmgrIsKind_HAL(pMemoryManager, FB_IS_KIND_Z, kind))
-    {
-        return NV_ERR_INVALID_ARGUMENT;
-    }
-
     //
     // Set surface format
     //
-    ctxDMAFlag = 0;
+    switch (DRF_VAL(OS03, _FLAGS, _PTE_KIND, pContextDma->Flags))
+    {
+    case NVOS03_FLAGS_PTE_KIND_BL:
+        bIsSurfaceBl = NV_TRUE;
+        break;
+    case NVOS03_FLAGS_PTE_KIND_PITCH:
+        bIsSurfaceBl = NV_FALSE;
+        break;
+    case NVOS03_FLAGS_PTE_KIND_NONE:
+        {
+            NvU32 const kind = memdescGetPteKindForGpu(pMemDesc, pGpu);
 
-    bIsSurfaceBl = memmgrIsSurfaceBlockLinear_HAL(pMemoryManager, pContextDma->pMemory,
-                                                  kind, pContextDma->Flags);
+            // Cannot bind a Z surface to display.  Bug 439965.
+            if (memmgrIsKind_HAL(pMemoryManager, FB_IS_KIND_Z, kind))
+                return NV_ERR_INVALID_ARGUMENT;
+
+            bIsSurfaceBl = memmgrIsSurfaceBlockLinear_HAL(pMemoryManager,
+                                                          pContextDma->pMemory,
+                                                          kind);
+        }
+        break;
+    default:
+        NV_PRINTF(LEVEL_ERROR, "Unexpected PTE_KIND value\n");
+        return NV_ERR_INVALID_STATE;
+    }
+
+    ctxDMAFlag = 0;
 
     if (bIsSurfaceBl)
     {
@@ -250,11 +264,11 @@ instmemCommitContextDma_v03_00
     MEM_WR32(pInstMemCpuVA + SF_OFFSET(NV_DMA_ADDRESS_BASE_HI),             // word 2
              NvU64_HI32(FrameAddr256Align));
 
-    Limit256Align = Limit >> 8;
+    LimitAlign = Limit >> 8;
     MEM_WR32(pInstMemCpuVA + SF_OFFSET(NV_DMA_ADDRESS_LIMIT_LO),            // word 3
-             NvU64_LO32(Limit256Align));
+             NvU64_LO32(LimitAlign));
     MEM_WR32(pInstMemCpuVA + SF_OFFSET(NV_DMA_ADDRESS_LIMIT_HI),            // word 4
-             NvU64_HI32(Limit256Align));
+             NvU64_HI32(LimitAlign));
 
     memmgrMemEndTransfer(pMemoryManager, &dest, NV_DMA_SIZE,
         TRANSFER_FLAGS_SHADOW_ALLOC);
@@ -314,11 +328,11 @@ instmemUpdateContextDma_v03_00
 
     if (pNewLimit != NULL)
     {
-        NvU64 newLimit256Align = (*pNewLimit) >> 8;
+        NvU64 newLimitAlign = (*pNewLimit) >> 8;
         MEM_WR32(pInst + SF_OFFSET(NV_DMA_ADDRESS_LIMIT_LO),
-                 NvU64_LO32(newLimit256Align));
+                 NvU64_LO32(newLimitAlign));
         MEM_WR32(pInst + SF_OFFSET(NV_DMA_ADDRESS_LIMIT_HI),
-                 NvU64_HI32(newLimit256Align));
+                 NvU64_HI32(newLimitAlign));
     }
 
     if (comprInfo != NV0002_CTRL_CMD_UPDATE_CONTEXTDMA_FLAGS_USE_COMPR_INFO_NONE)

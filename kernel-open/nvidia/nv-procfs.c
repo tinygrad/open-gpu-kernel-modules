@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1999-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1999-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -32,7 +32,6 @@
 #include "nv_compiler.h"
 #include "nv-reg.h"
 #include "conftest/patches.h"
-#include "nv-ibmnpu.h"
 
 #define NV_DEFINE_SINGLE_NVRM_PROCFS_FILE(name) \
     NV_DEFINE_SINGLE_PROCFS_FILE_READ_ONLY(name, nv_system_pm_lock)
@@ -197,28 +196,26 @@ nv_procfs_read_power(
 {
     nv_state_t *nv = s->private;
     nvidia_stack_t *sp = NULL;
-    const char *vidmem_power_status;
-    const char *dynamic_power_status;
-    const char *gc6_support;
-    const char *gcoff_support;
+    nv_power_info_t power_info;
 
     if (nv_kmem_cache_alloc_stack(&sp) != 0)
     {
         return 0;
     }
 
-    dynamic_power_status = rm_get_dynamic_power_management_status(sp, nv);
-    seq_printf(s, "Runtime D3 status:          %s\n", dynamic_power_status);
-
-    vidmem_power_status = rm_get_vidmem_power_status(sp, nv);
-    seq_printf(s, "Video Memory:               %s\n\n", vidmem_power_status);
+    rm_get_power_info(sp, nv, &power_info);
+    seq_printf(s, "Runtime D3 status:          %s\n", power_info.dynamic_power_status);
+    seq_printf(s, "Video Memory:               %s\n\n", power_info.vidmem_power_status);
 
     seq_printf(s, "GPU Hardware Support:\n");
-    gc6_support = rm_get_gpu_gcx_support(sp, nv, NV_TRUE);
-    seq_printf(s, " Video Memory Self Refresh: %s\n", gc6_support);
+    seq_printf(s, " Video Memory Self Refresh: %s\n", power_info.gc6_support);
+    seq_printf(s, " Video Memory Off:          %s\n\n", power_info.gcoff_support);
 
-    gcoff_support = rm_get_gpu_gcx_support(sp, nv, NV_FALSE);
-    seq_printf(s, " Video Memory Off:          %s\n", gcoff_support);
+    seq_printf(s, "S0ix Power Management:\n");
+    seq_printf(s, " Platform Support:          %s\n",
+               nv_platform_supports_s0ix() ? "Supported" : "Not Supported");
+    seq_printf(s, " Status:                    %s\n\n", power_info.s0ix_status);
+    seq_printf(s, "Notebook Dynamic Boost:     %s\n", power_info.db_support);
 
     nv_kmem_cache_free_stack(sp);
     return 0;
@@ -694,7 +691,7 @@ static nv_proc_ops_t nv_procfs_suspend_fops = {
 /*
  * Forwards error to nv_log_error which exposes data to vendor callback
  */
-void
+static void
 exercise_error_forwarding_va(
     nv_state_t *nv,
     NvU32 err,

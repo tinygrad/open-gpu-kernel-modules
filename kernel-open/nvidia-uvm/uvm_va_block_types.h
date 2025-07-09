@@ -1,5 +1,5 @@
 /*******************************************************************************
-    Copyright (c) 2016-2023 NVIDIA Corporation
+    Copyright (c) 2016-2025 NVIDIA Corporation
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"), to
@@ -212,7 +212,7 @@ typedef struct
 
         // Out mask of all processors involved in the migration either as
         // source, destination or the processor performing the copy.
-        // Used to perform ECC checks after the migration is done.
+        // Used to perform error checks after the migration is done.
         uvm_processor_mask_t all_involved_processors;
 
         // Page mask used to compute the set of CPU pages for each CPU node.
@@ -235,6 +235,10 @@ typedef struct
 
         // Event that triggered the call
         uvm_make_resident_cause_t cause;
+
+        // Access counters notification buffer index. Only valid when cause is
+        // UVM_MAKE_RESIDENT_CAUSE_ACCESS_COUNTER.
+        NvU32 access_counters_buffer_index;
     } make_resident;
 
     // State used by the mapping APIs (unmap, map, revoke). This could be used

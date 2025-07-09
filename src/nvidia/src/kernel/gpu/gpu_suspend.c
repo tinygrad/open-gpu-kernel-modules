@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2000-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2000-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -31,6 +31,7 @@
 
 #include "platform/platform.h"
 #include "platform/chipset/chipset.h"
+#include "gpu/bif/kernel_bif.h"
 #include "gpu/mem_mgr/mem_mgr.h"
 #include "gpu/mem_mgr/fbsr.h"
 #include "gpu/gsp/gsp_init_args.h"
@@ -47,6 +48,7 @@
 //
 static NV_STATUS gpuPowerManagementEnter(OBJGPU *, NvU32 newLevel, NvU32 flags);
 static NV_STATUS gpuPowerManagementResume(OBJGPU *, NvU32 oldLevel, NvU32 flags);
+static NV_STATUS _gpuPollCFGAndCheckD3Hot(OBJGPU *);
 
 // XXX Needs to be further cleaned up. No new code should be placed in this
 // routine. Please use the per-engine StateLoad() and StateUnload() routines
@@ -57,8 +59,31 @@ gpuPowerManagementEnter(OBJGPU *pGpu, NvU32 newLevel, NvU32 flags)
     NV_STATUS  status = NV_OK;
     MemoryManager *pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
 
-    NV_ASSERT_OR_RETURN(!IS_VIRTUAL(pGpu) || !IS_VGPU_GSP_PLUGIN_OFFLOAD_ENABLED(pGpu),
-        NV_ERR_NOT_SUPPORTED);
+    pGpu->powerManagementDepth = NV_PM_DEPTH_OS_LAYER;
+
+    KernelGsp *pKernelGsp = GPU_GET_KERNEL_GSP(pGpu);
+    KernelGspUnloadMode unloadMode = KGSP_UNLOAD_MODE_SR_SUSPEND;
+
+    if (IS_GSP_CLIENT(pGpu))
+    {
+        if (IS_GPU_GC6_STATE_ENTERING(pGpu))
+        {
+            unloadMode = KGSP_UNLOAD_MODE_GC6_ENTER;
+        }
+        else
+        {
+            unloadMode = KGSP_UNLOAD_MODE_SR_SUSPEND;
+
+            // Prepare SR metadata structure for suspend
+            status = kgspPrepareSuspendResumeData_HAL(pGpu, pKernelGsp);
+            if (status != NV_OK)
+            {
+                return status;
+            }
+        }
+
+        pGpu->powerManagementDepth = NV_PM_DEPTH_SR_META;
+    }
 
     // This is a no-op in CPU-RM
     NV_ASSERT_OK_OR_GOTO(status, gpuPowerManagementEnterPreUnloadPhysical(pGpu), done);
@@ -68,6 +93,7 @@ gpuPowerManagementEnter(OBJGPU *pGpu, NvU32 newLevel, NvU32 flags)
         GPU_STATE_FLAGS_PRESERVING | GPU_STATE_FLAGS_PM_TRANSITION | GPU_STATE_FLAGS_GC6_TRANSITION :
         GPU_STATE_FLAGS_PRESERVING | GPU_STATE_FLAGS_PM_TRANSITION), done);
 
+    pGpu->powerManagementDepth = NV_PM_DEPTH_STATE_LOAD;
     pGpu->setProperty(pGpu, PDB_PROP_GPU_VGA_ENABLED, NV_TRUE);
 
     // This is a no-op in CPU-RM
@@ -75,57 +101,17 @@ gpuPowerManagementEnter(OBJGPU *pGpu, NvU32 newLevel, NvU32 flags)
 
     if (IS_GSP_CLIENT(pGpu))
     {
-        // FB remains alive for GC6 cycle
-        if (!IS_GPU_GC6_STATE_ENTERING(pGpu))
-        {
-            NV_ASSERT_OK_OR_GOTO(status, memmgrSavePowerMgmtState(pGpu, pMemoryManager), done);
-        }
-
-        KernelGsp *pKernelGsp = GPU_GET_KERNEL_GSP(pGpu);
-        KernelGspPreparedFwsecCmd preparedCmd;
-
-        NV_RM_RPC_UNLOADING_GUEST_DRIVER(pGpu, status, NV_TRUE, IS_GPU_GC6_STATE_ENTERING(pGpu), newLevel);
+        status = kgspUnloadRm(pGpu, pKernelGsp, unloadMode, newLevel);
         if (status != NV_OK)
+        {
+            NV_PRINTF(LEVEL_ERROR, "GSP unload failed at suspend (bootMode 0x%x, newLevel 0x%x): 0x%x\n",
+                      unloadMode, newLevel, status);
             goto done;
-
-        // Wait for GSP-RM to suspend
-        kgspWaitForProcessorSuspend_HAL(pGpu, pKernelGsp);
-
-        // Dump GSP-RM logs before resetting and invoking FWSEC-SB
-        kgspDumpGspLogs(pKernelGsp, NV_FALSE);
+        }
 
         if (!IS_GPU_GC6_STATE_ENTERING(pGpu))
         {
-            // Because of COT, RM cannot reset GSP-RISCV.
-            if (!(pGpu->getProperty(pGpu, PDB_PROP_GPU_IS_COT_ENABLED)))
-            {
-                kflcnReset_HAL(pGpu, staticCast(pKernelGsp, KernelFalcon));
-            }
-
-            // Invoke FWSEC-SB to load back PreOsApps.
-            status = kgspPrepareForFwsecSb_HAL(pGpu, pKernelGsp, pKernelGsp->pFwsecUcode, &preparedCmd);
-            if (status != NV_OK)
-            {
-                NV_PRINTF(LEVEL_ERROR, "failed to prepare for FWSEC-SB for PreOsApps\n");
-                goto done;
-            }
-
-            status = kgspExecuteFwsec_HAL(pGpu, pKernelGsp, &preparedCmd);
-            if (status != NV_OK)
-            {
-                NV_PRINTF(LEVEL_ERROR, "failed to execute FWSEC-SB for PreOsApps\n");
-                goto done;
-            }
-
             kpmuFreeLibosLoggingStructures(pGpu, GPU_GET_KERNEL_PMU(pGpu));
-
-            NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR,
-                                kgspSavePowerMgmtState_HAL(pGpu, pKernelGsp), done);
-        }
-        else
-        {
-            NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR,
-                                kgspExecuteBooterUnloadIfNeeded_HAL(pGpu, pKernelGsp, 0), done);
         }
     }
 
@@ -152,6 +138,11 @@ gpuPowerManagementResume(OBJGPU *pGpu, NvU32 oldLevel, NvU32 flags)
     OBJSYS         *pSys   = SYS_GET_INSTANCE();
     OBJCL          *pCl    = SYS_GET_CL(pSys);
     MemoryManager *pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
+
+    if (pGpu->powerManagementDepth == NV_PM_DEPTH_OS_LAYER)
+    {
+        return NV_OK;
+    }
 
 #ifdef DEBUG
     //
@@ -181,7 +172,9 @@ gpuPowerManagementResume(OBJGPU *pGpu, NvU32 oldLevel, NvU32 flags)
         //
         kmemsysProgramSysmemFlushBuffer_HAL(pGpu, GPU_GET_KERNEL_MEMORY_SYSTEM(pGpu));
 
+        OBJTMR    *pTmr = GPU_GET_TIMER(pGpu);
         KernelGsp *pKernelGsp = GPU_GET_KERNEL_GSP(pGpu);
+        KernelGspBootMode bootMode;
 
         GSP_SR_INIT_ARGUMENTS gspSrInitArgs;
 
@@ -198,10 +191,13 @@ gpuPowerManagementResume(OBJGPU *pGpu, NvU32 oldLevel, NvU32 flags)
             goto done;
         }
 
-        if (!IS_GPU_GC6_STATE_EXITING(pGpu))
+        if (IS_GPU_GC6_STATE_EXITING(pGpu))
         {
-            NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR,
-                                kgspRestorePowerMgmtState_HAL(pGpu, pKernelGsp), done);
+            bootMode = KGSP_BOOT_MODE_GC6_EXIT;
+        }
+        else
+        {
+            bootMode = KGSP_BOOT_MODE_SR_RESUME;
 
             status = kpmuInitLibosLoggingStructures(pGpu, GPU_GET_KERNEL_PMU(pGpu));
             if (status != NV_OK)
@@ -209,21 +205,28 @@ gpuPowerManagementResume(OBJGPU *pGpu, NvU32 oldLevel, NvU32 flags)
                 NV_PRINTF(LEVEL_ERROR, "cannot init libOS PMU logging structures: 0x%x\n", status);
                 goto done;
             }
-        }
-        else
-        {
-            status = kgspExecuteBooterLoad_HAL(pGpu, pKernelGsp, 0);
-            if (status != NV_OK)
-            {
-                NV_PRINTF(LEVEL_ERROR, "cannot resume riscv/gsp from GC6: 0x%x\n", status);
-                goto done;
-            }
+
+            //
+            // In suspend/resume case, update the GPU time after GFW boot is complete
+            // (to avoid PLM collisions) but before loading GSP-RM ucode (which
+            // consumes the updated GPU time).
+            //
+            tmrSetCurrentTime_HAL(pGpu, pTmr);
+
+            libosLogUpdateTimerDelta(&pKernelGsp->logDecode, pTmr->sysTimerOffsetNs);
         }
 
-        status = kgspWaitForRmInitDone(pGpu, pKernelGsp);
+        status = kgspPrepareForBootstrap_HAL(pGpu, pKernelGsp, bootMode);
         if (status != NV_OK)
         {
-            NV_PRINTF(LEVEL_ERROR, "State load at resume for riscv/gsp failed: 0x%x\n", status);
+            NV_PRINTF(LEVEL_ERROR, "GSP boot preparation failed at resume (bootMode 0x%x): 0x%x\n", bootMode, status);
+            goto done;
+        }
+
+        status = kgspBootstrap_HAL(pGpu, pKernelGsp, bootMode);
+        if (status != NV_OK)
+        {
+            NV_PRINTF(LEVEL_ERROR, "GSP boot failed at resume (bootMode 0x%x): 0x%x\n", bootMode, status);
             goto done;
         }
     }
@@ -263,10 +266,57 @@ gpuPowerManagementResume(OBJGPU *pGpu, NvU32 oldLevel, NvU32 flags)
 done:
     if (!IS_GPU_GC6_STATE_EXITING(pGpu))
     {
+        if (IS_GSP_CLIENT(pGpu))
+        {
+            KernelGsp *pKernelGsp = GPU_GET_KERNEL_GSP(pGpu);
+            kgspFreeSuspendResumeData_HAL(pGpu, pKernelGsp);
+        }
+
         memmgrFreeFbsrMemory(pGpu, pMemoryManager);
     }
 
     return status;
+}
+
+//
+// Since the BAR firewall introduced from Blackwell
+// Need to poll Device on the bus and CFG BAR firewall first,
+// before any PRI register accessing.
+// For GCOFF/GC8/GC6 three cases, all will run into standby path,
+// So adding this helper function before calling gpu resume.
+//
+static NV_STATUS
+_gpuPollCFGAndCheckD3Hot(OBJGPU *pGpu)
+{
+    KernelBif *pKernelBif = GPU_GET_KERNEL_BIF(pGpu);
+
+    //
+    // GCOFF/GC8/GC6 three cases, all will run into here.
+    // Because of BAR firewall introduced from Blackwell,
+    // We need to poll CFG for:
+    // 1. if GPU is on the bus
+    // 2. if BAR firewall disengage only if blackwell and later
+    // 3. check GC6 D3Hot case (has PRI register access, must after firewall disengage)
+    //
+
+    if (!IS_FMODEL(pGpu))
+    {
+        // Polling GPU on the bus
+        NV_ASSERT_OK_OR_RETURN(kbifPollDeviceOnBus(pGpu, pKernelBif));
+
+        //
+        // For V0/V0S fused board, BAR firewall introduced from Blackwell onwards.
+        // Polling BAR firewall disengage if FSP released before accessing any PRI access.
+        //
+        NV_ASSERT_OK_OR_RETURN(kbifPollBarFirewallDisengage_HAL(pGpu, pKernelBif));
+    }
+
+    // For GC6 exit, check if D3Hot case
+    if(IS_GPU_GC6_STATE_EXITING(pGpu))
+    {
+        gpuCheckGc6inD3Hot(pGpu);
+    }
+    return NV_OK;
 }
 
 NV_STATUS
@@ -292,6 +342,8 @@ gpuEnterStandby_IMPL(OBJGPU *pGpu)
     }
 
     pGpu->setProperty(pGpu, PDB_PROP_GPU_IN_PM_CODEPATH, NV_TRUE);
+
+    gpuNotifySubDeviceEvent(pGpu, NV2080_NOTIFIERS_POWER_SUSPEND, NULL, 0, 0, 0);
 
     suspendStatus = gpuPowerManagementEnter(pGpu, NV2080_CTRL_GPU_SET_POWER_STATE_GPU_LEVEL_3, GPU_STATE_FLAGS_PM_SUSPEND);
 
@@ -339,12 +391,21 @@ gpuResumeFromStandby_IMPL(OBJGPU *pGpu)
 
     pGpu->setProperty(pGpu, PDB_PROP_GPU_IN_PM_RESUME_CODEPATH, NV_TRUE);
 
+    resumeStatus = _gpuPollCFGAndCheckD3Hot(pGpu);
+    if (resumeStatus != NV_OK)
+    {
+        NV_PRINTF(LEVEL_ERROR, "Polling BAR0 or BAR firewall timeout\n");
+    }
+
     resumeStatus = gpuPowerManagementResume(pGpu, state, GPU_STATE_FLAGS_PM_SUSPEND);
 
     pGpu->setProperty(pGpu, PDB_PROP_GPU_IN_STANDBY, NV_FALSE);
     pGpu->bInD3Cold = NV_FALSE;
     pGpu->setProperty(pGpu, PDB_PROP_GPU_IN_PM_CODEPATH, NV_FALSE);
     pGpu->setProperty(pGpu, PDB_PROP_GPU_IN_PM_RESUME_CODEPATH, NV_FALSE);
+
+    // reset PM depth on resume
+    pGpu->powerManagementDepth = NV_PM_DEPTH_NONE;
 
     if ((pPfm != NULL) && pPfm->getProperty(pPfm, PDB_PROP_PFM_SUPPORTS_ACPI))
     {
@@ -356,6 +417,8 @@ gpuResumeFromStandby_IMPL(OBJGPU *pGpu)
         NV_PRINTF(LEVEL_NOTICE, "Ending resume from %s\n",
                   IS_GPU_GC6_STATE_EXITING(pGpu) ? "GC6" : "APM Suspend");
     }
+
+    gpuNotifySubDeviceEvent(pGpu, NV2080_NOTIFIERS_POWER_RESUME, NULL, 0, 0, 0);
 
     return resumeStatus;
 }
@@ -380,6 +443,8 @@ NV_STATUS gpuEnterHibernate_IMPL(OBJGPU *pGpu)
     }
 
     pGpu->setProperty(pGpu, PDB_PROP_GPU_IN_PM_CODEPATH, NV_TRUE);
+
+    gpuNotifySubDeviceEvent(pGpu, NV2080_NOTIFIERS_POWER_SUSPEND, NULL, 0, 0, 0);
 
     suspendStatus = gpuPowerManagementEnter(pGpu, NV2080_CTRL_GPU_SET_POWER_STATE_GPU_LEVEL_7, GPU_STATE_FLAGS_PM_HIBERNATE);
 
@@ -411,6 +476,9 @@ NV_STATUS gpuResumeFromHibernate_IMPL(OBJGPU *pGpu)
     pGpu->setProperty(pGpu, PDB_PROP_GPU_IN_PM_CODEPATH, NV_FALSE);
     pGpu->setProperty(pGpu, PDB_PROP_GPU_IN_PM_RESUME_CODEPATH, NV_FALSE);
 
+    // reset PM depth on resume
+    pGpu->powerManagementDepth = NV_PM_DEPTH_NONE;
+
     if ((pPfm != NULL) && pPfm->getProperty(pPfm, PDB_PROP_PFM_SUPPORTS_ACPI))
     {
         NV_PRINTF(LEVEL_NOTICE, "Ending transition from D4 to D0\n");
@@ -419,6 +487,8 @@ NV_STATUS gpuResumeFromHibernate_IMPL(OBJGPU *pGpu)
     {
         NV_PRINTF(LEVEL_NOTICE, "End resuming from APM Suspend\n");
     }
+
+    gpuNotifySubDeviceEvent(pGpu, NV2080_NOTIFIERS_POWER_RESUME, NULL, 0, 0, 0);
 
     return resumeStatus;
 }

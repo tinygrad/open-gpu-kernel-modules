@@ -21,6 +21,7 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+#pragma once
 #include "g_rs_resource_nvoc.h"
 
 #ifndef _RS_RESOURCE_H_
@@ -62,15 +63,16 @@ class RsSession;
  */
 struct RS_LOCK_INFO
 {
-    RsClient *pClient;              ///< Pointer to client that was locked (if any)
-    RsClient *pSecondClient;        ///< Pointer to second client, for dual-client locking
-    RsResourceRef *pContextRef;     ///< User-defined reference
-    RsSession *pSession;            ///< Session object to be locked, if any
-    NvU32 flags;                    ///< RS_LOCK_FLAGS_*
-    NvU32 state;                    ///< RS_LOCK_STATE_*
+    RsClient *pClient;                  ///< Pointer to client that was locked (if any)
+    RsClient *pSecondClient;            ///< Pointer to second client, for dual-client locking
+    RsResourceRef *pContextRef;         ///< User-defined reference
+    RsResourceRef *pResRefToBackRef;    ///< Resource from which to infer indirect GPU dependencies
+    RsSession *pSession;                ///< Session object to be locked, if any
+    NvU32 flags;                        ///< RS_LOCK_FLAGS_*
+    NvU32 state;                        ///< RS_LOCK_STATE_*
     NvU32 gpuMask;
-    NvU8  traceOp;                  ///< RS_LOCK_TRACE_* operation for lock-metering
-    NvU32 traceClassId;             ///< Class of initial resource that was locked for lock metering
+    NvU8  traceOp;                      ///< RS_LOCK_TRACE_* operation for lock-metering
+    NvU32 traceClassId;                 ///< Class of initial resource that was locked for lock metering
 };
 
 struct RS_RES_ALLOC_PARAMS_INTERNAL
@@ -114,7 +116,9 @@ struct RS_RES_DUP_PARAMS_INTERNAL
     NvU32               flags;                 ///< [in] Flags to denote special cases ( Bug: 2859347 to track removal)
     // Internal use only
     RsClient           *pSrcClient;
+    RsClient           *pDstClient;
     RsResourceRef      *pSrcRef;
+    RsResourceRef      *pDstParentRef;
     API_SECURITY_INFO  *pSecInfo;              ///< [in] Security info
     RS_LOCK_INFO       *pLockInfo;             ///< [inout] Locking flags and state
 };
@@ -460,6 +464,8 @@ struct RsCpuMapping
     NvU32 flags;
     NvP64 pLinearAddress;
     RsResourceRef *pContextRef;      ///< Context resource that may be needed for the mapping
+    RsResourceRef *pResourceRef;     ///< Resource that is actually getting mapped
+    ListNode backRefNode;            ///< Node to context backreference
     void *pContext;                  ///< Additional context data for the mapping
     NvU32 processId;
 
@@ -518,12 +524,7 @@ struct RS_CPU_UNMAP_PARAMS
 /**
  * CPU mapping back-reference
  */
-struct RS_CPU_MAPPING_BACK_REF
-{
-    RsCpuMapping *pCpuMapping;  ///< Mapping linked to this backref
-    RsResourceRef *pBackRef;    ///< Resource reference with mapping
-};
-MAKE_LIST(RsCpuMappingBackRefList, RS_CPU_MAPPING_BACK_REF);
+MAKE_INTRUSIVE_LIST(RsCpuMappingBackRefList, RsCpuMapping, backRefNode);
 /* @} */
 
 /**
@@ -573,9 +574,11 @@ struct RS_INTER_UNMAP_PARAMS
  */
 struct RsInterMapping
 {
-    // RsResourceRef *pMapperRef     ///< (Implied) the resource that created and owns this mapping (this resource)
+    RsResourceRef *pMapperRef;       ///< The resource that created and owns this mapping (this resource)
     RsResourceRef *pMappableRef;     ///< The resource being mapped by the mapper (e.g. hMemory)
     RsResourceRef *pContextRef;      ///< A resource used to provide additional context for the mapping (e.g. hDevice)
+    ListNode       mappableNode;
+    ListNode       contextNode;
     NvU32 flags;                     ///< Flags passed when mapping, same flags also passed when unmapping
     NvU64 dmaOffset;
     NvU64 size;
@@ -586,12 +589,8 @@ MAKE_LIST(RsInterMappingList, RsInterMapping);
 /**
  * Inter-mapping back-reference
  */
-struct RS_INTER_MAPPING_BACK_REF
-{
-    RsResourceRef *pMapperRef;       ///< Resource reference with mapping
-    RsInterMapping *pMapping;        ///< Pointer to the inter-mapping linked to this backref
-};
-MAKE_LIST(RsInterMappingBackRefList, RS_INTER_MAPPING_BACK_REF);
+MAKE_INTRUSIVE_LIST(RsInterMappingBackRefMappableList, RsInterMapping, mappableNode);
+MAKE_INTRUSIVE_LIST(RsInterMappingBackRefContextList, RsInterMapping, contextNode);
 /* @} */
 
 typedef struct RS_RESOURCE_DESC RS_RESOURCE_DESC;
@@ -655,7 +654,8 @@ struct RsResourceRef
     RsCpuMappingBackRefList backRefs;  ///< List of references that have this reference as a mapping context
 
     RsInterMappingList interMappings;        ///< List of inter-resource mappings created by this resource
-    RsInterMappingBackRefList interBackRefs; ///< List of inter-resource mappings this resource has been mapped into
+    RsInterMappingBackRefMappableList interBackRefsMappable; ///< List of inter-resource mappings this resource has been mapped into
+    RsInterMappingBackRefContextList interBackRefsContext; ///< List of inter-resource mappings this context has been mapped into
 
     RsSession *pSession;          ///< If set, this ref depends on a shared session
     RsSession *pDependantSession; ///< If set, this ref is depended on by a shared session

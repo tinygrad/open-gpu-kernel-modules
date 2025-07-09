@@ -1,5 +1,5 @@
  /*
- * SPDX-FileCopyrightText: Copyright (c) 2016-2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2016-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -38,6 +38,7 @@
 #include "gpu/gpu.h"
 
 /* ------------------------------------ Local Defines ------------------------------ */
+#define PMA_CHUNK_SIZE_256G (256ULL * 1024 * 1024 * 1024)
 #define PMA_CHUNK_SIZE_512M (512 * 1024 * 1024)
 #define PMA_CHUNK_SIZE_4M   (4 * 1024 * 1024)
 #define PMA_CHUNK_SIZE_2M   (2 * 1024 * 1024)
@@ -82,6 +83,7 @@
  */
 typedef enum
 {
+    RM_POOL_IDX_256G,
     RM_POOL_IDX_512M,
     RM_POOL_IDX_2M,
     RM_POOL_IDX_256K,
@@ -97,6 +99,7 @@ typedef enum
  * This array contains the alloction sizes (in bytes) of each pool.
  */
 static const NvU64 poolAllocSizes[] = {
+    0x4000000000,
     0x20000000, 0x200000, 0x40000, 0x20000, 0x10000, 0x2000, 0x1000, 0x100
 };
 
@@ -107,6 +110,7 @@ static const NvU64 poolConfig[POOL_CONFIG_MAX_SUPPORTED][POOL_CONFIG_CHUNKSIZE_I
      // page size        // chunk size
      { RM_POOL_IDX_256K, PMA_CHUNK_SIZE_512K},  // pool with pageSize = 256K for GMMU_FMT_VERSION_1
      { RM_POOL_IDX_4K,   PMA_CHUNK_SIZE_64K },  // pool with pageSize = 4K for GMMU_FMT_VERSION_2
+     { RM_POOL_IDX_256G, PMA_CHUNK_SIZE_256G }, // pool with pageSize = 256G for RM allocated buffers (unused as of blackwell)
      { RM_POOL_IDX_512M, PMA_CHUNK_SIZE_512M }, // pool with pageSize = 512MB for RM allocated buffers (unused as of ampere)
      { RM_POOL_IDX_2M,   PMA_CHUNK_SIZE_4M },   // pool with pageSize = 2MB for RM allocated buffers
      { RM_POOL_IDX_64K,  PMA_CHUNK_SIZE_256K }, // pool with pageSize = 64K for RM allocated buffers
@@ -237,7 +241,7 @@ allocUpstreamTopPool
     {
         NvU64 *pPageStore = portMemAllocNonPaged(sizeof(NvU64) * numPages);
         NV_STATUS status = NV_OK;
-        NV_ASSERT_OK_OR_GOTO(status,
+        NV_CHECK_OK_OR_GOTO(status, LEVEL_NOTICE,
             pmaAllocatePages(pMemReserveInfo->pPma,
                 numPages,
                 pageSize,
@@ -481,14 +485,11 @@ rmMemPoolSetup
     // The topmost pool is fed pages directly by PMA.
     //
     // Calling into PMA with GPU lock acquired may cause deadlocks in case RM
-    // is operating along side UVM. Currently, we don't support UVM on Windows.
-    // So, allow the topmost pool to call into PMA on Windows. This is not
+    // is operating along side UVM. Currently, we don't support UVM on Windows/MODS.
+    // So, allow the topmost pool to call into PMA on Windows/MODS. This is not
     // permissible on platforms that support UVM like Linux.
-    // TODO: Remove this special handling for Windows once we have taken care
-    // of reserving memory for page tables required for mapping GR context buffers
-    // in the channel vaspace. See bug 200590870 and 200614517.
     //
-    if (RMCFG_FEATURE_PLATFORM_WINDOWS)
+    if (RMCFG_FEATURE_PLATFORM_WINDOWS || RMCFG_FEATURE_PLATFORM_MODS)
     {
         flags = FLD_SET_DRF(_RMPOOL, _FLAGS, _AUTO_POPULATE, _ENABLE, flags);
     }
@@ -594,8 +595,10 @@ rmMemPoolReserve
     // Reserve pages only in the topmost pool.
     if (NULL != pMemReserveInfo->pPool[pMemReserveInfo->topmostPoolIndex])
     {
-        NV_CHECK_OK(status, LEVEL_WARNING,
-            poolReserve(pMemReserveInfo->pPool[pMemReserveInfo->topmostPoolIndex], numChunks));
+        status = poolReserve(pMemReserveInfo->pPool[pMemReserveInfo->topmostPoolIndex], numChunks);
+
+        /* Assert should not be fired when either status is NV_OK or status is OOM but retry flag is set */
+        NV_ASSERT((status == NV_OK) || ((status == NV_ERR_NO_MEMORY) && (flags & VASPACE_FLAGS_RETRY_PTE_ALLOC_IN_SYS)));
     }
 
     if (flags & VASPACE_FLAGS_SKIP_SCRUB_MEMPOOL)

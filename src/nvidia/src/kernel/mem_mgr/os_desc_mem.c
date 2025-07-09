@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2018-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2018-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -91,7 +91,7 @@ osdescConstruct_IMPL
     {
         //
         // We currently allow RmMapMemory on external IO resources which are
-        // safe to share across processes. For example, NpuResource.
+        // safe to share across processes.
         //
         // Otherwise we would be affected by the security issues like Bug 1630288.
         //
@@ -123,10 +123,16 @@ osdescConstruct_IMPL
         return status;
     }
 
+    if (!memdescGetContiguity(pMemDesc, AT_PA))
+    {
+        os02Flags = FLD_SET_DRF(OS02, _FLAGS, _PHYSICALITY, _NONCONTIGUOUS, os02Flags);
+        pUserParams->attr = FLD_SET_DRF(OS32, _ATTR, _PHYSICALITY, _NONCONTIGUOUS, pUserParams->attr);
+    }
+
     if (pMemoryManager->bAllowSysmemHugePages && pMemDesc->bForceHugePages)
     {
-        pUserParams->attr = DRF_DEF(OS32, _ATTR, _PAGE_SIZE, _HUGE);
-        pUserParams->attr2 = DRF_DEF(OS32, _ATTR2, _PAGE_SIZE_HUGE, _DEFAULT);
+        pUserParams->attr = FLD_SET_DRF(OS32, _ATTR, _PAGE_SIZE, _HUGE, pUserParams->attr);
+        pUserParams->attr2 = FLD_SET_DRF(OS32, _ATTR2, _PAGE_SIZE_HUGE, _DEFAULT, pUserParams->attr2);
     }
 
     status = memConstructCommon(pMemory, NV01_MEMORY_SYSTEM_OS_DESCRIPTOR, pUserParams->flags,
@@ -171,17 +177,7 @@ osdescConstruct_IMPL
             if (status == NV_OK)
                 pMemory->bRpcAlloc = NV_TRUE;
 
-            if (IS_VIRTUAL_WITH_SRIOV(pGpu) &&
-                !gpuIsWarBug200577889SriovHeavyEnabled(pGpu) &&
-                (pMemDesc->_addressSpace == ADDR_SYSMEM) &&
-                !(pMemDesc->_flags & MEMDESC_FLAGS_CPU_ONLY))
-            {
-                status = vgpuUpdateSysmemPfnBitMap(pGpu, pMemDesc, NV_TRUE);
-                if (status != NV_OK)
-                {
-                    NV_PRINTF(LEVEL_INFO, "Failed to update sysmem PFN bitmap\n");
-                }
-            }
+            NV_ASSERT_OK_OR_RETURN(vgpuUpdateGuestSysmemPfnBitMap(pGpu, pMemDesc, NV_TRUE));
         }
     }
 
@@ -200,11 +196,36 @@ osdescConstruct_IMPL
     return status;
 }
 
+void
+osdescDestruct_IMPL
+(
+    OsDescMemory *pOsDescMemory
+)
+{
+    Memory *pMemory = staticCast(pOsDescMemory, Memory);
+    OBJGPU *pGpu = pMemory->pGpu;
+    MEMORY_DESCRIPTOR *pMemDesc = pMemory->pMemDesc;
+
+    if (pMemDesc->DupCount == 1)
+    {
+        if (pMemDesc->RefCount > 1)
+        {
+            NV_ASSERT_FAILED("Destroying memdesc but not all refs destroyed!\n");
+        }
+
+        if (IS_VIRTUAL(pGpu))
+        {
+            NV_ASSERT_OR_RETURN_VOID(vgpuUpdateGuestSysmemPfnBitMap(pGpu, pMemDesc, NV_FALSE) == NV_OK);
+        }
+    }
+}
+
 NvBool
 osdescCanCopy_IMPL
 (
     OsDescMemory *pOsDescMemory
 )
 {
-    return RMCFG_FEATURE_PLATFORM_UNIX;
+    // In case of MODS the caller is responsible for not freeing the memory.
+    return (RMCFG_FEATURE_PLATFORM_UNIX || RMCFG_FEATURE_PLATFORM_MODS);
 }

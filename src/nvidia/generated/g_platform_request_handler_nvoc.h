@@ -1,13 +1,22 @@
+
 #ifndef _G_PLATFORM_REQUEST_HANDLER_NVOC_H_
 #define _G_PLATFORM_REQUEST_HANDLER_NVOC_H_
+
+// Version of generated metadata structures
+#ifdef NVOC_METADATA_VERSION
+#undef NVOC_METADATA_VERSION
+#endif
+#define NVOC_METADATA_VERSION 2
+
 #include "nvoc/runtime.h"
+#include "nvoc/rtti.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2015-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2015-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -29,6 +38,7 @@ extern "C" {
  * DEALINGS IN THE SOFTWARE.
  */
 
+#pragma once
 #include "g_platform_request_handler_nvoc.h"
 
 #ifndef PLATFORM_REQUEST_HANDLER_H
@@ -45,7 +55,7 @@ extern "C" {
 
 /* ------------------------ Includes --------------------------------------- */
 #include "core/core.h"
-#include "os/os.h"
+#include "nvoc/object.h"
 #include "platform/platform_request_handler_utils.h"
 #include "ctrl/ctrl0000/ctrl0000system.h"
 #include "ctrl/ctrl2080/ctrl2080internal.h"
@@ -278,14 +288,33 @@ typedef struct
 #define PRIVATE_FIELD(x) NVOC_PRIVATE_FIELD(x)
 #endif
 
+
+// Metadata with per-class RTTI with ancestor(s)
+struct NVOC_METADATA__PlatformRequestHandler;
+struct NVOC_METADATA__Object;
+
+
 struct PlatformRequestHandler {
-    const struct NVOC_RTTI *__nvoc_rtti;
+
+    // Metadata starts with RTTI structure.
+    union {
+         const struct NVOC_METADATA__PlatformRequestHandler *__nvoc_metadata_ptr;
+         const struct NVOC_RTTI *__nvoc_rtti;
+    };
+
+    // Parent (i.e. superclass or base class) objects
     struct Object __nvoc_base_Object;
-    struct Object *__nvoc_pbase_Object;
-    struct PlatformRequestHandler *__nvoc_pbase_PlatformRequestHandler;
+
+    // Ancestor object pointers for `staticCast` feature
+    struct Object *__nvoc_pbase_Object;    // obj super
+    struct PlatformRequestHandler *__nvoc_pbase_PlatformRequestHandler;    // pfmreqhndlr
+
+    // 3 PDB properties
     NvBool PDB_PROP_PFMREQHNDLR_SUPPORTED;
     NvBool PDB_PROP_PFMREQHNDLR_SYS_CONTROL_SUPPORTED;
     NvBool PDB_PROP_PFMREQHNDLR_IS_PLATFORM_LEGACY;
+
+    // Data members
     NvU32 pfmreqhndlrSupportedGpuIdx;
     PFM_REQ_HNDLR_SENSOR_DATA sensorData;
     PFM_REQ_HNDLR_PPM_DATA ppmData;
@@ -294,6 +323,13 @@ struct PlatformRequestHandler {
     NV0000_CTRL_SYSTEM_PFM_REQ_HNDLR_GET_FRM_DATA_PARAMS frmData;
     PFM_REQ_HNDLR_VPSTATE_CACHE vPstateCache;
     NvU32 dsmVersion;
+};
+
+
+// Metadata with per-class RTTI with ancestor(s)
+struct NVOC_METADATA__PlatformRequestHandler {
+    const struct NVOC_RTTI rtti;
+    const struct NVOC_METADATA__Object metadata__Object;
 };
 
 #ifndef __NVOC_CLASS_PlatformRequestHandler_TYPEDEF__
@@ -305,18 +341,20 @@ typedef struct PlatformRequestHandler PlatformRequestHandler;
 #define __nvoc_class_id_PlatformRequestHandler 0x641a7f
 #endif /* __nvoc_class_id_PlatformRequestHandler */
 
+// Casting support
 extern const struct NVOC_CLASS_DEF __nvoc_class_def_PlatformRequestHandler;
 
 #define __staticCast_PlatformRequestHandler(pThis) \
     ((pThis)->__nvoc_pbase_PlatformRequestHandler)
 
 #ifdef __nvoc_platform_request_handler_h_disabled
-#define __dynamicCast_PlatformRequestHandler(pThis) ((PlatformRequestHandler*)NULL)
+#define __dynamicCast_PlatformRequestHandler(pThis) ((PlatformRequestHandler*) NULL)
 #else //__nvoc_platform_request_handler_h_disabled
 #define __dynamicCast_PlatformRequestHandler(pThis) \
-    ((PlatformRequestHandler*)__nvoc_dynamicCast(staticCast((pThis), Dynamic), classInfo(PlatformRequestHandler)))
+    ((PlatformRequestHandler*) __nvoc_dynamicCast(staticCast((pThis), Dynamic), classInfo(PlatformRequestHandler)))
 #endif //__nvoc_platform_request_handler_h_disabled
 
+// Property macros
 #define PDB_PROP_PFMREQHNDLR_SYS_CONTROL_SUPPORTED_BASE_CAST
 #define PDB_PROP_PFMREQHNDLR_SYS_CONTROL_SUPPORTED_BASE_NAME PDB_PROP_PFMREQHNDLR_SYS_CONTROL_SUPPORTED
 #define PDB_PROP_PFMREQHNDLR_IS_PLATFORM_LEGACY_BASE_CAST
@@ -330,6 +368,10 @@ NV_STATUS __nvoc_objCreate_PlatformRequestHandler(PlatformRequestHandler**, Dyna
 #define __objCreate_PlatformRequestHandler(ppNewObj, pParent, createFlags) \
     __nvoc_objCreate_PlatformRequestHandler((ppNewObj), staticCast((pParent), Dynamic), (createFlags))
 
+
+// Wrapper macros
+
+// Dispatch functions
 NV_STATUS pfmreqhndlrConstruct_IMPL(struct PlatformRequestHandler *arg_pPlatformRequestHandler);
 
 #define __nvoc_pfmreqhndlrConstruct(arg_pPlatformRequestHandler) pfmreqhndlrConstruct_IMPL(arg_pPlatformRequestHandler)
@@ -387,15 +429,15 @@ static inline NvBool pfmreqhndlrIsInitialized(struct PlatformRequestHandler *pPl
 #define pfmreqhndlrIsInitialized(pPlatformRequestHandler) pfmreqhndlrIsInitialized_IMPL(pPlatformRequestHandler)
 #endif //__nvoc_platform_request_handler_h_disabled
 
-NV_STATUS pfmreqhndlrControl_IMPL(struct PlatformRequestHandler *pPlatformRequestHandler, NvU16 arg0, NvU16 arg1, NvU32 *arg2);
+NV_STATUS pfmreqhndlrControl_IMPL(struct PlatformRequestHandler *pPlatformRequestHandler, NvU16 arg2, NvU16 arg3, NvU32 *arg4);
 
 #ifdef __nvoc_platform_request_handler_h_disabled
-static inline NV_STATUS pfmreqhndlrControl(struct PlatformRequestHandler *pPlatformRequestHandler, NvU16 arg0, NvU16 arg1, NvU32 *arg2) {
+static inline NV_STATUS pfmreqhndlrControl(struct PlatformRequestHandler *pPlatformRequestHandler, NvU16 arg2, NvU16 arg3, NvU32 *arg4) {
     NV_ASSERT_FAILED_PRECOMP("PlatformRequestHandler was disabled!");
     return NV_ERR_NOT_SUPPORTED;
 }
 #else //__nvoc_platform_request_handler_h_disabled
-#define pfmreqhndlrControl(pPlatformRequestHandler, arg0, arg1, arg2) pfmreqhndlrControl_IMPL(pPlatformRequestHandler, arg0, arg1, arg2)
+#define pfmreqhndlrControl(pPlatformRequestHandler, arg2, arg3, arg4) pfmreqhndlrControl_IMPL(pPlatformRequestHandler, arg2, arg3, arg4)
 #endif //__nvoc_platform_request_handler_h_disabled
 
 NV_STATUS pfmreqhndlrPcontrol_IMPL(struct PlatformRequestHandler *pPlatformRequestHandler, NvU32 input, NvBool bSbiosCall);

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2016-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2016-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -30,6 +30,8 @@
 #include "gpu/mmu/kern_gmmu.h"
 #include "gpu/uvm/uvm.h"
 #include "os/os.h"
+
+#include "published/volta/gv100/dev_ram.h"
 
 // @ref busMigrateBarMapping_GV100 to see how FB region is organized
 #define COHERENT_CPU_MAPPING_WPR            COHERENT_CPU_MAPPING_REGION_0
@@ -72,7 +74,7 @@ kbusSetupCpuPointerForBusFlush_GV100
     NV_ASSERT_OR_GOTO(status == NV_OK, cleanup);
 
     // Allocate memory from reserved heap for flush
-    memdescTagAlloc(status, NV_FB_ALLOC_RM_INTERNAL_OWNER_UNNAMED_TAG_54, 
+    memdescTagAlloc(status, NV_FB_ALLOC_RM_INTERNAL_OWNER_UNNAMED_TAG_54,
                     pKernelBus->pFlushMemDesc);
     NV_ASSERT_OR_GOTO(status == NV_OK, cleanup);
 
@@ -127,52 +129,64 @@ kbusDestroyCpuPointerForBusFlush_GV100
 /**
  * Helper function to map coherent cpu mapping.
  *
- * @param[in] pGpu       Pointer to GPU
- * @param[in] pKernelBus Kernel bus pointer
- * @param[in] pMemDesc   Pointer to memdesc that is to be mapped.
+ * @param[in]  pGpu       Pointer to GPU
+ * @param[in]  pKernelBus Kernel bus pointer
+ * @param[in]  pMemDesc   Pointer to memdesc that is to be mapped.
+ * @param[in]  offset     Offset from base address given in memdesc
+ * @param[in]  length     Length of memory to map
+ * @param[in]  protect    Protection flags
+ * @param[out] ppAddress  Virtual address of mapping
+ * @param[out] ppPriv     Private data to be retained for unmapping
  *
- * @return cpu pointer if success
- *         NULL on other errors
+ * @return NV_OK or errors if failed to map
  */
-NvU8*
+NV_STATUS
 kbusMapCoherentCpuMapping_GV100
 (
     OBJGPU                *pGpu,
     KernelBus             *pKernelBus,
-    PMEMORY_DESCRIPTOR     pMemDesc
+    MEMORY_DESCRIPTOR     *pMemDesc,
+    NvU64                  offset,
+    NvU64                  length,
+    NvU32                  protect,
+    NvP64                 *ppAddress,
+    NvP64                 *ppPriv
 )
 {
-    RmPhysAddr startAddr = memdescGetPhysAddr(pMemDesc, FORCE_VMMU_TRANSLATION(pMemDesc, AT_GPU), 0);
+    RmPhysAddr startAddr = memdescGetPhysAddr(pMemDesc, FORCE_VMMU_TRANSLATION(pMemDesc, AT_GPU), offset);
     NvU64      size = memdescGetSize(pMemDesc);
     RmPhysAddr endAddr = startAddr + size - 1;
     RmPhysAddr rangeStart = 0;
     RmPhysAddr rangeEnd = 0;
-    RmPhysAddr offset = 0;
+    RmPhysAddr regionOffset = 0;
     NvU32 i = 0;
+
+    NV_ASSERT_OR_RETURN(memdescGetContiguity(pMemDesc, AT_GPU), NV_ERR_NOT_SUPPORTED);
 
     for (i = COHERENT_CPU_MAPPING_REGION_0; i < pKernelBus->coherentCpuMapping.nrMapping; ++i)
     {
         // Check if requested mem in the mappings.
         rangeStart = pKernelBus->coherentCpuMapping.physAddr[i];
-        rangeEnd = pKernelBus->coherentCpuMapping.physAddr[i] + pKernelBus->coherentCpuMapping.size[i] - 1;
-        offset = 0;
+        rangeEnd = pKernelBus->coherentCpuMapping.physAddr[i] + pKernelBus->coherentCpuMapping.size[i] - 1 ;
+        regionOffset = 0;
 
         if (rangeStart <= startAddr && endAddr <= rangeEnd)
         {
             NV_ASSERT_OR_RETURN(
-                pKernelBus->coherentCpuMapping.pCpuMapping[i] != NvP64_NULL, NvP64_NULL);
+                pKernelBus->coherentCpuMapping.pCpuMapping[i] != NvP64_NULL, NV_ERR_INVALID_STATE);
 
             // Get the offset of the region
-            offset = startAddr - pKernelBus->coherentCpuMapping.physAddr[i];
+            regionOffset = startAddr - pKernelBus->coherentCpuMapping.physAddr[i];
             pKernelBus->coherentCpuMapping.refcnt[i]++;
-            return (NvU8 *)NvP64_VALUE(
+            *ppAddress = (NvU8 *)NvP64_VALUE(
                 ((NvUPtr)pKernelBus->coherentCpuMapping.pCpuMapping[i] +
-                 (NvUPtr)offset));
+                 (NvUPtr)regionOffset));
+            return NV_OK;
         }
     }
 
     NV_ASSERT_FAILED("No mappings found");
-    return NvP64_NULL;
+    return NV_ERR_INVALID_ARGUMENT;
 }
 
 /**
@@ -181,6 +195,8 @@ kbusMapCoherentCpuMapping_GV100
  * @param[in] pGpu       Pointer to GPU
  * @param[in] pKernelBus Kernel bus pointer
  * @param[in] pMemDesc   Pointer to memdesc
+ * @param[in] pAddress   Virtual address to unmap
+ * @param[in] pPriv      Private data to be passed for unmapping
  *
  * @return void
  */
@@ -189,7 +205,9 @@ kbusUnmapCoherentCpuMapping_GV100
 (
     OBJGPU              *pGpu,
     KernelBus           *pKernelBus,
-    PMEMORY_DESCRIPTOR   pMemDesc
+    MEMORY_DESCRIPTOR   *pMemDesc,
+    NvP64                pAddress,
+    NvP64                pPriv
 )
 {
     RmPhysAddr startAddr = memdescGetPhysAddr(pMemDesc, FORCE_VMMU_TRANSLATION(pMemDesc, AT_GPU), 0);
@@ -356,24 +374,24 @@ kbusFlushSingle_GV100
 
     if (kbusIsBarAccessBlocked(pKernelBus))
     {
-        // If BAR has been blocked, there's nothing to flush for vidmem
+        // If BAR1/2 has been blocked, there's nothing to flush for vidmem
         return NV_OK;
     }
 
     if ((flags & BUS_FLUSH_VIDEO_MEMORY) && kbusIsReadCpuPointerToFlushEnabled(pKernelBus))
     {
-        volatile NvU32 data;
-
         //
         // Read the FB address 0 in order to trigger a flush.
         // This will not work with reflected mappings so only enable on VOLTA+
         // Note SRIOV guest does not have access to uflush register.
         //
-        NV_ASSERT(pKernelBus->pReadToFlush != NULL || pKernelBus->virtualBar2[GPU_GFID_PF].pCpuMapping != NULL);
+        NV_ASSERT_OR_RETURN(
+            (pKernelBus->pReadToFlush != NULL || pKernelBus->virtualBar2[GPU_GFID_PF].pCpuMapping != NULL),
+            NV_ERR_INVALID_STATE);
 
         if (pKernelBus->pReadToFlush != NULL)
         {
-            data = MEM_RD32(pKernelBus->pReadToFlush);
+            (void)MEM_RD32(pKernelBus->pReadToFlush);
         }
         else if (pKernelBus->virtualBar2[GPU_GFID_PF].pCpuMapping != NULL)
         {
@@ -382,9 +400,22 @@ kbusFlushSingle_GV100
             // instead which should already be mapped to FB addr 0 as
             // BAR2 is in physical mode right now.
             //
-            data = MEM_RD32(pKernelBus->virtualBar2[GPU_GFID_PF].pCpuMapping);
+            (void)MEM_RD32(pKernelBus->virtualBar2[GPU_GFID_PF].pCpuMapping);
         }
-        (void) data;
+    }
+
+    if (flags & BUS_FLUSH_VIDEO_MEMORY_VIA_PRAMIN_WINDOW)
+    {
+        //
+        // Read the PRAMIN pseudo-bar0-register window to flush writes in it to FB.
+        // Note that despite being "register" writes, these transactions are snooped
+        // at GPU before hitting BAR0 master, and get redirected to BAR1.
+        //
+        // This flush option REQUIRES a valid window to be mapped for PRAMIN prior
+        // to the call! Note that it doesn't have to be the same window that contains
+        // prior writes you might want to flush.
+        //
+        (void)GPU_REG_RD32(pGpu, DRF_BASE(NV_PRAMIN));
     }
 
     return NV_OK;

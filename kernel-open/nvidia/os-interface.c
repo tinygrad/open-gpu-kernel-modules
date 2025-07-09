@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1999-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1999-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -27,6 +27,8 @@
 #include "nv-linux.h"
 #include "nv-caps-imex.h"
 
+#include "nv-platform.h"
+
 #include "nv-time.h"
 
 #include <linux/mmzone.h>
@@ -34,6 +36,7 @@
 #include <linux/cpuset.h>
 
 #include <linux/pid.h>
+#include <linux/pid_namespace.h>
 #if defined(CONFIG_LOCKDEP)
 #include <linux/lockdep.h>
 #endif // CONFIG_LOCKDEP
@@ -52,7 +55,10 @@ NvU32 os_page_size  = PAGE_SIZE;
 NvU64 os_page_mask  = NV_PAGE_MASK;
 NvU8  os_page_shift = PAGE_SHIFT;
 NvBool os_cc_enabled = 0;
+NvBool os_cc_sev_snp_enabled = 0;
+NvBool os_cc_snp_vtom_enabled = 0;
 NvBool os_cc_tdx_enabled = 0;
+NvBool os_cc_sme_enabled = 0;
 
 #if defined(CONFIG_DMA_SHARED_BUFFER)
 NvBool os_dma_buf_enabled = NV_TRUE;
@@ -370,9 +376,27 @@ NvBool NV_API_CALL os_is_administrator(void)
     return NV_IS_SUSER();
 }
 
-NvBool NV_API_CALL os_allow_priority_override(void)
+NvBool NV_API_CALL os_check_access(RsAccessRight accessRight)
 {
-    return capable(CAP_SYS_NICE);
+    switch (accessRight)
+    {
+        case RS_ACCESS_PERFMON:
+        {
+#if defined(CAP_PERFMON)
+            return capable(CAP_PERFMON);
+#else
+            return os_is_administrator();
+#endif
+        }
+        case RS_ACCESS_NICE:
+        {
+            return capable(CAP_SYS_NICE);
+        }
+        default:
+        {
+            return NV_FALSE;
+        }
+    }
 }
 
 char* NV_API_CALL os_string_copy(
@@ -400,7 +424,7 @@ NvS32 NV_API_CALL os_string_compare(const char *str1, const char *str2)
     return strcmp(str1, str2);
 }
 
-void *os_mem_copy_custom(
+static void *os_mem_copy_custom(
     void       *dstPtr,
     const void *srcPtr,
     NvU32       length
@@ -1061,7 +1085,15 @@ NV_STATUS NV_API_CALL os_flush_user_cache(void)
 
 void NV_API_CALL os_flush_cpu_write_combine_buffer(void)
 {
-    wmb();
+#if defined(NVCPU_X86_64)
+    asm volatile("sfence" ::: "memory");
+#elif defined(NVCPU_PPC64LE)
+    __asm__ __volatile__ ("sync" : : : "memory");
+#elif defined(NVCPU_AARCH64)
+    asm volatile("dsb st" : : : "memory");
+#else
+    mb();
+#endif
 }
 
 // override initial debug level from registry
@@ -1165,7 +1197,7 @@ NV_STATUS NV_API_CALL os_queue_work_item(struct os_work_queue *queue, void *data
     return NV_OK;
 }
 
-NV_STATUS NV_API_CALL os_flush_work_queue(struct os_work_queue *queue)
+NV_STATUS NV_API_CALL os_flush_work_queue(struct os_work_queue *queue, NvBool is_unload)
 {
     nv_kthread_q_t *kthread;
 
@@ -1174,8 +1206,12 @@ NV_STATUS NV_API_CALL os_flush_work_queue(struct os_work_queue *queue)
 
     if (NV_MAY_SLEEP())
     {
+        kthread->is_unload_flush_ongoing = is_unload;
+
         if (kthread->q_kthread)
             nv_kthread_q_flush(kthread);
+
+        kthread->is_unload_flush_ongoing = NV_FALSE;
 
         return NV_OK;
     }
@@ -1186,6 +1222,13 @@ NV_STATUS NV_API_CALL os_flush_work_queue(struct os_work_queue *queue)
                   "work from an atomic or interrupt context.\n");
         return NV_ERR_ILLEGAL_ACTION;
     }
+}
+
+NvBool NV_API_CALL os_is_queue_flush_ongoing(struct os_work_queue *queue)
+{
+    nv_kthread_q_t *kthread = queue ? &queue->nvk : &nv_kthread_q;
+
+    return kthread->is_unload_flush_ongoing;
 }
 
 extern NvU32 NVreg_EnableDbgBreakpoint;
@@ -1315,6 +1358,16 @@ NV_STATUS NV_API_CALL os_get_version_info(os_version_info * pOsVersionInfo)
 #endif
 
     return status;
+}
+
+NV_STATUS NV_API_CALL os_get_is_openrm(NvBool *bIsOpenRm)
+{
+#if defined(NVCPU_X86_64) || defined(NVCPU_AARCH64)
+    *bIsOpenRm = NV_TRUE;
+    return NV_OK;
+#else // defined(NVCPU_X86_64) || defined(NVCPU_AARCH64)
+    return NV_ERR_NOT_SUPPORTED;
+#endif // defined(NVCPU_X86_64) || defined(NVCPU_AARCH64)
 }
 
 NvBool NV_API_CALL os_is_xen_dom0(void)
@@ -1622,7 +1675,7 @@ NV_STATUS NV_API_CALL os_alloc_pages_node
     NV_STATUS status = NV_ERR_NOT_SUPPORTED;
 
 #if defined(__GFP_THISNODE) && defined(GFP_HIGHUSER_MOVABLE) && \
-    defined(__GFP_COMP) && defined(__GFP_NORETRY) && defined(__GFP_NOWARN)
+    defined(__GFP_COMP) && defined(__GFP_NOWARN)
     gfp_t gfp_mask;
     struct page *alloc_addr;
     unsigned int order = get_order(size);
@@ -1639,13 +1692,11 @@ NV_STATUS NV_API_CALL os_alloc_pages_node
      *                              pages, which is needed in order to use
      *                              vm_insert_page API.
      *
-     * 4. __GFP_NORETRY:            Used to avoid the Linux kernel OOM killer.
-     *
-     * 5. __GFP_NOWARN:             Used to avoid a WARN_ON in the slowpath if
+     * 4. __GFP_NOWARN:             Used to avoid a WARN_ON in the slowpath if
      *                              the requested order is too large (just fail
      *                              instead).
      *
-     * 6. (Optional) __GFP_RECLAIM: Used to allow/forbid reclaim.
+     * 5. (Optional) __GFP_RECLAIM: Used to allow/forbid reclaim.
      *                              This is part of GFP_USER and consequently
      *                              GFP_HIGHUSER_MOVABLE.
      *
@@ -1659,7 +1710,30 @@ NV_STATUS NV_API_CALL os_alloc_pages_node
      */
 
     gfp_mask = __GFP_THISNODE | GFP_HIGHUSER_MOVABLE | __GFP_COMP |
-               __GFP_NORETRY | __GFP_NOWARN;
+               __GFP_NOWARN;
+    
+#if defined(__GFP_RETRY_MAYFAIL)
+
+    /*
+     * __GFP_RETRY_MAYFAIL :  Used to avoid the Linux kernel OOM killer.
+     *                        To help PMA on paths where UVM might be
+     *                        in memory over subscription. This gives UVM 
+     *                        a chance to free memory before invoking any 
+     *                        action from the OOM killer.
+     *                        Freeing non-essential memory will also benefit 
+     *                        the system as a whole.
+     */
+
+    gfp_mask |= __GFP_RETRY_MAYFAIL;
+#elif defined(__GFP_NORETRY)
+
+    /*
+     *  __GFP_NORETRY :       Use __GFP_NORETRY on older kernels where
+     *                        __GFP_RETRY_MAYFAIL is not present.
+     */
+
+    gfp_mask |= __GFP_NORETRY;
+#endif
 
 #if defined(__GFP_RECLAIM)
     if (flag & NV_ALLOC_PAGES_NODE_SKIP_RECLAIM)
@@ -2046,6 +2120,31 @@ void NV_API_CALL os_wake_up
 )
 {
     complete_all(&wq->q);
+}
+
+NV_STATUS NV_API_CALL os_get_tegra_platform
+(
+    NvU32 *mode
+)
+{
+#if defined(NV_SOC_TEGRA_FUSE_HELPER_H_PRESENT) && NV_SUPPORTS_PLATFORM_DISPLAY_DEVICE
+    if (tegra_platform_is_fpga())
+    {
+        *mode = NV_OS_TEGRA_PLATFORM_FPGA;
+    }
+    else if (tegra_platform_is_vdk())
+    {
+        *mode = NV_OS_TEGRA_PLATFORM_SIM;
+    }
+    else
+    {
+        *mode = NV_OS_TEGRA_PLATFORM_SILICON;
+    }
+
+    return NV_OK;
+#else
+    return NV_ERR_NOT_SUPPORTED;
+#endif
 }
 
 nv_cap_t* NV_API_CALL os_nv_cap_init
@@ -2573,7 +2672,11 @@ NV_STATUS NV_API_CALL os_offline_page_at_address
 
 void* NV_API_CALL os_get_pid_info(void)
 {
-    return get_task_pid(current, PIDTYPE_PID);
+#if defined(NV_HAS_ENUM_PIDTYPE_TGID)
+    return get_task_pid(current, PIDTYPE_TGID);
+#else
+    return get_task_pid(current->group_leader, PIDTYPE_PID);
+#endif
 }
 
 void NV_API_CALL os_put_pid_info(void *pid_info)
@@ -2596,3 +2699,16 @@ NV_STATUS NV_API_CALL os_find_ns_pid(void *pid_info, NvU32 *ns_pid)
     return NV_OK;
 }
 
+NvBool NV_API_CALL os_is_init_ns(void)
+{
+    return (task_active_pid_ns(current) == &init_pid_ns);
+}
+
+NV_STATUS NV_API_CALL os_device_vm_present(void)
+{
+#if defined(NV_DEVICE_VM_BUILD)
+    return NV_OK;
+#else
+    return NV_ERR_NOT_SUPPORTED;
+#endif
+}

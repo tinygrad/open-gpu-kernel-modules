@@ -198,7 +198,6 @@ FlipCursorImage(NVDispEvoPtr pDispEvo,
                     pFlipHead,
                     1     /* numFlipHeads */,
                     TRUE  /* commit */,
-                    FALSE /* allowVrr */,
                     NULL  /* pReply */,
                     FALSE /* skipUpdate */,
                     FALSE /* allowFlipLock */);
@@ -286,26 +285,27 @@ void nvMoveCursor(NVDispEvoPtr pDispEvo, const NvU32 apiHead,
     const NVDispApiHeadStateEvoRec *pApiHeadState =
         &pDispEvo->apiHeadState[apiHead];
     NvU16 hwViewportInWidth;
-    NvU32 head, headCount;
+    NvU32 head;
+    NvBool firstHead;
 
     /* XXX NVKMS TODO: validate x,y against current viewport in? */
 
     nvAssert(apiHead != NV_INVALID_HEAD);
 
-    headCount = 0;
+    firstHead = NV_TRUE;
     FOR_EACH_EVO_HW_HEAD_IN_MASK(pApiHeadState->hwHeadsMask, head) {
         const NVDispHeadStateEvoRec *pHeadState = &pDispEvo->headState[head];
         const NVHwModeTimingsEvo *pTimings = &pHeadState->timings;
         const NvU32 sd = pDispEvo->displayOwner;
 
-        if (headCount == 0) {
+        if (firstHead) {
             hwViewportInWidth = pTimings->viewPort.in.width;
         } else {
             nvAssert(hwViewportInWidth == pTimings->viewPort.in.width);
         }
 
         pDevEvo->gpus[sd].headState[head].cursor.x =
-            pParams->x - (hwViewportInWidth * pHeadState->tilePosition);
+            pParams->x - (hwViewportInWidth * pHeadState->mergeHeadSection);
         pDevEvo->gpus[sd].headState[head].cursor.y = pParams->y;
 
         nvEvoMoveCursorInternal(pDispEvo,
@@ -313,7 +313,7 @@ void nvMoveCursor(NVDispEvoPtr pDispEvo, const NvU32 apiHead,
                                 pDevEvo->gpus[sd].headState[head].cursor.x,
                                 pDevEvo->gpus[sd].headState[head].cursor.y);
 
-        headCount++;
+        firstHead = NV_FALSE;
     }
 }
 
@@ -429,6 +429,9 @@ extern NVEvoCursorHAL nvEvoCursor91;
 extern NVEvoCursorHAL nvEvoCursorC3;
 extern NVEvoCursorHAL nvEvoCursorC5;
 extern NVEvoCursorHAL nvEvoCursorC6;
+extern NVEvoCursorHAL nvEvoCursorCA;
+extern NVEvoCursorHAL nvEvoCursorCB;
+
 
 enum NvKmsAllocDeviceStatus nvInitDispHalCursorEvo(NVDevEvoPtr pDevEvo)
 {
@@ -437,6 +440,8 @@ enum NvKmsAllocDeviceStatus nvInitDispHalCursorEvo(NVDevEvoPtr pDevEvo)
         &nvEvoCursorC3,
         &nvEvoCursorC5,
         &nvEvoCursorC6,
+        &nvEvoCursorCA,
+        &nvEvoCursorCB,
     };
 
     int i;

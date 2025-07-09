@@ -1,5 +1,5 @@
 /*******************************************************************************
-    Copyright (c) 2016-2023 NVIDIA Corporation
+    Copyright (c) 2016-2025 NVIDIA Corporation
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"), to
@@ -44,8 +44,8 @@ void uvm_hal_pascal_enable_replayable_faults(uvm_parent_gpu_t *parent_gpu)
     volatile NvU32 *reg;
     NvU32 mask;
 
-    reg = parent_gpu->fault_buffer_info.rm_info.replayable.pPmcIntrEnSet;
-    mask = parent_gpu->fault_buffer_info.rm_info.replayable.replayableFaultMask;
+    reg = parent_gpu->fault_buffer.rm_info.replayable.pPmcIntrEnSet;
+    mask = parent_gpu->fault_buffer.rm_info.replayable.replayableFaultMask;
 
     UVM_GPU_WRITE_ONCE(*reg, mask);
 }
@@ -55,33 +55,33 @@ void uvm_hal_pascal_disable_replayable_faults(uvm_parent_gpu_t *parent_gpu)
     volatile NvU32 *reg;
     NvU32 mask;
 
-    reg = parent_gpu->fault_buffer_info.rm_info.replayable.pPmcIntrEnClear;
-    mask = parent_gpu->fault_buffer_info.rm_info.replayable.replayableFaultMask;
+    reg = parent_gpu->fault_buffer.rm_info.replayable.pPmcIntrEnClear;
+    mask = parent_gpu->fault_buffer.rm_info.replayable.replayableFaultMask;
 
     UVM_GPU_WRITE_ONCE(*reg, mask);
 }
 
 NvU32 uvm_hal_pascal_fault_buffer_read_put(uvm_parent_gpu_t *parent_gpu)
 {
-    NvU32 put = UVM_GPU_READ_ONCE(*parent_gpu->fault_buffer_info.rm_info.replayable.pFaultBufferPut);
-    UVM_ASSERT(put < parent_gpu->fault_buffer_info.replayable.max_faults);
+    NvU32 put = UVM_GPU_READ_ONCE(*parent_gpu->fault_buffer.rm_info.replayable.pFaultBufferPut);
+    UVM_ASSERT(put < parent_gpu->fault_buffer.replayable.max_faults);
 
     return put;
 }
 
 NvU32 uvm_hal_pascal_fault_buffer_read_get(uvm_parent_gpu_t *parent_gpu)
 {
-    NvU32 get = UVM_GPU_READ_ONCE(*parent_gpu->fault_buffer_info.rm_info.replayable.pFaultBufferGet);
-    UVM_ASSERT(get < parent_gpu->fault_buffer_info.replayable.max_faults);
+    NvU32 get = UVM_GPU_READ_ONCE(*parent_gpu->fault_buffer.rm_info.replayable.pFaultBufferGet);
+    UVM_ASSERT(get < parent_gpu->fault_buffer.replayable.max_faults);
 
     return get;
 }
 
 void uvm_hal_pascal_fault_buffer_write_get(uvm_parent_gpu_t *parent_gpu, NvU32 index)
 {
-    UVM_ASSERT(index < parent_gpu->fault_buffer_info.replayable.max_faults);
+    UVM_ASSERT(index < parent_gpu->fault_buffer.replayable.max_faults);
 
-    UVM_GPU_WRITE_ONCE(*parent_gpu->fault_buffer_info.rm_info.replayable.pFaultBufferGet, index);
+    UVM_GPU_WRITE_ONCE(*parent_gpu->fault_buffer.rm_info.replayable.pFaultBufferGet, index);
 }
 
 static uvm_fault_access_type_t get_fault_access_type(const NvU32 *fault_entry)
@@ -189,9 +189,9 @@ static NvU32 *get_fault_buffer_entry(uvm_parent_gpu_t *parent_gpu, NvU32 index)
     fault_buffer_entry_b069_t *buffer_start;
     NvU32 *fault_entry;
 
-    UVM_ASSERT(index < parent_gpu->fault_buffer_info.replayable.max_faults);
+    UVM_ASSERT(index < parent_gpu->fault_buffer.replayable.max_faults);
 
-    buffer_start = (fault_buffer_entry_b069_t *)parent_gpu->fault_buffer_info.rm_info.replayable.bufferAddress;
+    buffer_start = (fault_buffer_entry_b069_t *)parent_gpu->fault_buffer.rm_info.replayable.bufferAddress;
     fault_entry = (NvU32 *)&buffer_start[index];
 
     return fault_entry;
@@ -205,10 +205,10 @@ static UvmFaultMetadataPacket *get_fault_buffer_entry_metadata(uvm_parent_gpu_t 
 {
     UvmFaultMetadataPacket *fault_entry_metadata;
 
-    UVM_ASSERT(index < parent_gpu->fault_buffer_info.replayable.max_faults);
+    UVM_ASSERT(index < parent_gpu->fault_buffer.replayable.max_faults);
     UVM_ASSERT(g_uvm_global.conf_computing_enabled);
 
-    fault_entry_metadata = parent_gpu->fault_buffer_info.rm_info.replayable.bufferMetadata;
+    fault_entry_metadata = parent_gpu->fault_buffer.rm_info.replayable.bufferMetadata;
     UVM_ASSERT(fault_entry_metadata != NULL);
 
     return fault_entry_metadata + index;
@@ -267,7 +267,7 @@ NV_STATUS uvm_hal_pascal_fault_buffer_parse_replayable_entry(uvm_parent_gpu_t *p
 
     // Compute global uTLB id
     utlb_id = buffer_entry->fault_source.gpc_id * parent_gpu->utlb_per_gpc_count + gpc_utlb_id;
-    UVM_ASSERT(utlb_id < parent_gpu->fault_buffer_info.replayable.utlb_count);
+    UVM_ASSERT(utlb_id < parent_gpu->fault_buffer.replayable.utlb_count);
 
     buffer_entry->fault_source.utlb_id = utlb_id;
 
@@ -286,8 +286,6 @@ NV_STATUS uvm_hal_pascal_fault_buffer_parse_replayable_entry(uvm_parent_gpu_t *p
 
 bool uvm_hal_pascal_fault_buffer_entry_is_valid(uvm_parent_gpu_t *parent_gpu, NvU32 index)
 {
-    NvU32 *fault_entry;
-
     if (g_uvm_global.conf_computing_enabled) {
         // Use the valid bit present in the encryption metadata, which is
         // unencrypted, instead of the valid bit present in the (encrypted)
@@ -296,15 +294,15 @@ bool uvm_hal_pascal_fault_buffer_entry_is_valid(uvm_parent_gpu_t *parent_gpu, Nv
 
         return fault_entry_metadata->valid;
     }
+    else {
+        NvU32 *fault_entry = get_fault_buffer_entry(parent_gpu, index);
 
-    fault_entry = get_fault_buffer_entry(parent_gpu, index);
-    return READ_HWVALUE_MW(fault_entry, B069, FAULT_BUF_ENTRY, VALID);
+        return READ_HWVALUE_MW(fault_entry, B069, FAULT_BUF_ENTRY, VALID);
+    }
 }
 
 void uvm_hal_pascal_fault_buffer_entry_clear_valid(uvm_parent_gpu_t *parent_gpu, NvU32 index)
 {
-    NvU32 *fault_entry;
-
     if (g_uvm_global.conf_computing_enabled) {
         // Use the valid bit present in the encryption metadata, which is
         // unencrypted, instead of the valid bit present in the (encrypted)
@@ -312,21 +310,15 @@ void uvm_hal_pascal_fault_buffer_entry_clear_valid(uvm_parent_gpu_t *parent_gpu,
         UvmFaultMetadataPacket *fault_entry_metadata = get_fault_buffer_entry_metadata(parent_gpu, index);
 
         fault_entry_metadata->valid = false;
-        return;
     }
+    else {
+        NvU32 *fault_entry = get_fault_buffer_entry(parent_gpu, index);
 
-    fault_entry = get_fault_buffer_entry(parent_gpu, index);
-    WRITE_HWCONST_MW(fault_entry, B069, FAULT_BUF_ENTRY, VALID, FALSE);
+        WRITE_HWCONST_MW(fault_entry, B069, FAULT_BUF_ENTRY, VALID, FALSE);
+    }
 }
 
 NvU32 uvm_hal_pascal_fault_buffer_entry_size(uvm_parent_gpu_t *parent_gpu)
 {
     return NVB069_FAULT_BUF_SIZE;
-}
-
-void uvm_hal_pascal_fault_buffer_parse_non_replayable_entry_unsupported(uvm_parent_gpu_t *parent_gpu,
-                                                                        void *fault_packet,
-                                                                        uvm_fault_buffer_entry_t *buffer_entry)
-{
-    UVM_ASSERT_MSG(false, "fault_buffer_parse_non_replayable_entry called on Pascal GPU\n");
 }

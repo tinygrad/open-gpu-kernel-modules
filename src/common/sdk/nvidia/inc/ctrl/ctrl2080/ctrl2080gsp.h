@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2018-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2018-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -87,6 +87,10 @@ typedef struct NV2080_CTRL_GSP_GET_FEATURES_PARAMS {
  *
  * This command reports the current GSP-RM heap usage statistics.
  *
+ *  gfid
+ *    The gfid that's under query: When gfid = 0, it will report the stats of PF.
+ *    Otherwise, it will report stats for RM task's memory consumption associated
+ *    with a given gfid.
  *  managedSize
  *    The total size in bytes of the underlying heap. Note that not all memory
  *    will be allocatable, due to fragmentation and memory allocator/tracking
@@ -125,9 +129,65 @@ typedef struct NV2080_CTRL_GSP_RM_HEAP_STATS_SNAPSHOT {
 #define NV2080_CTRL_GSP_GET_RM_HEAP_STATS_PARAMS_MESSAGE_ID (0x2U)
 
 typedef struct NV2080_CTRL_GSP_GET_RM_HEAP_STATS_PARAMS {
+    NvU32 gfid;
     NV_DECLARE_ALIGNED(NvU64 managedSize, 8);
+    NV_DECLARE_ALIGNED(NvU64 largestFreeChunkSize, 8);
     NV_DECLARE_ALIGNED(NV2080_CTRL_GSP_RM_HEAP_STATS_SNAPSHOT current, 8);
     NV_DECLARE_ALIGNED(NV2080_CTRL_GSP_RM_HEAP_STATS_SNAPSHOT peak, 8);
 } NV2080_CTRL_GSP_GET_RM_HEAP_STATS_PARAMS;
+
+/*
+ * NV2080_CTRL_CMD_GSP_GET_VGPU_HEAP_STATS
+ *
+ * This command reports the current partition's VGPU-GSP plugin's heap usage statistics.
+ *
+ *  managedSize
+ *    The total size in bytes of the underlying heap. Note that not all memory
+ *    will be allocatable, due to fragmentation and memory allocator/tracking
+ *    overhead.
+ *  allocatedSize
+ *    Allocated memory size, in bytes. This value does not include overhead used
+ *    by the underlying allocator for padding/metadata.
+ *  allocationCount
+ *    The number of active allocations. This count reflects the current number of
+ *    memory blocks that have been allocated but not yet freed.
+ *  peakAllocatedSize
+ *    The highest recorded allocated memory size, in bytes. This value represents the
+ *    maximum amount of memory that has been allocated at any point in time. When a new
+ *    highest allocated size is recorded, the peakAllocatedSize is updated.
+ *  peakAllocationCount
+ *    The number of active allocations corresponding to the highest recorded peakAllocatedSize.
+ */
+
+#define NV2080_CTRL_CMD_GSP_GET_VGPU_HEAP_STATS (0x20803603) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_GSP_INTERFACE_ID << 8) | NV2080_CTRL_CMD_GSP_GET_VGPU_HEAP_STATS_PARAMS_MESSAGE_ID" */
+
+#define NV2080_CTRL_CMD_GSP_GET_VGPU_HEAP_STATS_PARAMS_MESSAGE_ID (0x3U)
+
+typedef struct NV2080_CTRL_CMD_GSP_GET_VGPU_HEAP_STATS_PARAMS {
+    NV_DECLARE_ALIGNED(NvU64 allocatedSize, 8);
+    NV_DECLARE_ALIGNED(NvU64 peakAllocatedSize, 8);
+    NV_DECLARE_ALIGNED(NvU64 managedSize, 8);
+    NvU32 allocationCount;
+    NvU32 peakAllocationCount;
+    NV_DECLARE_ALIGNED(NvU64 largestFreeChunkSize, 8);
+} NV2080_CTRL_CMD_GSP_GET_VGPU_HEAP_STATS_PARAMS;
+
+#define NV2080_CTRL_CMD_GSP_GET_LIBOS_HEAP_STATS (0x20803604) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_GSP_INTERFACE_ID << 8) | NV2080_CTRL_CMD_GSP_GET_LIBOS_HEAP_STATS_PARAMS_MESSAGE_ID" */
+#define NV2080_CTRL_GSP_LIBOS_POOL_COUNT_MAX     64
+
+typedef struct NV2080_CTRL_GSP_LIBOS_POOL_STATS {
+    NvU32 allocations;
+    NvU32 peakAllocations;
+    NV_DECLARE_ALIGNED(NvU64 objectSize, 8);
+} NV2080_CTRL_GSP_LIBOS_POOL_STATS;
+
+
+#define NV2080_CTRL_CMD_GSP_GET_LIBOS_HEAP_STATS_PARAMS_MESSAGE_ID (0x4U)
+
+typedef struct NV2080_CTRL_CMD_GSP_GET_LIBOS_HEAP_STATS_PARAMS {
+    NV_DECLARE_ALIGNED(NV2080_CTRL_GSP_LIBOS_POOL_STATS poolStats[NV2080_CTRL_GSP_LIBOS_POOL_COUNT_MAX], 8);
+    NV_DECLARE_ALIGNED(NvU64 totalHeapSize, 8);
+    NvU8 poolCount;
+} NV2080_CTRL_CMD_GSP_GET_LIBOS_HEAP_STATS_PARAMS;
 
 // _ctrl2080gsp_h_

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2014-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2014-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -63,6 +63,11 @@ kbusCreateP2PMapping_GP100
         FLD_TEST_DRF(_P2PAPI, _ATTRIBUTES, _CONNECTION_TYPE, _NVLINK_INDIRECT, attributes))
     {
         return kbusCreateP2PMappingForNvlink_HAL(pGpu0, pKernelBus0, pGpu1, pKernelBus1, peer0, peer1, attributes);
+    }
+
+    if (FLD_TEST_DRF(_P2PAPI, _ATTRIBUTES, _CONNECTION_TYPE, _PCIE_BAR1, attributes))
+    {
+        return kbusCreateP2PMappingForBar1P2P_HAL(pGpu0, pKernelBus0, pGpu1, pKernelBus1, attributes);
     }
 
     if (FLD_TEST_DRF(_P2PAPI, _ATTRIBUTES, _CONNECTION_TYPE, _PCIE, attributes))
@@ -270,11 +275,11 @@ kbusCreateP2PMappingForNvlink_GP100
         NV_PRINTF(LEVEL_INFO, "- P2P: Using Default RM mapping for P2P.\n");
     }
 
+    if (bEgmPeer)
+    {
+        NV_PRINTF(LEVEL_INFO, "EGM peer\n");
+    }
 
-        if (bEgmPeer)
-        {
-            NV_PRINTF(LEVEL_INFO, "EGM peer\n");
-        }
     //
     // Does the mapping already exist between the given pair of GPUs using the peerIDs
     // *peer0 and *peer1 respectively ?
@@ -374,7 +379,7 @@ kbusCreateP2PMappingForNvlink_GP100
     {
         KernelNvlink *pKernelNvlink0 = GPU_GET_KERNEL_NVLINK(pGpu0);
         KernelNvlink *pKernelNvlink1 = GPU_GET_KERNEL_NVLINK(pGpu1);
-        NV2080_CTRL_NVLINK_ENABLE_NVLINK_PEER_PARAMS params;
+        NV2080_CTRL_INTERNAL_NVLINK_ENABLE_NVLINK_PEER_PARAMS params;
 
         if (pKernelNvlink0 == NULL || pKernelNvlink1 == NULL)
         {
@@ -387,7 +392,7 @@ kbusCreateP2PMappingForNvlink_GP100
 
         // Set the NVLink USE_NVLINK_PEER fields in the LTCS registers for GPU0
         status = knvlinkExecGspRmRpc(pGpu0, pKernelNvlink0,
-                                     NV2080_CTRL_CMD_NVLINK_ENABLE_NVLINK_PEER,
+                                     NV2080_CTRL_CMD_INTERNAL_NVLINK_ENABLE_NVLINK_PEER,
                                      (void *)&params, sizeof(params));
         if (status != NV_OK)
         {
@@ -404,7 +409,7 @@ kbusCreateP2PMappingForNvlink_GP100
 
         // Set the NVLink USE_NVLINK_PEER fields in the LTCS registers for GPU1
         status = knvlinkExecGspRmRpc(pGpu1, pKernelNvlink1,
-                                     NV2080_CTRL_CMD_NVLINK_ENABLE_NVLINK_PEER,
+                                     NV2080_CTRL_CMD_INTERNAL_NVLINK_ENABLE_NVLINK_PEER,
                                      (void *)&params, sizeof(params));
         if (status != NV_OK)
         {
@@ -482,6 +487,7 @@ _kbusRemoveNvlinkPeerMapping
     //    P2P between all the peers is destroyed.
     //    busNvlinkMappingRefcountPerGpu == 0 check is done in this case to remove
     //    the peer id from busNvlinkPeerNumberMask[peerGpuInst]
+    //
     //    Two peer ids are used to reach the same GPU, one for HBM and one for
     //    EGM. In that case busNvlinkMappingRefcountPerGpu isn't going to
     //    reach 0 until both the peer ids are removed. In this case,
@@ -539,7 +545,7 @@ _kbusRemoveNvlinkPeerMapping
         else
         {
             KernelNvlink *pKernelNvlink0 = GPU_GET_KERNEL_NVLINK(pGpu0);
-            NV2080_CTRL_NVLINK_ENABLE_NVLINK_PEER_PARAMS params;
+            NV2080_CTRL_INTERNAL_NVLINK_ENABLE_NVLINK_PEER_PARAMS params;
 
             NV_ASSERT_OR_RETURN(pKernelNvlink0 != NULL, NV_ERR_NOT_SUPPORTED);
 
@@ -549,7 +555,7 @@ _kbusRemoveNvlinkPeerMapping
 
             // Unset the NVLink USE_NVLINK_PEER fields in the LTCS registers for GPU0
             status = knvlinkExecGspRmRpc(pGpu0, pKernelNvlink0,
-                                         NV2080_CTRL_CMD_NVLINK_ENABLE_NVLINK_PEER,
+                                         NV2080_CTRL_CMD_INTERNAL_NVLINK_ENABLE_NVLINK_PEER,
                                          (void *)&params, sizeof(params));
             if (status != NV_OK)
             {
@@ -629,6 +635,11 @@ kbusRemoveP2PMapping_GP100
         FLD_TEST_DRF(_P2PAPI, _ATTRIBUTES, _CONNECTION_TYPE, _NVLINK_INDIRECT, attributes))
     {
         return kbusRemoveP2PMappingForNvlink_HAL(pGpu0, pKernelBus0, pGpu1, pKernelBus1, peer0, peer1, attributes);
+    }
+
+    if (FLD_TEST_DRF(_P2PAPI, _ATTRIBUTES, _CONNECTION_TYPE, _PCIE_BAR1, attributes))
+    {
+        return kbusRemoveP2PMappingForBar1P2P_HAL(pGpu0, pKernelBus0, pGpu1, pKernelBus1, attributes);
     }
 
     if (FLD_TEST_DRF(_P2PAPI, _ATTRIBUTES, _CONNECTION_TYPE, _PCIE, attributes))
@@ -732,9 +743,10 @@ kbusGetPeerId_GP100
 {
     extern NvU32 kbusGetPeerId_GM107(OBJGPU *pGpu, KernelBus *pKernelBus, OBJGPU *pPeerGpu);
     NvU32 gpuPeerInst = gpuGetInstance(pGpuPeer);
-    NvU32 peerId = pKernelBus->p2p.busNvlinkPeerNumberMask[gpuPeerInst];
+    NvU32 peerMask = pKernelBus->p2p.busNvlinkPeerNumberMask[gpuPeerInst];
+    NvU32 peerId;
 
-    if (peerId == 0)
+    if (peerMask == 0)
     {
         NV_PRINTF(LEVEL_INFO,
                   "NVLINK P2P not set up between GPU%u and GPU%u, checking for PCIe P2P...\n",
@@ -742,8 +754,16 @@ kbusGetPeerId_GP100
         return kbusGetPeerId_GM107(pGpu, pKernelBus, pGpuPeer);
     }
 
-    LOWESTBITIDX_32(peerId);
-    return peerId;
+    FOR_EACH_INDEX_IN_MASK(32, peerId, peerMask)
+    {
+        if (!pKernelBus->p2p.bEgmPeer[peerId])
+        {
+            return peerId;
+        }
+    }
+    FOR_EACH_INDEX_IN_MASK_END;
+
+    return BUS_INVALID_PEER;
 }
 
 /**

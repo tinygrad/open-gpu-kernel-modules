@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2022-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -34,24 +34,29 @@
 
 /*************************** SPDM COMMANDS ************************************/
 
+#include "cc_drv.h"
+
 /*!
  * @brief SPDM Command Types
  *
  */
-#define RM_GSP_SPDM_CMD_ID_CC_INIT           (0x1)
-#define RM_GSP_SPDM_CMD_ID_CC_DEINIT         (0x2)
-#define RM_GSP_SPDM_CMD_ID_CC_CTRL           (0x3)
-#define RM_GSP_SPDM_CMD_ID_CC_INIT_RM_DATA   (0x4)
-#define RM_GSP_SPDM_CMD_ID_CC_HEARTBEAT_CTRL (0x5)
+#define RM_GSP_SPDM_CMD_ID_CC_INIT                        (0x1)
+#define RM_GSP_SPDM_CMD_ID_CC_DEINIT                      (0x2)
+#define RM_GSP_SPDM_CMD_ID_CC_CTRL                        (0x3)
+#define RM_GSP_SPDM_CMD_ID_CC_INIT_RM_DATA                (0x4)
+#define RM_GSP_SPDM_CMD_ID_CC_HEARTBEAT_CTRL              (0x5)
+#define RM_GSP_SPDM_CMD_ID_FIPS_SELFTEST                  (0x6)
 
 
-#define RM_GSP_SPDM_CMD_ID_INVALID_COMMAND   (0xFF)
+#define RM_GSP_SPDM_CMD_ID_INVALID_COMMAND                (0xFF)
+
+#define SPDM_SESSION_ESTABLISHMENT_TRANSCRIPT_BUFFER_SIZE 0x2400
 
 
 
-#define RSVD7_SIZE                           16
+#define RSVD7_SIZE                                        16
 
-#define RSVD8_SIZE                           2
+#define RSVD8_SIZE                                        2
 
 /*!
  * Guest RM provides INIT context
@@ -114,6 +119,25 @@ typedef struct RM_GSP_SPDM_CMD_CC_HEARTBEAT_CTRL {
 typedef struct RM_GSP_SPDM_CMD_CC_HEARTBEAT_CTRL *PRM_GSP_SPDM_CMD_CC_HEARTBEAT_CTRL;
 
 
+
+/*! 
+ * HCC FIPS Self-test.
+ */
+#define CE_FIPS_SELF_TEST_DATA_SIZE     16
+#define CE_FIPS_SELF_TEST_AUTH_TAG_SIZE 16
+#define CE_FIPS_SELF_TEST_IV_SIZE       12
+
+typedef struct RM_GSP_SPDM_CMD_FIPS_SELFTEST {
+    NvU8   cmdType;
+    NvU8   isEnc;
+    CC_KMB kmb;
+    NvU8   text[CE_FIPS_SELF_TEST_DATA_SIZE];
+    NvU8   authTag[CE_FIPS_SELF_TEST_AUTH_TAG_SIZE];
+} RM_GSP_SPDM_CMD_FIPS_SELFTEST;
+typedef struct RM_GSP_SPDM_CMD_FIPS_SELFTEST *PRM_GSP_SPDM_CMD_FIPS_SELFTEST;
+
+
+
 /*!
  * NOTE : Do not include structure members that have alignment requirement >= 8 to avoid alignment directives 
  * getting added in FINN generated structures / unions as RM_GSP_SPDM_CMD / RM_GSP_SPDM_MSG are pragma packed in 
@@ -132,6 +156,9 @@ typedef union RM_GSP_SPDM_CMD {
     RM_GSP_SPDM_CMD_CC_INIT_RM_DATA   rmDataInitCmd;
     RM_GSP_SPDM_CMD_CC_HEARTBEAT_CTRL ccHeartbeatCtrl;
 
+
+    RM_GSP_SPDM_CMD_FIPS_SELFTEST     ccFipsTest;
+
 } RM_GSP_SPDM_CMD;
 typedef union RM_GSP_SPDM_CMD *PRM_GSP_SPDM_CMD;
 
@@ -149,6 +176,7 @@ typedef union RM_GSP_SPDM_CMD *PRM_GSP_SPDM_CMD;
 #define RM_GSP_SPDM_MSG_ID_CC_CTRL           (0x3)
 #define RM_GSP_SPDM_MSG_ID_CC_INIT_RM_DATA   (0x4)
 #define RM_GSP_SPDM_MSG_ID_CC_HEARTBEAT_CTRL (0x5)
+#define RM_GSP_SPDM_MSG_ID_FIPS_SELFTEST     (0x6)
 
 
 
@@ -168,20 +196,20 @@ typedef union RM_GSP_SPDM_CMD *PRM_GSP_SPDM_CMD;
  * SPDM message structure.
  */
 typedef struct RM_GSP_SPDM_MSG {
-    NvU8   msgType;
+    NvU8  msgType;
 
     // status returned from GSP message infrastructure.
-    NvU32  status;
+    NvU32 status;
 
-    NvU32  rsvd1;
+    NvU32 rsvd1;
 
-    NvU32  rsvd2;
+    NvU32 rsvd2;
 
-    NvU32  rsvd3;
+    NvU32 rsvd3;
 
-    NvU32  rsvd4;
+    NvU32 rsvd4;
 
-    NvBool rsvd5;
+    NvU32 rsvd5;
 } RM_GSP_SPDM_MSG;
 typedef struct RM_GSP_SPDM_MSG *PRM_GSP_SPDM_MSG;
 
@@ -200,6 +228,21 @@ typedef struct NV2080_CTRL_INTERNAL_SPDM_PARTITION_PARAMS {
     RM_GSP_SPDM_CMD cmd;
     RM_GSP_SPDM_MSG msg;
 } NV2080_CTRL_INTERNAL_SPDM_PARTITION_PARAMS;
+
+/*
+ * NV2080_CTRL_INTERNAL_SPDM_RETRIEVE_TRANSCRIPT
+ *
+ * This command retrieves the transcript of SPDM session establishment messages.
+ *
+ */
+#define NV2080_CTRL_INTERNAL_SPDM_RETRIEVE_TRANSCRIPT (0x20800ada) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_INTERNAL_INTERFACE_ID << 8) | NV2080_CTRL_INTERNAL_SPDM_RETRIEVE_TRANSCRIPT_PARAMS_MESSAGE_ID" */
+
+#define NV2080_CTRL_INTERNAL_SPDM_RETRIEVE_TRANSCRIPT_PARAMS_MESSAGE_ID (0xDAU)
+
+typedef struct NV2080_CTRL_INTERNAL_SPDM_RETRIEVE_TRANSCRIPT_PARAMS {
+    NvU8  transcript[SPDM_SESSION_ESTABLISHMENT_TRANSCRIPT_BUFFER_SIZE];
+    NvU32 transcriptSize;
+} NV2080_CTRL_INTERNAL_SPDM_RETRIEVE_TRANSCRIPT_PARAMS;
 
 
 

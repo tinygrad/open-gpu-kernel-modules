@@ -50,6 +50,8 @@
 #define NVKMS_LOG2_LUT_ARRAY_SIZE             10
 #define NVKMS_LUT_ARRAY_SIZE                  (1 << NVKMS_LOG2_LUT_ARRAY_SIZE)
 
+#define NVKMS_OLUT_FP_NORM_SCALE_DEFAULT      0xffffffff
+
 typedef NvU32 NvKmsDeviceHandle;
 typedef NvU32 NvKmsDispHandle;
 typedef NvU32 NvKmsConnectorHandle;
@@ -243,6 +245,80 @@ struct NvKmsLutRamps {
     NvU16 red[NVKMS_LUT_ARRAY_SIZE];   /*! in */
     NvU16 green[NVKMS_LUT_ARRAY_SIZE]; /*! in */
     NvU16 blue[NVKMS_LUT_ARRAY_SIZE];  /*! in */
+};
+
+/* Datatypes for LUT capabilities */
+enum NvKmsLUTFormat {
+    /*
+     * Normalized fixed-point format mapping [0, 1] to [0x0, 0xFFFF].
+     */
+    NVKMS_LUT_FORMAT_UNORM16,
+
+    /*
+     * Half-precision floating point.
+     */
+    NVKMS_LUT_FORMAT_FP16,
+
+    /*
+     * 14-bit fixed-point format required to work around hardware bug 813188.
+     *
+     * To convert from UNORM16 to UNORM14_WAR_813188:
+     * unorm14_war_813188 = ((unorm16 >> 2) & ~7) + 0x6000
+     */
+    NVKMS_LUT_FORMAT_UNORM14_WAR_813188
+};
+
+enum NvKmsLUTVssSupport {
+    NVKMS_LUT_VSS_NOT_SUPPORTED,
+    NVKMS_LUT_VSS_SUPPORTED,
+    NVKMS_LUT_VSS_REQUIRED,
+};
+
+enum NvKmsLUTVssType {
+    NVKMS_LUT_VSS_TYPE_NONE,
+    NVKMS_LUT_VSS_TYPE_LINEAR,
+    NVKMS_LUT_VSS_TYPE_LOGARITHMIC,
+};
+
+struct NvKmsLUTCaps {
+    /*! Whether this layer or head on this device supports this LUT stage. */
+    NvBool supported;
+
+    /*! Whether this LUT supports VSS. */
+    enum NvKmsLUTVssSupport vssSupport;
+
+    /*!
+     * The type of VSS segmenting this LUT uses.
+     */
+    enum NvKmsLUTVssType vssType;
+
+    /*!
+     * Expected number of VSS segments.
+     */
+    NvU32 vssSegments;
+
+    /*!
+     * Expected number of LUT entries.
+     */
+    NvU32 lutEntries;
+
+    /*!
+     * Format for each of the LUT entries.
+     */
+    enum NvKmsLUTFormat entryFormat;
+};
+
+/* each LUT entry uses this many bytes */
+#define NVKMS_LUT_CAPS_LUT_ENTRY_SIZE (4 * sizeof(NvU16))
+
+/* if the LUT surface uses VSS, size of the VSS header */
+#define NVKMS_LUT_VSS_HEADER_SIZE (4 * NVKMS_LUT_CAPS_LUT_ENTRY_SIZE)
+
+struct NvKmsLUTSurfaceParams {
+    NvKmsSurfaceHandle surfaceHandle;
+    NvU64 offset NV_ALIGN_BYTES(8);
+    NvU32 vssSegments;
+    NvU32 lutEntries;
 };
 
 /*
@@ -440,9 +516,9 @@ struct NvKmsLayerCapabilities {
     NvBool supportsWindowMode              :1;
 
     /*!
-     * Whether layer supports HDR pipe.
+     * Whether layer supports ICtCp pipe.
      */
-    NvBool supportsHDR                     :1;
+    NvBool supportsICtCp                   :1;
 
 
     /*!
@@ -463,6 +539,10 @@ struct NvKmsLayerCapabilities {
      * still expected to honor the NvKmsUsageBounds for each head.
      */
     NvU64 supportedSurfaceMemoryFormats NV_ALIGN_BYTES(8);
+
+    /* Capabilities for each LUT stage in the EVO3 precomp pipeline. */
+    struct NvKmsLUTCaps ilut;
+    struct NvKmsLUTCaps tmo;
 };
 
 /*!
@@ -560,22 +640,28 @@ enum NvKmsInputColorRange {
      * If DEFAULT is provided, driver will assume full range for RGB formats
      * and limited range for YUV formats.
      */
-    NVKMS_INPUT_COLORRANGE_DEFAULT = 0,
+    NVKMS_INPUT_COLOR_RANGE_DEFAULT = 0,
 
-    NVKMS_INPUT_COLORRANGE_LIMITED = 1,
+    NVKMS_INPUT_COLOR_RANGE_LIMITED = 1,
 
-    NVKMS_INPUT_COLORRANGE_FULL = 2,
+    NVKMS_INPUT_COLOR_RANGE_FULL = 2,
 };
 
 enum NvKmsInputColorSpace {
-    /* Unknown colorspace; no de-gamma will be applied */
-    NVKMS_INPUT_COLORSPACE_NONE = 0,
+    /* Unknown colorspace */
+    NVKMS_INPUT_COLOR_SPACE_NONE = 0,
 
-    /* Linear, Rec.709 [-0.5, 7.5) */
-    NVKMS_INPUT_COLORSPACE_SCRGB_LINEAR = 1,
+    NVKMS_INPUT_COLOR_SPACE_BT601 = 1,
+    NVKMS_INPUT_COLOR_SPACE_BT709 = 2,
+    NVKMS_INPUT_COLOR_SPACE_BT2020 = 3,
+    NVKMS_INPUT_COLOR_SPACE_BT2100 = NVKMS_INPUT_COLOR_SPACE_BT2020,
 
-    /* PQ, Rec.2020 unity */
-    NVKMS_INPUT_COLORSPACE_BT2100_PQ = 2,
+    NVKMS_INPUT_COLOR_SPACE_SCRGB = 4
+};
+
+enum NvKmsInputTf {
+    NVKMS_INPUT_TF_LINEAR = 0,
+    NVKMS_INPUT_TF_PQ = 1
 };
 
 enum NvKmsOutputColorimetry {
@@ -681,6 +767,22 @@ struct NvKmsSuperframeInfo {
         /* Vertical active height in lines for this view */
         NvU16 height;
     } view[NVKMS_MAX_SUPERFRAME_VIEWS];
+};
+
+/* Fields within NvKmsVblankSemControlDataOneHead::flags */
+#define NVKMS_VBLANK_SEM_CONTROL_SWAP_INTERVAL          15:0
+
+struct NvKmsVblankSemControlDataOneHead {
+    NvU32 requestCounterAccel;
+    NvU32 requestCounter;
+    NvU32 flags;
+
+    NvU32 semaphore;
+    NvU64 vblankCount NV_ALIGN_BYTES(8);
+};
+
+struct NvKmsVblankSemControlData {
+    struct NvKmsVblankSemControlDataOneHead head[NV_MAX_HEADS];
 };
 
 #endif /* NVKMS_API_TYPES_H */

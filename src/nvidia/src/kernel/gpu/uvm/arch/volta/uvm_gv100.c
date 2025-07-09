@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2015-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2015-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -27,7 +27,7 @@
  */
 
 #include "core/core.h"
-#include "nvRmReg.h"
+#include "nvrm_registry.h"
 #include "gpu/gpu.h"
 #include "gpu/mmu/kern_gmmu.h"
 #include "gpu/uvm/uvm.h"
@@ -314,7 +314,8 @@ uvmInitAccessCntrBuffer_GV100
         memdescSetGpuCacheAttrib(pUvmAccessCntrBufferDesc, NV_MEMORY_UNCACHED);
     }
 
-    memdescTagAlloc(status, NV_FB_ALLOC_RM_INTERNAL_OWNER_UNNAMED_TAG_44, 
+    memmgrSetMemDescPageSize_HAL(pGpu, pMemoryManager, pUvmAccessCntrBufferDesc, AT_GPU, RM_ATTR_PAGE_SIZE_4KB);
+    memdescTagAlloc(status, NV_FB_ALLOC_RM_INTERNAL_OWNER_UNNAMED_TAG_44,
                     pUvmAccessCntrBufferDesc);
     if (status != NV_OK)
     {
@@ -323,7 +324,6 @@ uvmInitAccessCntrBuffer_GV100
     }
 
     memdescSetName(pGpu, pUvmAccessCntrBufferDesc, NV_RM_SURF_NAME_ACCESS_COUNTER_BUFFER, NULL);
-    memmgrSetMemDescPageSize_HAL(pGpu, pMemoryManager, pUvmAccessCntrBufferDesc, AT_GPU, RM_ATTR_PAGE_SIZE_4KB);
 
     status = memdescMap(pUvmAccessCntrBufferDesc, 0,
                         memdescGetSize(pUvmAccessCntrBufferDesc), NV_TRUE,
@@ -341,32 +341,6 @@ uvmInitAccessCntrBuffer_GV100
     pAccessCounterBuffer->pUvmAccessCntrAllocMemDesc = pUvmAccessCntrBufferDesc;
 
     return status;
-}
-
-NV_STATUS
-uvmResetAccessCntrBuffer_GV100
-(
-    OBJGPU *pGpu,
-    OBJUVM *pUvm,
-    NvU32   accessCounterIndex,
-    NvU32   counterType
-)
-{
-    switch(counterType)
-    {
-        case NVC365_CTRL_ACCESS_COUNTER_TYPE_ALL:
-            GPU_FLD_WR_DRF_DEF(pGpu, _PFB_NISO, _ACCESS_COUNTER_NOTIFY_BUFFER_CLR, _ALL_COUNTERS, _CLR);
-            break;
-        case NVC365_CTRL_ACCESS_COUNTER_TYPE_MIMC:
-            GPU_FLD_WR_DRF_DEF(pGpu, _PFB_NISO, _ACCESS_COUNTER_NOTIFY_BUFFER_CLR, _MIMC, _CLR);
-            break;
-        case NVC365_CTRL_ACCESS_COUNTER_TYPE_MOMC:
-            GPU_FLD_WR_DRF_DEF(pGpu, _PFB_NISO, _ACCESS_COUNTER_NOTIFY_BUFFER_CLR, _MOMC, _CLR);
-            break;
-        default:
-            return NV_ERR_INVALID_ARGUMENT;
-    }
-    return NV_OK;
 }
 
 NV_STATUS

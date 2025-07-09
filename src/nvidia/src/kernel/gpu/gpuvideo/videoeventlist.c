@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2020-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2020-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -39,7 +39,8 @@
 #include "os/os.h"
 #include "gpuvideo/video_event.h"
 #include "gpuvideo/videoeventlist.h"
-#include "objtmr.h"
+#include "gpuvideo/rmifvideng.h"
+#include "kernel/gpu/timer/objtmr.h"
 #include "kernel/gpu/video/kernel_video_engine.h"
 #include "kernel/gpu/fifo/kernel_channel_group.h"
 #include "kernel/gpu/bus/kern_bus.h"
@@ -67,12 +68,13 @@ videoEventTraceCtxInit
     MEMORY_DESCRIPTOR *pCtxMemDesc;
     VIDEO_ENGINE_EVENT__LOG_INFO logInfo;
 
-    if (RMCFG_FEATURE_PLATFORM_GSP || !IS_VIDEO_ENGINE(engDesc) || !kvidengIsVideoTraceLogSupported(pGpu))
+    if (RMCFG_FEATURE_PLATFORM_GSP || !IS_VIDEO_ENGINE(engDesc))
         return NV_OK;
 
     pKernelVideoEngine = kvidengFromEngDesc(pGpu, engDesc);
     NV_CHECK_OR_RETURN(LEVEL_ERROR, pKernelVideoEngine != NULL, NV_OK);
     NV_CHECK_OR_RETURN(LEVEL_SILENT, pKernelVideoEngine->bVideoTraceEnabled, NV_OK);
+    NV_CHECK_OR_RETURN(LEVEL_SILENT, pKernelVideoEngine->videoTraceInfo.pTraceBufferEngineMemDesc != NULL, NV_OK);
 
     // Fill some channel specific information for event logging
     logInfo.userInfo = (NvU64)(NvUPtr)pKernelChannel->pUserInfo;
@@ -104,6 +106,33 @@ videoEventTraceCtxInit
             // Initialize client information in context allocation.
             MEM_WR32(pInstMem + VIDEO_ENGINE_EVENT__LOG_INFO__OFFSET + i, pLogInfo[i / sizeof(NvU32)]);
         }
+
+        // write kernel event buffer address
+        MEMORY_DESCRIPTOR *pMemDesc = pKernelVideoEngine->videoTraceInfo.pTraceBufferEngineMemDesc;
+        NvU64 dmaAddr = memdescGetPhysAddr(pMemDesc, AT_GPU, 0);
+        RM_VIDENG_DMAIDX_TYPE memPhysType = RM_VIDENG_DMAIDX_END;
+        if (memdescGetAddressSpace(pMemDesc) == ADDR_FBMEM)
+        {
+            memPhysType = RM_VIDENG_DMAIDX_PHYS_VID;
+        }
+        else if ((memdescGetAddressSpace(pMemDesc) == ADDR_SYSMEM) &&
+                 (memdescGetCpuCacheAttrib(pMemDesc) == NV_MEMORY_CACHED))
+        {
+            memPhysType = RM_VIDENG_DMAIDX_PHYS_SYS_COH;
+        }
+        else if ((memdescGetAddressSpace(pMemDesc) == ADDR_SYSMEM) &&
+                 (memdescGetCpuCacheAttrib(pMemDesc) == NV_MEMORY_UNCACHED ||
+                  memdescGetCpuCacheAttrib(pMemDesc) == NV_MEMORY_WRITECOMBINED))
+        {
+            memPhysType = RM_VIDENG_DMAIDX_PHYS_SYS_NCOH;
+        }
+
+        NV_ASSERT_OR_ELSE((memdescGetContiguity(pMemDesc, AT_GPU) && memPhysType != RM_VIDENG_DMAIDX_END),
+                dmaAddr = 0; memPhysType = 0;);
+
+        MEM_WR32(pInstMem + VIDEO_ENGINE_EVENT__TRACE_ADDR__OFFSET_LO, NvU64_LO32(dmaAddr));
+        MEM_WR32(pInstMem + VIDEO_ENGINE_EVENT__TRACE_ADDR__OFFSET_HI, NvU64_HI32(dmaAddr));
+        MEM_WR32(pInstMem + VIDEO_ENGINE_EVENT__TRACE_ADDR__MEM_TARGET, (NvU32)memPhysType);
 
         kbusUnmapRmAperture_HAL(pGpu, pCtxMemDesc, &pInstMem, NV_TRUE);
     }
@@ -143,7 +172,6 @@ _videoEventBufferAdd
     NV_EVENT_BUFFER_VIDEO_RECORD_V1 videoRecord;
     portMemSet(&videoRecord, 0, sizeof(videoRecord));
     videoRecord.event_id = pRecord->event_id;
-    videoRecord.vmid = pRecord->gfid;
     videoRecord.timestamp = pRecord->ts;
     videoRecord.seqno = pRecord->seq_no;
     videoRecord.context_id = pRecord->context_id;
@@ -197,7 +225,7 @@ _videoEventBufferAdd
             videoRecord.session.codec_id = pRecord->event_start.codec_id;
             break;
         case VIDEO_ENGINE_EVENT_ID__SESSION_END:
-            videoRecord.session.engine_type = pRecord->event_start.engine_type;
+            videoRecord.session.engine_type = pRecord->event_end.engine_type;
             videoRecord.session.engine_id = pRecord->event_end.engine_id;
             videoRecord.session.codec_id = pRecord->event_end.codec_id;
             videoRecord.session.status = pRecord->event_end.status;
@@ -207,12 +235,25 @@ _videoEventBufferAdd
             videoRecord.stateChange.from = pRecord->event_pstate_change.from;
             break;
         case VIDEO_ENGINE_EVENT_ID__LOG_DATA:
-            videoRecord.logData.engine_type = pRecord->event_start.engine_type;
-            videoRecord.logData.engine_id = pRecord->event_start.engine_id;
-            videoRecord.logData.codec_id = pRecord->event_start.codec_id;
+            videoRecord.logData.engine_type = pRecord->event_log_data.engine_type;
+            videoRecord.logData.engine_id = pRecord->event_log_data.engine_id;
+            videoRecord.logData.type = pRecord->event_log_data.type;
             videoRecord.logData.size = pRecord->event_log_data.size;
             notifyEvent.pVardata = NV_PTR_TO_NvP64(pLogData);
             notifyEvent.vardataSize = videoRecord.logData.size;
+
+#if defined(DEBUG) || defined(DEVELOP) || defined(NV_VERIF_FEATURES)
+            if (videoRecord.logData.type == VIDEO_ENGINE_EVENT_LOG_DATA_TYPE__STR)
+            {
+                NV_PRINTF(LEVEL_INFO, "[UCODE][%s%d] %s\n",
+                        (videoRecord.logData.engine_type == VIDEO_ENGINE_TYPE__NVDEC) ? "NVDEC" :
+                        ((videoRecord.logData.engine_type == VIDEO_ENGINE_TYPE__NVENC) ? "NVENC":
+                         ((videoRecord.logData.engine_type == VIDEO_ENGINE_TYPE__NVJPG) ? "NVJPG" :
+                          ((videoRecord.logData.engine_type == VIDEO_ENGINE_TYPE__OFA) ? "OFA" :
+                           "UNKNOWN"))),
+                        videoRecord.logData.engine_id, (NvU8*)pLogData);
+            }
+#endif
             break;
         default:
             videoRecord.event_data = pRecord->event_data;
@@ -301,7 +342,8 @@ static void _videoGetTraceEvents
                                               magicLo);
 
         // If the read pointer was not moved by us, this record may be invalid
-        if ((oldReadPtr + sizeof(VIDEO_ENGINE_EVENT__RECORD)) != pRingbuffer->readPtr)
+        if ((videoRecord.event_id != VIDEO_ENGINE_EVENT_ID__LOG_DATA) &&
+            ((oldReadPtr + sizeof(VIDEO_ENGINE_EVENT__RECORD)) != pRingbuffer->readPtr))
             continue;
 
         if (gotSize == 0)
@@ -339,17 +381,20 @@ static void _videoGetTraceEvents
 static NV_STATUS
 _videoEventBufferSetFlag(OBJGPU *pGpu, NvU32 flag)
 {
-    RM_API *pRmApi = GPU_GET_PHYSICAL_RMAPI(pGpu);
-    NV2080_CTRL_INTERNAL_FLCN_SET_VIDEO_EVENT_BUFFER_FLAGS_PARAMS params = {0};
-
-    params.flags = flag;
-    NV_ASSERT_OK_OR_RETURN(
-        pRmApi->Control(pRmApi,
-                        pGpu->hInternalClient,
-                        pGpu->hInternalSubdevice,
-                        NV2080_CTRL_CMD_INTERNAL_FLCN_SET_VIDEO_EVENT_BUFFER_FLAGS,
-                        &params,
-                        sizeof(params)));
+    NvU32 i;
+    for (i = 0; i < pGpu->numKernelVideoEngines; i++)
+    {
+        KernelVideoEngine *pKernelVideoEngine = pGpu->kernelVideoEngines[i];
+        if (pKernelVideoEngine != NULL)
+        {
+            VIDEO_TRACE_RING_BUFFER *pRingbuffer = pKernelVideoEngine->videoTraceInfo.pTraceBufferEngine;
+            NvBool bAlwaysLogging = pKernelVideoEngine->videoTraceInfo.bAlwaysLogging;
+            if (pRingbuffer != NULL && !bAlwaysLogging)
+            {
+                pRingbuffer->flags = flag;
+            }
+        }
+    }
 
     return NV_OK;
 }
@@ -376,7 +421,7 @@ _videoTimerCallback
 {
     NV_STATUS status;
 
-    NV_CHECK_OK(status, LEVEL_ERROR, osQueueWorkItemWithFlags(pGpu, _videoOsWorkItem, NULL, OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_DEVICE_RW));
+    NV_CHECK_OK(status, LEVEL_ERROR, osQueueWorkItemWithFlags(pGpu, _videoOsWorkItem, NULL, OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_DEVICE));
 
     // TMR_FLAG_RECUR does not work, so reschedule it here.
     NV_CHECK_OK_OR_CAPTURE_FIRST_ERROR(status, LEVEL_ERROR, tmrEventScheduleRel(pTmr, pTmrEvent, NV_VIDEO_TRACE_CALLBACK_TIME_NS));
@@ -415,7 +460,6 @@ _videoTimerDestroy
     {
         OBJTMR *pTmr = GPU_GET_TIMER(pGpu);
 
-        tmrEventCancel(pTmr, pGpu->pVideoTimerEvent);
         tmrEventDestroy(pTmr, pGpu->pVideoTimerEvent);
         pGpu->pVideoTimerEvent = NULL;
     }
@@ -518,7 +562,8 @@ videoAddBindpoint
     bSelectLOD = NV_TRUE;
 #endif
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmDeviceGpuLockIsOwner(pGpu->gpuInstance));
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmDeviceGpuLockIsOwner(pGpu->gpuInstance),
+        NV_ERR_INVALID_LOCK_STATE);
 
     if (!kvidengIsVideoTraceLogSupported(pGpu))
         return NV_ERR_NOT_SUPPORTED;

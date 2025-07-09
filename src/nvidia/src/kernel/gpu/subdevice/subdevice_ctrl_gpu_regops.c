@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2004-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2004-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -62,7 +62,8 @@ gpuValidateRegOps
     NV2080_CTRL_GPU_REG_OP *pRegOps,
     NvU32 regOpCount,
     NvBool bNonTransactional,
-    NvBool isClientGspPlugin
+    NvBool isClientGspPlugin,
+    NvBool bSkipPermissionValidation
 )
 {
     NvU8   regStatus;
@@ -80,7 +81,7 @@ gpuValidateRegOps
         {
             NV_STATUS status;
 
-            status = gpuValidateRegOffset(pGpu, pRegOps[i].regOffset);
+            status = gpuValidateRegOffset(pGpu, pRegOps[i].regOffset, bSkipPermissionValidation);
             if (status != NV_OK)
             {
                 regStatus = NV2080_CTRL_GPU_REG_OP_STATUS_INVALID_OFFSET;
@@ -120,7 +121,8 @@ subdeviceCtrlCmdGpuExecRegOps_cmn
     RmCtrlParams     *pRmCtrlParams = pCallContext->pControlParams;
     NvBool            bUseMigratableOps;
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmDeviceGpuLockIsOwner(GPU_RES_GET_GPU(pSubdevice)->gpuInstance));
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmDeviceGpuLockIsOwner(GPU_RES_GET_GPU(pSubdevice)->gpuInstance),
+        NV_ERR_INVALID_LOCK_STATE);
 
     NV_PRINTF(LEVEL_INFO, "client 0x%x channel 0x%x\n", hClientTarget,
               hChannelTarget);
@@ -194,7 +196,7 @@ subdeviceCtrlCmdGpuExecRegOps_cmn
     }
 
     status = gpuValidateRegOps(pGpu, pRegOps, regOpCount, bNonTransactional,
-                               isClientGspPlugin);
+                               isClientGspPlugin, NV_FALSE);
     if (status != NV_OK)
     {
         return status;

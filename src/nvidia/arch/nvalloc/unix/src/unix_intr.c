@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -32,8 +32,109 @@
 #include "gpu/bif/kernel_bif.h"
 #include "gpu/mmu/kern_gmmu.h"
 #include "gpu/disp/kern_disp.h"
+#include "gpu/disp/head/kernel_head.h"
 #include <nv_sriov_defines.h>
-#include "objtmr.h"
+
+#include "platform/sli/sli.h"
+
+//
+// Service Interrupts that are not Masked when using
+// INTR_USE_INTR_MASK_FOR_LOCKING
+// Note that everything done here is without holding the GPUs Lock.
+// Returning NV_OK means an interrupt has been serviced
+//
+static NV_STATUS _osIsrIntrMask_GpusUnlocked(OBJGPU *pGpu, THREAD_STATE_NODE *pThreadState)
+{
+    NV_STATUS rmStatus = NV_ERR_NO_INTR_PENDING;
+    Intr *pIntr = GPU_GET_INTR(pGpu);
+    MC_ENGINE_BITVECTOR intrPending, intrEngMask;
+    NvU32 vblankIntrServicedHeadMask = 0;
+    KernelDisplay *pKernelDisplay = GPU_GET_KERNEL_DISPLAY(pGpu);
+
+    if (gpuIsGpuFullPower(pGpu) == NV_FALSE)
+    {
+        return rmStatus;
+    }
+
+    intrGetPendingLowLatencyHwDisplayIntr_HAL(pGpu, pIntr, &intrPending, pThreadState);
+
+    // Only disp interrupt remains in INTR_MASK
+    if ((pKernelDisplay != NULL) &&
+        (( pKernelDisplay->getProperty(pKernelDisplay, PDB_PROP_KDISP_HAS_SEPARATE_LOW_LATENCY_LINE) && bitVectorTest(&intrPending, MC_ENGINE_IDX_DISP_LOW)) ||
+         (!pKernelDisplay->getProperty(pKernelDisplay, PDB_PROP_KDISP_HAS_SEPARATE_LOW_LATENCY_LINE) && bitVectorTest(&intrPending, MC_ENGINE_IDX_DISP))))
+    {
+        NV_ASSERT_OR_RETURN(pKernelDisplay->pLowLatencySpinLock != NULL, NV_ERR_INVALID_STATE);
+
+        portSyncSpinlockAcquire(pKernelDisplay->pLowLatencySpinLock);
+
+        kdispServiceLowLatencyIntrs_HAL(pGpu, pKernelDisplay, 0,
+                                        (VBLANK_STATE_PROCESS_LOW_LATENCY |
+                                        VBLANK_STATE_PROCESS_CALLED_FROM_ISR),
+                                        pThreadState,
+                                        &vblankIntrServicedHeadMask,
+                                        &intrPending);
+
+        portSyncSpinlockRelease(pKernelDisplay->pLowLatencySpinLock);
+
+        //
+        // Bug 4512542: The check for INTR_MASK is currently redundant since it's
+        // already checked outside this function, but we would like to unconditionally
+        // call this function if we can service the vblank first.
+        //
+        if (pIntr->getProperty(pIntr, PDB_PROP_INTR_USE_INTR_MASK_FOR_LOCKING))
+        {
+            //
+            // If an unmasked intr is still pending after the above, that means a
+            // intr other than the vblank, so we'll MSK this off
+            // for now and handle once the GPUs Lock is released.
+            //
+            intrGetPendingLowLatencyHwDisplayIntr_HAL(pGpu, pIntr, &intrPending, pThreadState);
+
+            //
+            // Only disp interrupt remains in INTR_MASK
+            // Don't re-mask it if we have an entirely separate interrupt line
+            //
+            if (!pKernelDisplay->getProperty(pKernelDisplay, PDB_PROP_KDISP_HAS_SEPARATE_LOW_LATENCY_LINE) && bitVectorTest(&intrPending, MC_ENGINE_IDX_DISP))
+            {
+                NvU32 intrMaskFlags;
+                NvU64 oldIrql;
+
+                oldIrql = rmIntrMaskLockAcquire(pGpu);
+
+                // Skip the IntrMask update if told to by another thread.
+                intrMaskFlags = intrGetIntrMaskFlags(pIntr);
+                if ((intrMaskFlags & INTR_MASK_FLAGS_ISR_SKIP_MASK_UPDATE) == 0)
+                {
+                    if (pIntr->getProperty(pIntr, PDB_PROP_INTR_USE_INTR_MASK_FOR_LOCKING))
+                    {
+                        intrGetIntrMask_HAL(pGpu, pIntr, &intrEngMask, pThreadState);
+
+                        // Only disp interrupt remains in INTR_MASK
+                        bitVectorClr(&intrEngMask, MC_ENGINE_IDX_DISP);
+
+                        if (pIntr->getProperty(pIntr, PDB_PROP_INTR_USE_TOP_EN_FOR_VBLANK_HANDLING))
+                        {
+                            intrSetDisplayInterruptEnable_HAL(pGpu, pIntr, NV_FALSE, pThreadState);
+                        }
+                        else
+                        {
+                            intrSetIntrMask_HAL(pGpu, pIntr, &intrEngMask, pThreadState);
+                        }
+                    }
+                }
+
+                rmIntrMaskLockRelease(pGpu, oldIrql);
+            }
+        }
+
+        if (vblankIntrServicedHeadMask)
+        {
+            rmStatus = NV_OK;
+        }
+    }
+
+    return rmStatus;
+}
 
 static NvBool osInterruptPending(
     OBJGPU            *pGpu,
@@ -108,50 +209,38 @@ static NvBool osInterruptPending(
     tlsIsrInit(pIsrAllocator);
 
     //
-    // For SWRL granular locking process the countdown timer interrupt.
-    // GSP-RM handles SWRL interrupts if GSP-RM is active
-    //
-    if ((!IS_GSP_CLIENT(pGpu)) && (pGpu->getProperty(pGpu, PDB_PROP_GPU_SWRL_GRANULAR_LOCKING)))
-    {
-        threadStateInitISRLockless(&threadState, pDeviceLockGpu, THREAD_STATE_FLAGS_IS_ISR_LOCKLESS);
-
-        gpuMask = gpumgrGetGpuMask(pDeviceLockGpu);
-
-        gpuInstance = 0;
-        while ((pGpu = gpumgrGetNextGpu(gpuMask, &gpuInstance)) != NULL)
-        {
-            pIntr = GPU_GET_INTR(pGpu);
-
-            if (INTERRUPT_TYPE_HARDWARE == intrGetIntrEn(pIntr))
-            {
-                // If interrupt enable is garbage the GPU is probably in a bad state
-                if (intrGetIntrEnFromHw_HAL(pGpu, pIntr, &threadState) > INTERRUPT_TYPE_MAX)
-                {
-                   continue;
-                }
-
-                OBJTMR *pTmr = GPU_GET_TIMER(pGpu);
-                *serviced = tmrServiceSwrlWrapper(pGpu, pTmr, &threadState);
-            }
-        }
-
-        threadStateFreeISRLockless(&threadState, pDeviceLockGpu, THREAD_STATE_FLAGS_IS_ISR_LOCKLESS);
-    }
-
-    //
     // Service nonstall interrupts before possibly acquiring GPUs lock
     // so that we don't unnecesarily hold the lock while servicing them.
     //
+    // Also check if we need to acquire the GPU lock at all and get critical interrupts
+    // This should not violate (1) from above since we are not servicing the GPUs in SLI,
+    // only checking their state.
+    //
+    // To do so, two steps are required:
+    // Step 1: Check if we can service nonstall interrupts outside the GPUs lock. This is true
+    // if the two PDBs are true. Otherwise we have to acquire the GPUs lock to service the nonstall
+    // interrupts anyway, and we can't get around acquiring the GPUs lock.
+    //
+    // Step 2 is inline below
+    //
+    NvBool bIsAnyStallIntrPending = NV_TRUE;
+    NvBool bIsAnyBottomHalfStallPending = NV_FALSE;
+    NvU32  isDispPendingPerGpu = 0, isDispLowLatencyPendingPerGpu = 0;
+    NvU32  isTmrPendingPerGpu     = 0;
+
     if (pDeviceLockGpu->getProperty(pDeviceLockGpu, PDB_PROP_GPU_ALTERNATE_TREE_ENABLED) &&
         pDeviceLockGpu->getProperty(pDeviceLockGpu, PDB_PROP_GPU_ALTERNATE_TREE_HANDLE_LOCKLESS))
     {
         threadStateInitISRLockless(&threadState, pDeviceLockGpu, THREAD_STATE_FLAGS_IS_ISR_LOCKLESS);
+        bIsAnyStallIntrPending = NV_FALSE;
 
         gpuMask = gpumgrGetGpuMask(pDeviceLockGpu);
         gpuInstance = 0;
         while ((pGpu = gpumgrGetNextGpu(gpuMask, &gpuInstance)) != NULL)
         {
             pIntr = GPU_GET_INTR(pGpu);
+            KernelDisplay *pKernelDisplay = GPU_GET_KERNEL_DISPLAY(pGpu);
+
             if ((pIntr != NULL) && (INTERRUPT_TYPE_HARDWARE == intrGetIntrEn(pIntr)))
             {
                 NvBool bCtxswLog = NV_FALSE;
@@ -162,13 +251,66 @@ static NvBool osInterruptPending(
                     intrServiceNonStall_HAL(pGpu, pIntr, &intr1Pending, &threadState);
                     *serviced = NV_TRUE;
                 }
+
+                //
+                // Step 2: Service nonstall interrupts and check if there are any stall interrupts
+                // pending on any GPUs. If there are, then we will take the GPU lock.
+                //
+                // Bug 4223192: calling intrGetPendingStall_HAL is rather expensive,
+                // so save off the critical interrupts to be handled in the top half.
+                //
+                intrGetPendingStall_HAL(pGpu, pIntr, &intr0Pending, &threadState);
+                if (!bitVectorTestAllCleared(&intr0Pending))
+                {
+                    if ((pKernelDisplay != NULL) && pKernelDisplay->getProperty(pKernelDisplay, PDB_PROP_KDISP_HAS_SEPARATE_LOW_LATENCY_LINE))
+                    {
+                        if (bitVectorTest(&intr0Pending, MC_ENGINE_IDX_DISP_LOW))
+                        {
+                            isDispLowLatencyPendingPerGpu |= NVBIT32(gpuGetInstance(pGpu));
+
+                            // We will attempt to handle this separately from the other stall interrupts
+                            bitVectorClr(&intr0Pending, MC_ENGINE_IDX_DISP_LOW);
+                        }
+                    }
+                    else
+                    {
+                        if (bitVectorTest(&intr0Pending, MC_ENGINE_IDX_DISP))
+                        {
+                            isDispPendingPerGpu |= NVBIT32(gpuGetInstance(pGpu));
+
+                            // We will attempt to handle this separately from the other stall interrupts
+                            bitVectorClr(&intr0Pending, MC_ENGINE_IDX_DISP);
+                        }
+                    }
+
+                    if (IS_VGPU_GSP_PLUGIN_OFFLOAD_ENABLED(pGpu) &&
+                        !IS_VIRTUAL(pGpu) && bitVectorTest(&intr0Pending, MC_ENGINE_IDX_TMR))
+                    {
+                        isTmrPendingPerGpu |= NVBIT32(gpuGetInstance(pGpu));
+
+                        // We will clear this in the top half
+                        bitVectorClr(&intr0Pending, MC_ENGINE_IDX_TMR);
+                    }
+
+                    if (!bitVectorTestAllCleared(&intr0Pending))
+                    {
+                        //
+                        // If any other stall interrupts are pending,
+                        // they will be handled in the bottom half.
+                        //
+                        bIsAnyBottomHalfStallPending = NV_TRUE;
+                    }
+
+                    bIsAnyStallIntrPending = NV_TRUE;
+                }
             }
         }
         threadStateFreeISRLockless(&threadState, pDeviceLockGpu, THREAD_STATE_FLAGS_IS_ISR_LOCKLESS);
     }
 
     // LOCK: try to acquire GPUs lock
-    if (rmDeviceGpuLocksAcquire(pDeviceLockGpu, GPU_LOCK_FLAGS_COND_ACQUIRE, RM_LOCK_MODULES_ISR) == NV_OK)
+    if (bIsAnyStallIntrPending &&
+        (rmDeviceGpuLocksAcquire(pDeviceLockGpu, GPU_LOCK_FLAGS_COND_ACQUIRE, RM_LOCK_MODULES_ISR) == NV_OK))
     {
         threadStateInitISRAndDeferredIntHandler(&threadState,
             pDeviceLockGpu, THREAD_STATE_FLAGS_IS_ISR);
@@ -191,18 +333,86 @@ static NvBool osInterruptPending(
                 if (intrGetIntrEnFromHw_HAL(pGpu, pIntr, &threadState) > INTERRUPT_TYPE_MAX)
                    continue;
 
-                intrGetPendingStall_HAL(pGpu, pIntr, &intr0Pending, &threadState);
-                if (bitVectorTest(&intr0Pending, MC_ENGINE_IDX_DISP))
+                //
+                // If lockless interrupt handling was enabled, we have already cached which critical
+                // interrupts are pending. We only set the appropriate bits in the intr0Pending bitvector
+                // for the subsequent code to service them in the same manner as the lockless nonstall
+                // interrupt handling disabled case. But we also clear them from intr0Pending and
+                // for disp, check if they're still pending afterwards. We already checked whether any
+                // other bottom half stall interrupts are pending in bIsAnyBottomHalfStallPending above.
+                //
+                // After all this, the combination of bIsAnyBottomHalfStallPending and intr0Pending
+                // contains whether any stall interrupts are still pending, so check both to determine if
+                // we need a bottom half.
+                //
+                if (pDeviceLockGpu->getProperty(pDeviceLockGpu, PDB_PROP_GPU_ALTERNATE_TREE_ENABLED) &&
+                    pDeviceLockGpu->getProperty(pDeviceLockGpu, PDB_PROP_GPU_ALTERNATE_TREE_HANDLE_LOCKLESS))
                 {
-                    if (pKernelDisplay != NULL)
+                    bitVectorClrAll(&intr0Pending);
+
+                    if ((pKernelDisplay != NULL) && pKernelDisplay->getProperty(pKernelDisplay, PDB_PROP_KDISP_HAS_SEPARATE_LOW_LATENCY_LINE))
                     {
-                        kdispServiceVblank_HAL(pGpu, pKernelDisplay, 0,
-                                               (VBLANK_STATE_PROCESS_LOW_LATENCY |
-                                                VBLANK_STATE_PROCESS_CALLED_FROM_ISR),
-                                               &threadState);
-                        *serviced = NV_TRUE;
-                        intrGetPendingStall_HAL(pGpu, pIntr, &intr0Pending, &threadState);
+                        if ((isDispLowLatencyPendingPerGpu & NVBIT32(gpuGetInstance(pGpu))) != 0)
+                        {
+                            bitVectorSet(&intr0Pending, MC_ENGINE_IDX_DISP_LOW);
+                        }
                     }
+                    else
+                    {
+                        if ((isDispPendingPerGpu & NVBIT32(gpuGetInstance(pGpu))) != 0)
+                        {
+                            bitVectorSet(&intr0Pending, MC_ENGINE_IDX_DISP);
+                        }
+
+                    }
+
+                    if ((isTmrPendingPerGpu & NVBIT32(gpuGetInstance(pGpu))) != 0)
+                    {
+                        bitVectorSet(&intr0Pending, MC_ENGINE_IDX_TMR);
+                    }
+                }
+                else
+                {
+                    intrGetPendingStall_HAL(pGpu, pIntr, &intr0Pending, &threadState);
+                }
+
+                if ((pKernelDisplay != NULL) &&
+                    (( pKernelDisplay->getProperty(pKernelDisplay, PDB_PROP_KDISP_HAS_SEPARATE_LOW_LATENCY_LINE) && bitVectorTest(&intr0Pending, MC_ENGINE_IDX_DISP_LOW)) ||
+                     (!pKernelDisplay->getProperty(pKernelDisplay, PDB_PROP_KDISP_HAS_SEPARATE_LOW_LATENCY_LINE) && bitVectorTest(&intr0Pending, MC_ENGINE_IDX_DISP))))
+                {
+                    MC_ENGINE_BITVECTOR intrDispPending;
+                    NvBool bIsLowLatencyIntrPending;
+
+                    NV_ASSERT_OR_RETURN(pKernelDisplay->pLowLatencySpinLock != NULL,
+                                        NV_ERR_INVALID_STATE);
+
+                    portSyncSpinlockAcquire(pKernelDisplay->pLowLatencySpinLock);
+
+                    // If this is true, then we're here because it is true
+                    bIsLowLatencyIntrPending = pKernelDisplay->getProperty(pKernelDisplay, PDB_PROP_KDISP_HAS_SEPARATE_LOW_LATENCY_LINE);
+
+                    kdispServiceLowLatencyIntrs_HAL(pGpu, pKernelDisplay, 0,
+                                                    (VBLANK_STATE_PROCESS_LOW_LATENCY |
+                                                    VBLANK_STATE_PROCESS_CALLED_FROM_ISR),
+                                                    &threadState,
+                                                    NULL,
+                                                    &intr0Pending);
+
+                    portSyncSpinlockRelease(pKernelDisplay->pLowLatencySpinLock);
+
+                    *serviced = NV_TRUE;
+
+                    if (bIsLowLatencyIntrPending)
+                    {
+                        bitVectorClr(&intr0Pending, MC_ENGINE_IDX_DISP_LOW);
+                    }
+                    else
+                    {
+                        bitVectorClr(&intr0Pending, MC_ENGINE_IDX_DISP);
+                    }
+
+                    intrGetPendingLowLatencyHwDisplayIntr_HAL(pGpu, pIntr, &intrDispPending, &threadState);
+                    bitVectorOr(&intr0Pending, &intr0Pending, &intrDispPending);
                 }
 
                 if (IS_VGPU_GSP_PLUGIN_OFFLOAD_ENABLED(pGpu) &&
@@ -211,7 +421,7 @@ static NvBool osInterruptPending(
                     // We have to clear the top level interrupt bit here since otherwise
                     // the bottom half will attempt to service the interrupt on the CPU
                     // side before GSP receives the notification and services it
-                    intrClearLeafVector_HAL(pGpu, pIntr, MC_ENGINE_IDX_TMR, &threadState);
+                    intrClearLeafVector_HAL(pGpu, pIntr, intrGetVectorFromEngineId(pGpu, pIntr, MC_ENGINE_IDX_TMR, NV_FALSE), &threadState);
                     bitVectorClr(&intr0Pending, MC_ENGINE_IDX_TMR);
 
                     NV_ASSERT_OK(intrTriggerPrivDoorbell_HAL(pGpu, pIntr, NV_DOORBELL_NOTIFY_LEAF_SERVICE_TMR_HANDLE));
@@ -228,8 +438,13 @@ static NvBool osInterruptPending(
                         intrCheckFecsEventbufferPending(pGpu, pIntr, &intr1Pending, &bCtxswLog);
                     }
                 }
+                else
+                {
+                    bitVectorClrAll(&intr1Pending);
+                }
 
-                if (!bitVectorTestAllCleared(&intr0Pending) ||
+                if (bIsAnyBottomHalfStallPending ||
+                    !bitVectorTestAllCleared(&intr0Pending) ||
                     !bitVectorTestAllCleared(&intr1Pending))
                 {
                     pending = NV_TRUE;
@@ -237,8 +452,6 @@ static NvBool osInterruptPending(
                 }
             }
         }
-        threadStateFreeISRAndDeferredIntHandler(&threadState,
-                pDeviceLockGpu, THREAD_STATE_FLAGS_IS_ISR);
 
         if (sema_release)
         {
@@ -250,6 +463,24 @@ static NvBool osInterruptPending(
         else
         {
             rmDeviceGpuLockSetOwner(pDeviceLockGpu, GPUS_LOCK_OWNER_PENDING_DPC_REFRESH);
+        }
+
+        threadStateFreeISRAndDeferredIntHandler(&threadState,
+                pDeviceLockGpu, THREAD_STATE_FLAGS_IS_ISR);
+    }
+    else if (bIsAnyStallIntrPending)
+    {
+        pIntr = GPU_GET_INTR(pDeviceLockGpu);
+
+        if ((pIntr != NULL) && (pIntr->getProperty(pIntr, PDB_PROP_INTR_USE_INTR_MASK_FOR_LOCKING)))
+        {
+            threadStateInitISRLockless(&threadState, pDeviceLockGpu, THREAD_STATE_FLAGS_IS_ISR_LOCKLESS);
+            if (_osIsrIntrMask_GpusUnlocked(pDeviceLockGpu, &threadState) == NV_OK)
+            {
+                *serviced = NV_TRUE;
+            }
+
+            threadStateFreeISRLockless(&threadState, pDeviceLockGpu, THREAD_STATE_FLAGS_IS_ISR_LOCKLESS);
         }
     }
 
@@ -393,7 +624,6 @@ static void RmIsrBottomHalf(
 )
 {
     OBJGPU    *pGpu = NV_GET_NV_PRIV_PGPU(pNv);
-    THREAD_STATE_NODE threadState;
     OS_THREAD_HANDLE threadId;
     NvU32 gpuMask, gpuInstance;
     OBJGPU *pDeviceLockGpu = pGpu;
@@ -414,13 +644,18 @@ static void RmIsrBottomHalf(
     rmDeviceGpuLockSetOwner(pDeviceLockGpu, threadId);
 
     gpuMask = gpumgrGetGpuMask(pGpu);
-
     gpuInstance = 0;
+
     while ((pGpu = gpumgrGetNextGpu(gpuMask, &gpuInstance)) != NULL)
     {
+        threadStateInitISRAndDeferredIntHandler(pGpu->pDpcThreadState, pGpu,
+                                                THREAD_STATE_FLAGS_IS_ISR_DEFERRED_INT_HANDLER);
+    }
 
-        threadStateInitISRAndDeferredIntHandler(&threadState,
-            pGpu, THREAD_STATE_FLAGS_IS_ISR_DEFERRED_INT_HANDLER);
+    gpuInstance = 0;
+
+    while ((pGpu = gpumgrGetNextGpu(gpuMask, &gpuInstance)) != NULL)
+    {
 
         pIntr = GPU_GET_INTR(pGpu);
         pDisp = GPU_GET_DISP(pGpu);
@@ -441,16 +676,17 @@ static void RmIsrBottomHalf(
                 !pGpu->getProperty(pGpu, PDB_PROP_GPU_ALTERNATE_TREE_HANDLE_LOCKLESS))
             {
                 MC_ENGINE_BITVECTOR intrPending;
-                intrServiceNonStall_HAL(pGpu, pIntr, &intrPending, &threadState);
+                intrServiceNonStall_HAL(pGpu, pIntr, &intrPending, pGpu->pDpcThreadState);
             }
         }
 
-        threadStateFreeISRAndDeferredIntHandler(&threadState,
-            pGpu, THREAD_STATE_FLAGS_IS_ISR_DEFERRED_INT_HANDLER);
     }
 
+    gpuInstance = 0;
+    pGpu = gpumgrGetNextGpu(gpuMask, &gpuInstance);
+
     // UNLOCK: release GPUs lock
-    rmDeviceGpuLocksRelease(pDeviceLockGpu, GPUS_LOCK_FLAGS_NONE, NULL);
+    rmDeviceGpuLocksReleaseAndThreadStateFreeDeferredIntHandlerOptimized(pGpu, GPUS_LOCK_FLAGS_NONE, NULL);
 
     tlsIsrDestroy(pIsrAllocator);
     portMemAllocatorRelease(pIsrAllocator);
@@ -473,6 +709,8 @@ static void RmIsrBottomHalfUnlocked(
         return;
     }
 
+    threadStateInit(&threadState, THREAD_STATE_FLAGS_NONE);
+
     // Grab GPU lock here as this kthread-item was enqueued without grabbing GPU lock
     if (rmDeviceGpuLocksAcquire(pGpu, GPUS_LOCK_FLAGS_NONE, RM_LOCK_MODULES_DPC) == NV_OK)
     {
@@ -480,20 +718,18 @@ static void RmIsrBottomHalfUnlocked(
         {
             pIntr = GPU_GET_INTR(pGpu);
 
-            threadStateInit(&threadState, THREAD_STATE_FLAGS_NONE);
-
             if (intrGetIntrEn(pIntr) != INTERRUPT_TYPE_DISABLED)
             {
                 MC_ENGINE_BITVECTOR intrPending;
                 intrGetPendingStall_HAL(pGpu, pIntr, &intrPending, &threadState);
                 intrServiceNonStallBottomHalf(pGpu, pIntr, &intrPending, &threadState);
             }
-
-            threadStateFree(&threadState, THREAD_STATE_FLAGS_NONE);
         }
 
         rmDeviceGpuLocksRelease(pGpu, GPUS_LOCK_FLAGS_NONE, NULL);
     }
+
+    threadStateFree(&threadState, THREAD_STATE_FLAGS_NONE);
 }
 
 NvBool NV_API_CALL rm_isr(

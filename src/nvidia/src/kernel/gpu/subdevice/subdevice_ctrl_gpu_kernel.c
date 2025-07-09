@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2004-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2004-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -38,6 +38,7 @@
 #include "nvVer.h"
 #include "gpu/bif/kernel_bif.h"
 #include "gpu/bus/kern_bus.h"
+#include "gpu/gsp/gsp_static_config.h"
 #include "gpu/disp/kern_disp.h"
 #include "disp/nvfbc_session.h"
 #include "gpu/mmu/kern_gmmu.h"
@@ -45,27 +46,42 @@
 #include "kernel/gpu/mc/kernel_mc.h"
 #include "kernel/gpu/nvlink/kernel_nvlink.h"
 #include "gpu/gpu_fabric_probe.h"
-#include "objtmr.h"
+#include "gpu/timer/objtmr.h"
 #include "platform/chipset/chipset.h"
 #include "kernel/gpu/gr/kernel_graphics.h"
 #include "kernel/gpu/mig_mgr/kernel_mig_manager.h"
 #include "kernel/gpu/gr/kernel_graphics_manager.h"
 #include "vgpu/rpc.h"
 #include "gpu/mem_mgr/mem_mgr.h"
-
+#include "virtualization/hypervisor/hypervisor.h"
 #include "gpu/mem_sys/kern_mem_sys.h"
 #include "gpu/nvenc/nvencsession.h"
-
 #include "kernel/gpu/fifo/kernel_fifo.h"
+#include "gpu/ce/kernel_ce.h"
 #include "rmapi/resource_fwd_decls.h"
 #include "rmapi/client.h"
 
+#include "class/cl00de.h"
 #include "class/cl900e.h"
+#include "ctrl/ctrl2080/ctrl2080thermal.h"
 
 
+#include "g_finn_rm_api.h"
+
+#define RPC_STRUCTURES
+#define RPC_GENERIC_UNION
+#include "g_rpc-structures.h"
+#undef RPC_STRUCTURES
+#undef RPC_GENERIC_UNION
+
+#define RPC_MESSAGE_STRUCTURES
+#include "g_rpc-message-header.h"
+#undef RPC_MESSAGE_STRUCTURES
 
 // bit to set when telling physical to fill in an info entry
 #define INDEX_FORWARD_TO_PHYSICAL 0x80000000
+ct_assert(INDEX_FORWARD_TO_PHYSICAL == DRF_NUM(2080, _CTRL_GPU_INFO_INDEX, _RESERVED, 1));
+
 
 static NV_STATUS
 getGpuInfos(Subdevice *pSubdevice, NV2080_CTRL_GPU_GET_INFO_V2_PARAMS *pParams, NvBool bCanAccessHw)
@@ -84,13 +100,62 @@ getGpuInfos(Subdevice *pSubdevice, NV2080_CTRL_GPU_GET_INFO_V2_PARAMS *pParams, 
 
     for (i = 0; i < pParams->gpuInfoListSize; i++)
     {
-        if (pParams->gpuInfoList[i].index >= NV2080_CTRL_GPU_INFO_MAX_LIST_SIZE)
+
+        const NvU32 index = DRF_VAL(2080, _CTRL_GPU_INFO_INDEX, _INDEX, pParams->gpuInfoList[i].index);
+
+        if (index >= NV2080_CTRL_GPU_INFO_MAX_LIST_SIZE)
         {
             return NV_ERR_INVALID_ARGUMENT;
         }
 
-        switch (pParams->gpuInfoList[i].index)
+        const NvU32 groupId = DRF_VAL(2080, _CTRL_GPU_INFO_INDEX, _GROUP_ID, pParams->gpuInfoList[i].index);
+
+        if (groupId >= pGpu->gpuGroupCount)
         {
+            NV_PRINTF(LEVEL_WARNING, "invalid groupId\n");
+            return NV_ERR_INVALID_ARGUMENT;
+        }
+
+        data = 0;
+
+        switch (index)
+        {
+            case NV2080_CTRL_GPU_INFO_INDEX_ECID_LO32:
+            {
+                if (IS_GSP_CLIENT(pGpu))
+                {
+                    GspStaticConfigInfo *pGSCI = GPU_GET_GSP_STATIC_INFO(pGpu);
+                    data =  pGSCI->ecidInfo[groupId].ecidLow;
+                    break;
+                }
+                data = 0;
+                status = NV_ERR_NOT_SUPPORTED;
+                break;
+            }
+            case NV2080_CTRL_GPU_INFO_INDEX_ECID_HI32:
+            {
+                if (IS_GSP_CLIENT(pGpu))
+                {
+                    GspStaticConfigInfo *pGSCI = GPU_GET_GSP_STATIC_INFO(pGpu);
+                    data = pGSCI->ecidInfo[groupId].ecidHigh;
+                    break;
+                }
+                data = 0;
+                status = NV_ERR_NOT_SUPPORTED;
+                break;
+            }
+            case NV2080_CTRL_GPU_INFO_INDEX_ECID_EXTENDED:
+            {
+                if (IS_GSP_CLIENT(pGpu))
+                {
+                    GspStaticConfigInfo *pGSCI = GPU_GET_GSP_STATIC_INFO(pGpu);
+                    data = pGSCI->ecidInfo[groupId].ecidExtended;
+                    break;
+                }
+                data = 0;
+                status = NV_ERR_NOT_SUPPORTED;
+                break;
+            }
             case NV2080_CTRL_GPU_INFO_INDEX_GPU_FLA_CAPABILITY:
             {
                 KernelBus *pKernelBus = GPU_GET_KERNEL_BUS(pGpu);
@@ -132,25 +197,7 @@ getGpuInfos(Subdevice *pSubdevice, NV2080_CTRL_GPU_GET_INFO_V2_PARAMS *pParams, 
             }
             case NV2080_CTRL_GPU_INFO_INDEX_SURPRISE_REMOVAL_POSSIBLE:
             {
-                OBJSYS *pSys = SYS_GET_INSTANCE();
-                OBJCL  *pCl  = SYS_GET_CL(pSys);
-                data = !!pCl->getProperty(pCl, PDB_PROP_CL_IS_EXTERNAL_GPU);
-                break;
-            }
-            case NV2080_CTRL_GPU_INFO_INDEX_IBMNPU_RELAXED_ORDERING:
-            {
-                NvBool mode = NV_FALSE;
-                data = NV2080_CTRL_GPU_INFO_IBMNPU_RELAXED_ORDERING_UNSUPPORTED;
-
-                if (osGetIbmnpuRelaxedOrderingMode(pGpu->pOsGpuInfo, &mode) == NV_OK)
-                {
-                    data = NV2080_CTRL_GPU_INFO_IBMNPU_RELAXED_ORDERING_DISABLED;
-
-                    if (mode)
-                    {
-                        data = NV2080_CTRL_GPU_INFO_IBMNPU_RELAXED_ORDERING_ENABLED;
-                    }
-                }
+                data = !!pGpu->getProperty(pGpu, PDB_PROP_GPU_IS_EXTERNAL_GPU);
                 break;
             }
             case NV2080_CTRL_GPU_INFO_INDEX_GLOBAL_POISON_FUSE_ENABLED:
@@ -262,7 +309,7 @@ getGpuInfos(Subdevice *pSubdevice, NV2080_CTRL_GPU_GET_INFO_V2_PARAMS *pParams, 
             }
             case NV2080_CTRL_GPU_INFO_INDEX_GPU_ATS_CAPABILITY:
             {
-                if (pGpu->getProperty(pGpu, PDB_PROP_GPU_ATS_SUPPORTED))
+                if (osGpuSupportsAts(pGpu))
                 {
                     data = NV2080_CTRL_GPU_INFO_INDEX_GPU_ATS_CAPABILITY_YES;
                 }
@@ -443,6 +490,11 @@ getGpuInfos(Subdevice *pSubdevice, NV2080_CTRL_GPU_GET_INFO_V2_PARAMS *pParams, 
                 }
                 break;
             }
+            case NV2080_CTRL_GPU_INFO_INDEX_IS_LOCALIZATION_SUPPORTED:
+            {
+                data = GPU_GET_MEMORY_MANAGER(pGpu)->bLocalizedMemorySupported;
+                break;
+            }
             default:
             {
                 // Only forward to physical if we're in the HW-access-enabled control
@@ -493,6 +545,16 @@ subdeviceCtrlCmdGpuGetInfoV2_IMPL
     return getGpuInfos(pSubdevice, pGpuInfoParams, NV_TRUE);
 }
 
+NV_STATUS
+subdeviceCtrlCmdGpuGetVfCaps_IMPL
+(
+    Subdevice *pSubdevice,
+    NV2080_CTRL_GPU_GET_VF_CAPS_PARAMS *pParams
+)
+{
+    return NV_ERR_NOT_SUPPORTED;
+}
+
 //
 // subdeviceCtrlCmdGpuGetCachedInfo: As subdeviceCtrlCmdGpuGetInfoV2, except
 // does not perform any HW access (NO_GPUS_ACCESS and NO_GPUS_LOCK flags)
@@ -507,7 +569,7 @@ subdeviceCtrlCmdGpuGetCachedInfo_IMPL
     return getGpuInfos(pSubdevice, pGpuInfoParams, NV_FALSE);
 }
 
-static POBJHWBC
+static OBJHWBC *
 getBridgeObject(OBJHWBC *pHWBC, NvU32 hwbcId)
 {
     OBJHWBC *pBridgeObject = NULL;
@@ -796,7 +858,7 @@ subdeviceCtrlCmdGpuGetEncoderCapacity_IMPL
     NvHandle  hClient = RES_GET_CLIENT_HANDLE(pSubdevice);
     NvHandle  hObject = RES_GET_HANDLE(pSubdevice);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     if (pEncoderCapacityParams->queryType == NV2080_CTRL_GPU_GET_ENCODER_CAPACITY_AV1)
     {
@@ -848,7 +910,7 @@ subdeviceCtrlCmdGpuGetNvencSwSessionStats_IMPL
     NvencSession             *pNvencSession = NULL;
     PNVENC_SESSION_LIST_ITEM  pNvencSessionListItem = NULL;
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     //
     // For GSP vGPU host, get the data from GSP RM for CPU RM and it's client
@@ -974,7 +1036,7 @@ subdeviceCtrlCmdGpuGetNvencSwSessionInfo_IMPL
     OBJGPU                  *pGpu = GPU_RES_GET_GPU(pSubdevice);
     NvU32                   entryCount = 0;
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     if ((!IS_VIRTUAL(pGpu)) && (pGpu->encSessionStatsReportingState != NV2080_CTRL_GPU_INFO_NVENC_STATS_REPORTING_STATE_ENABLED))
     {
@@ -1009,7 +1071,7 @@ subdeviceCtrlCmdGpuGetNvencSwSessionInfoV2_IMPL
     OBJGPU                  *pGpu = GPU_RES_GET_GPU(pSubdevice);
     NvU32                   entryCount = 0;
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     if ((!IS_VIRTUAL(pGpu)) && (pGpu->encSessionStatsReportingState != NV2080_CTRL_GPU_INFO_NVENC_STATS_REPORTING_STATE_ENABLED))
     {
@@ -1051,7 +1113,7 @@ subdeviceCtrlCmdGpuGetNvfbcSwSessionStats_IMPL
     NvfbcSession            *pNvfbcSession = NULL;
     PNVFBC_SESSION_LIST_ITEM pNvfbcSessionListItem = NULL;
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     if (listCount(&(pGpu->nvfbcSessionList)) == 0)
     {
@@ -1106,7 +1168,7 @@ subdeviceCtrlCmdGpuGetNvfbcSwSessionInfo_IMPL
     NvfbcSession            *pNvfbcSession = NULL;
     PNVFBC_SESSION_LIST_ITEM pNvfbcSessionListItem = NULL;
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     portMemSet(pParams, 0, sizeof(NV2080_CTRL_GPU_GET_NVFBC_SW_SESSION_INFO_PARAMS));
 
@@ -1180,50 +1242,9 @@ subdeviceCtrlCmdGpuGetSdm_IMPL
 {
     OBJGPU *pGpu = GPU_RES_GET_GPU(pSubdevice);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     pSdmParams->subdeviceMask = gpuGetSubdeviceMask(pGpu);
-
-    return NV_OK;
-}
-
-//
-// subdeviceCtrlCmdGpuSetSdm
-//
-// Lock Requirements:
-//      Assert that API lock held on entry
-//
-NV_STATUS
-subdeviceCtrlCmdGpuSetSdm_IMPL
-(
-    Subdevice* pSubdevice,
-    NV2080_CTRL_GPU_SET_SDM_PARAMS* pSdmParams
-)
-{
-    OBJGPU *pGpu = GPU_RES_GET_GPU(pSubdevice);
-    NvU32   subdeviceInstance;
-
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner());
-
-    if (!ONEBITSET(pSdmParams->subdeviceMask))
-    {
-        NV_PRINTF(LEVEL_ERROR, "Subdevice mask has none or more than one bit set");
-        return NV_ERR_INVALID_DATA;
-    }
-
-    if (gpuIsStateLoaded(pGpu))
-    {
-        NV_PRINTF(LEVEL_ERROR, "NV2080_CTRL_CMD_GPU_SET_SDM cannot be called after the GPU is loaded");
-        return NV_ERR_INVALID_STATE;
-    }
-    subdeviceInstance = BIT_IDX_32(pSdmParams->subdeviceMask);
-
-    if (subdeviceInstance >= NV_MAX_SUBDEVICES)
-    {
-        NV_PRINTF(LEVEL_ERROR, "Subdevice mask exceeds the max count of subdevices");
-        return NV_ERR_INVALID_DATA;
-    }
-    pGpu->subdeviceInstance = subdeviceInstance;
 
     return NV_OK;
 }
@@ -1243,7 +1264,7 @@ subdeviceCtrlCmdGpuGetSimulationInfo_IMPL
 {
     OBJGPU *pGpu = GPU_RES_GET_GPU(pSubdevice);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     if (IS_SILICON(pGpu))
     {
@@ -1274,7 +1295,7 @@ subdeviceCtrlCmdGpuGetEngines_IMPL
     NvU32    *pKernelEngineList = NvP64_VALUE(pParams->engineList);
     NV_STATUS status = NV_OK;
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     portMemSet(&getEngineParamsV2, 0, sizeof(getEngineParamsV2));
 
@@ -1312,7 +1333,7 @@ subdeviceCtrlCmdGpuGetEnginesV2_IMPL
     OBJGPU   *pGpu = GPU_RES_GET_GPU(pSubdevice);
     NV_STATUS status = NV_OK;
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     // Update the engine Database
     NV_ASSERT_OK_OR_RETURN(gpuUpdateEngineTable(pGpu));
@@ -1320,8 +1341,7 @@ subdeviceCtrlCmdGpuGetEnginesV2_IMPL
     // Validate engine count
     if (pGpu->engineDB.size > NV2080_GPU_MAX_ENGINES_LIST_SIZE)
     {
-        NV_PRINTF(LEVEL_ERROR, "The engine database's size (0x%x) exceeds "
-                  "NV2080_GPU_MAX_ENGINES_LIST_SIZE (0x%x)!\n",
+        NV_PRINTF(LEVEL_ERROR, "The engine database's size (0x%x) exceeds NV2080_GPU_MAX_ENGINES_LIST_SIZE (0x%x)!\n",
                   pGpu->engineDB.size, NV2080_GPU_MAX_ENGINES_LIST_SIZE);
         DBG_BREAKPOINT();
         return NV_ERR_INVALID_STATE;
@@ -1348,8 +1368,79 @@ subdeviceCtrlCmdGpuGetEnginesV2_IMPL
                                            pEngineParams->engineCount,
                                            pEngineParams->engineList);
             }
+
+            // Validate engine count
+            if (pEngineParams->engineCount > NV2080_GPU_MAX_ENGINES_LIST_SIZE)
+            {
+                NV_PRINTF(LEVEL_ERROR, "The engine count (0x%x) exceeds NV2080_GPU_MAX_ENGINES_LIST_SIZE (0x%x)!\n",
+                          pEngineParams->engineCount, NV2080_GPU_MAX_ENGINES_LIST_SIZE);
+                DBG_BREAKPOINT();
+                return NV_ERR_INVALID_STATE;
+            }
         }
     }
+
+    NvBool bOwnsLock = NV_FALSE;
+    NvU32 i;
+    if (!rmDeviceGpuLockIsOwner(pGpu->gpuInstance))
+    {
+        status = rmDeviceGpuLocksAcquire(pGpu, GPU_LOCK_FLAGS_SAFE_LOCK_UPGRADE, RM_LOCK_MODULES_NONE);
+        NV_ASSERT_OK_OR_RETURN(status);
+
+        bOwnsLock = NV_TRUE;
+    }
+
+    for (i = 0; i < pEngineParams->engineCount; i++)
+    {
+        NvU32 nv2080EngineId;
+        nv2080EngineId = pEngineParams->engineList[i];
+
+        if (NV2080_ENGINE_TYPE_IS_COPY(nv2080EngineId))
+        {
+            // Check if this is a decomp LCE
+            NvU32 ceInstanceId = NV2080_ENGINE_TYPE_COPY_IDX(nv2080EngineId);
+            if (kceIsDecompLce(pGpu, ceInstanceId))
+            {
+                pEngineParams->engineList[i] = NV2080_ENGINE_TYPE_COMP_DECOMP_COPY(ceInstanceId);
+            }
+        }
+    }
+
+    NV_PRINTF(LEVEL_INFO, "================NV2080_ENGINE List==================\n");
+    if (IS_MIG_IN_USE(pGpu))
+    {
+        MIG_INSTANCE_REF ref;
+        KernelMIGManager *pKernelMIGManager = GPU_GET_KERNEL_MIG_MANAGER(pGpu);
+        if (pKernelMIGManager != NULL)
+        {
+            if (kmigmgrGetInstanceRefFromDevice(pGpu, pKernelMIGManager, GPU_RES_GET_DEVICE(pSubdevice), &ref) == NV_OK)
+            {
+                if (ref.pMIGComputeInstance != NULL && ref.pKernelMIGGpuInstance != NULL)
+                {
+                    RM_ENGINE_TYPE globalRmEngType;
+                    if (kmigmgrGetLocalToGlobalEngineType(pGpu, pKernelMIGManager, ref,
+                                                            RM_ENGINE_TYPE_GR(0),
+                                                            &globalRmEngType) == NV_OK)
+                    {
+                        // Cross reference with LEVEL_INFO from kmigmgrConfigureGPUInstance
+                        NV_PRINTF(LEVEL_INFO, "SwizzId = %d CiId = %d GrId = %d\n",
+                            ref.pKernelMIGGpuInstance->swizzId,
+                            ref.pMIGComputeInstance->id,
+                            RM_ENGINE_TYPE_GR_IDX(globalRmEngType));
+                    }
+
+                }
+            }
+        }
+    }
+    for (i = 0; i < pEngineParams->engineCount; i++)
+    {
+        NV_PRINTF(LEVEL_INFO, "engine[%d] = 0x%x\n", i, pEngineParams->engineList[i]);
+    }
+    NV_PRINTF(LEVEL_INFO, "=============================================\n");
+
+    if (bOwnsLock == NV_TRUE)
+        rmDeviceGpuLocksRelease(pGpu, GPU_LOCK_FLAGS_SAFE_LOCK_UPGRADE, NULL);
 
     return status;
 }
@@ -1372,7 +1463,7 @@ subdeviceCtrlCmdGpuGetEngineClasslist_IMPL
     NV_STATUS     status = NV_OK;
     RM_ENGINE_TYPE rmEngineType = gpuGetRmEngineType(pClassParams->engineType);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     {
         if (IS_MIG_IN_USE(pGpu))
@@ -1430,10 +1521,10 @@ subdeviceCtrlCmdGpuGetEnginePartnerList_IMPL
     OBJGPU          *pGpu = GPU_RES_GET_GPU(pSubdevice);
     KernelMIGManager *pKernelMIGManager = GPU_GET_KERNEL_MIG_MANAGER(pGpu);
     ENGDESCRIPTOR    engDesc;
-    NvU32            localNv2080EngineType;
+    NvU32            nv2080EngineType;
     RM_ENGINE_TYPE   rmEngineType;
     NvU32            i;
-    PCLASSDESCRIPTOR pClass;
+    CLASSDESCRIPTOR *pClass;
     NV_STATUS        status = NV_OK;
 
     pPartnerListParams->numPartners = 0;
@@ -1466,7 +1557,7 @@ subdeviceCtrlCmdGpuGetEnginePartnerList_IMPL
         return NV_ERR_NOT_SUPPORTED;
     }
 
-    localNv2080EngineType = pPartnerListParams->engineType;
+    nv2080EngineType = pPartnerListParams->engineType;
 
     // Translate the instance-local engine type to the global engine type in MIG mode
     if (IS_MIG_IN_USE(pGpu))
@@ -1492,7 +1583,7 @@ subdeviceCtrlCmdGpuGetEnginePartnerList_IMPL
     status = kfifoGetEnginePartnerList_HAL(pGpu, pKernelFifo, pPartnerListParams);
 
     // Restore the client's passed engineType
-    pPartnerListParams->engineType = localNv2080EngineType;
+    pPartnerListParams->engineType = nv2080EngineType;
 
     if (NV_OK == status)
     {
@@ -1519,22 +1610,28 @@ subdeviceCtrlCmdGpuGetEnginePartnerList_IMPL
     // Copy over all of the engines except the target
     for (i = 0; i < pGpu->engineDB.size; i++)
     {
-        localNv2080EngineType = gpuGetNv2080EngineType(pGpu->engineDB.pType[i]);
+        nv2080EngineType = gpuGetNv2080EngineType(pGpu->engineDB.pType[i]);
 
         // Skip the engine handed in
-        if (localNv2080EngineType != pPartnerListParams->engineType )
+        if (nv2080EngineType != pPartnerListParams->engineType )
         {
-            pPartnerListParams->partnerList[pPartnerListParams->numPartners++] = localNv2080EngineType;
+            pPartnerListParams->partnerList[pPartnerListParams->numPartners++] = nv2080EngineType;
         }
     }
 
 subdeviceCtrlCmdGpuGetEnginePartnerList_filter:
     if (IS_MIG_IN_USE(pGpu))
     {
+        Device *pDevice = GPU_RES_GET_DEVICE(pSubdevice);
+        MIG_INSTANCE_REF ref;
+
+        NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
+            kmigmgrGetInstanceRefFromDevice(pGpu, pKernelMIGManager, pDevice, &ref));
         // Remove entries which don't exist in this client's GPU instance
         status = kmigmgrFilterEnginePartnerList(pGpu, pKernelMIGManager,
                                                 pSubdevice,
                                                 pPartnerListParams);
+
     }
 
     return status;
@@ -1558,7 +1655,7 @@ subdeviceCtrlCmdGpuGetEngineFaultInfo_IMPL
     NV_STATUS   status      = NV_OK;
     RM_ENGINE_TYPE rmEngineType = gpuGetRmEngineType(pParams->engineType);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     //
     // When MIG is enabled, clients pass in their instance-specific engineId
@@ -1619,7 +1716,8 @@ subdeviceCtrlCmdGpuGetFermiGpcInfo_IMPL
     NvHandle  hClient = RES_GET_CLIENT_HANDLE(pSubdevice);
     NvHandle  hSubdevice = RES_GET_HANDLE(pSubdevice);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmDeviceGpuLockIsOwner(GPU_RES_GET_GPU(pSubdevice)->gpuInstance));
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmDeviceGpuLockIsOwner(GPU_RES_GET_GPU(pSubdevice)->gpuInstance),
+        NV_ERR_INVALID_LOCK_STATE);
 
     portMemSet(&gpcMaskParams, 0, sizeof(gpcMaskParams));
 
@@ -1654,7 +1752,8 @@ subdeviceCtrlCmdGpuGetFermiTpcInfo_IMPL
     NvHandle  hClient = RES_GET_CLIENT_HANDLE(pSubdevice);
     NvHandle  hSubdevice = RES_GET_HANDLE(pSubdevice);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmDeviceGpuLockIsOwner(GPU_RES_GET_GPU(pSubdevice)->gpuInstance));
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmDeviceGpuLockIsOwner(GPU_RES_GET_GPU(pSubdevice)->gpuInstance),
+        NV_ERR_INVALID_LOCK_STATE);
 
     portMemSet(&tpcMaskParams, 0, sizeof(tpcMaskParams));
     tpcMaskParams.gpcId = pParams->gpcId;
@@ -1671,6 +1770,47 @@ subdeviceCtrlCmdGpuGetFermiTpcInfo_IMPL
     pParams->tpcMask = tpcMaskParams.tpcMask;
     return NV_OK;
 }
+
+#if (defined(DEBUG) || defined(DEVELOP))
+//
+// subdeviceCtrlCmdGpuGetTpcReconfigMask
+//
+// Lock Requirements:
+//      Assert that API lock and GPUs lock held on entry
+//
+NV_STATUS
+subdeviceCtrlCmdGpuGetTpcReconfigMask_IMPL
+(
+    Subdevice                                    *pSubdevice,
+    NV2080_CTRL_GPU_GET_TPC_RECONFIG_MASK_PARAMS *pParams
+)
+{
+    OBJGPU   *pGpu       = GPU_RES_GET_GPU(pSubdevice);
+    RM_API   *pRmApi     = GPU_GET_PHYSICAL_RMAPI(pGpu);
+    NvHandle  hClient    = RES_GET_CLIENT_HANDLE(pSubdevice);
+    NvHandle  hSubdevice = RES_GET_HANDLE(pSubdevice);
+
+    NV2080_CTRL_GR_GET_TPC_RECONFIG_MASK_PARAMS tpcReconfigMaskParams;
+
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmDeviceGpuLockIsOwner(GPU_RES_GET_GPU(pSubdevice)->gpuInstance),
+        NV_ERR_INVALID_LOCK_STATE);
+
+    portMemSet(&tpcReconfigMaskParams, 0, sizeof(tpcReconfigMaskParams));
+    tpcReconfigMaskParams.gpc = pParams->gpc;
+
+    NV_CHECK_OK_OR_RETURN(
+        LEVEL_ERROR,
+        pRmApi->Control(pRmApi,
+                        hClient,
+                        hSubdevice,
+                        NV2080_CTRL_CMD_GR_GET_TPC_RECONFIG_MASK,
+                        &tpcReconfigMaskParams,
+                        sizeof(tpcReconfigMaskParams)));
+
+    pParams->tpcReconfigMask = tpcReconfigMaskParams.tpcReconfigMask;
+    return NV_OK;
+}
+#endif // defined(DEBUG) || defined(DEVELOP)
 
 //
 // subdeviceCtrlCmdGpuGetFermiZcullInfo
@@ -1692,7 +1832,8 @@ subdeviceCtrlCmdGpuGetFermiZcullInfo_IMPL
     NvHandle  hClient = RES_GET_CLIENT_HANDLE(pSubdevice);
     NvHandle  hSubdevice = RES_GET_HANDLE(pSubdevice);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmDeviceGpuLockIsOwner(GPU_RES_GET_GPU(pSubdevice)->gpuInstance));
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmDeviceGpuLockIsOwner(GPU_RES_GET_GPU(pSubdevice)->gpuInstance),
+        NV_ERR_INVALID_LOCK_STATE);
 
     portMemSet(&zcullMaskParams, 0, sizeof(zcullMaskParams));
     zcullMaskParams.gpcId = pParams->gpcId;
@@ -1737,7 +1878,7 @@ subdeviceCtrlCmdGpuGetPesInfo_IMPL
     // This ctrl call is due for deprecation and should not be used.
     //
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     NV_ASSERT_OK_OR_RETURN(
         serverGetClientUnderLock(&g_resServ, hClient, &pRsClient));
@@ -1780,7 +1921,7 @@ subdeviceCtrlCmdGpuQueryMode_IMPL
 {
     OBJGPU *pGpu = GPU_RES_GET_GPU(pSubdevice);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     switch (gpuGetMode(pGpu))
     {
@@ -1834,7 +1975,7 @@ subdeviceCtrlCmdGpuSetComputeModeRules_IMPL
 {
     OBJGPU           *pGpu = GPU_RES_GET_GPU(pSubdevice);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     if (IS_GSP_CLIENT(pGpu))
     {
@@ -1917,7 +2058,7 @@ subdeviceCtrlCmdGpuQueryComputeModeRules_IMPL
 {
     OBJGPU           *pGpu = GPU_RES_GET_GPU(pSubdevice);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     //
     // vGPU specific check to assign compute mode as 'Prohibited'
@@ -1946,7 +2087,7 @@ subdeviceCtrlCmdGpuAcquireComputeModeReservation_IMPL
     OBJGPU   *pGpu = GPU_RES_GET_GPU(pSubdevice);
     NvHandle  hClient = RES_GET_CLIENT_HANDLE(pSubdevice);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     //TODO Bug 2718406  will extend compute mode support for MIG
     if (IS_MIG_ENABLED(pGpu))
@@ -2009,7 +2150,7 @@ subdeviceCtrlCmdGpuReleaseComputeModeReservation_IMPL
     OBJGPU   *pGpu = GPU_RES_GET_GPU(pSubdevice);
     NvHandle  hClient = RES_GET_CLIENT_HANDLE(pSubdevice);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     //TODO Bug 2718406  will extend compute mode support for MIG
     if (IS_MIG_ENABLED(pGpu))
@@ -2046,7 +2187,7 @@ subdeviceCtrlCmdGpuGetId_IMPL
 {
     OBJGPU *pGpu = GPU_RES_GET_GPU(pSubdevice);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     pIdParams->gpuId = pGpu->gpuId;
 
@@ -2073,7 +2214,7 @@ subdeviceCtrlCmdGpuGetPids_IMPL
 
     NV_ASSERT_OR_RETURN(RMCFG_FEATURE_KERNEL_RM, NV_ERR_NOT_SUPPORTED);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     switch (pGetPidsParams->idType)
     {
@@ -2109,11 +2250,13 @@ subdeviceCtrlCmdGpuGetPids_IMPL
     // info
     //
     KernelMIGManager *pKernelMIGManager = GPU_GET_KERNEL_MIG_MANAGER(pGpu);
-    NvHandle hClient = RES_GET_CLIENT_HANDLE(pSubdevice);
+    RmClient *pRmClient = dynamicCast(RES_GET_CLIENT(pSubdevice), RmClient);
+    NV_ASSERT_OR_RETURN(pRmClient != NULL, NV_ERR_INVALID_CLIENT);
+
     MIG_INSTANCE_REF partitionRef = kmigmgrMakeNoMIGReference();
     pRef = &partitionRef;
     if (IS_MIG_IN_USE(pGpu) &&
-        !rmclientIsCapableByHandle(hClient, NV_RM_CAP_SYS_SMC_MONITOR))
+        !rmclientIsCapable(pRmClient, NV_RM_CAP_SYS_SMC_MONITOR))
     {
         Device *pDevice = GPU_RES_GET_DEVICE(pSubdevice);
         //
@@ -2161,7 +2304,7 @@ subdeviceCtrlCmdGpuGetPidInfo_IMPL
 
     NV_ASSERT_OR_RETURN(RMCFG_FEATURE_KERNEL_RM, NV_ERR_NOT_SUPPORTED);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     if ((pGetPidInfoParams->pidInfoListCount <= 0) ||
         (pGetPidInfoParams->pidInfoListCount >
@@ -2176,11 +2319,13 @@ subdeviceCtrlCmdGpuGetPidInfo_IMPL
     // info
     //
     KernelMIGManager *pKernelMIGManager = GPU_GET_KERNEL_MIG_MANAGER(pGpu);
-    NvHandle hClient = RES_GET_CLIENT_HANDLE(pSubdevice);
+    RmClient *pRmClient = dynamicCast(RES_GET_CLIENT(pSubdevice), RmClient);
+    NV_ASSERT_OR_RETURN(pRmClient != NULL, NV_ERR_INVALID_CLIENT);
+
     MIG_INSTANCE_REF ref = kmigmgrMakeNoMIGReference();
     pRef = &ref;
     if (IS_MIG_IN_USE(pGpu) &&
-        !rmclientIsCapableByHandle(hClient, NV_RM_CAP_SYS_SMC_MONITOR))
+        !rmclientIsCapable(pRmClient, NV_RM_CAP_SYS_SMC_MONITOR))
     {
         Device *pDevice = GPU_RES_GET_DEVICE(pSubdevice);
         //
@@ -2243,7 +2388,7 @@ subdeviceCtrlCmdGpuGetEngineRunlistPriBase_IMPL
     OBJGPU     *pGpu        = GPU_RES_GET_GPU(pSubdevice);
     KernelFifo *pKernelFifo = GPU_GET_KERNEL_FIFO(pGpu);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     if (!kfifoIsHostEngineExpansionSupported(pKernelFifo))
     {
@@ -2260,6 +2405,7 @@ subdeviceCtrlCmdGpuGetEngineRunlistPriBase_IMPL
         if ((pParams->engineList[i] == NV2080_ENGINE_TYPE_NULL) || (pParams->engineList[i] == NV2080_ENGINE_TYPE_SW))
         {
             pParams->runlistPriBase[i] = NV2080_CTRL_GPU_GET_ENGINE_RUNLIST_PRI_BASE_NULL;
+            pParams->runlistId[i] = NV2080_CTRL_GPU_GET_ENGINE_RUNLIST_INVALID;
             continue;
         }
 
@@ -2287,15 +2433,28 @@ subdeviceCtrlCmdGpuGetEngineRunlistPriBase_IMPL
                                                   &rmEngineType));
         }
 
-        tmpStatus = kfifoEngineInfoXlate_HAL(pGpu, pKernelFifo, ENGINE_INFO_TYPE_RM_ENGINE_TYPE,
-                                             rmEngineType, ENGINE_INFO_TYPE_RUNLIST_PRI_BASE,
-                                             &pParams->runlistPriBase[i]);
+        tmpStatus = kfifoEngineInfoXlate_HAL(pGpu, pKernelFifo,
+            ENGINE_INFO_TYPE_RM_ENGINE_TYPE,   rmEngineType,
+            ENGINE_INFO_TYPE_RUNLIST_PRI_BASE, &pParams->runlistPriBase[i]);
 
         if (tmpStatus != NV_OK)
         {
             pParams->runlistPriBase[i] = NV2080_CTRL_GPU_GET_ENGINE_RUNLIST_PRI_BASE_ERROR;
+            pParams->runlistId[i] = NV2080_CTRL_GPU_GET_ENGINE_RUNLIST_ERROR;
             status = tmpStatus;
         }
+
+        tmpStatus = kfifoEngineInfoXlate_HAL(pGpu, pKernelFifo,
+            ENGINE_INFO_TYPE_RM_ENGINE_TYPE, rmEngineType,
+            ENGINE_INFO_TYPE_RUNLIST,        &pParams->runlistId[i]);
+
+        if (tmpStatus != NV_OK)
+        {
+            pParams->runlistPriBase[i] = NV2080_CTRL_GPU_GET_ENGINE_RUNLIST_PRI_BASE_ERROR;
+            pParams->runlistId[i] = NV2080_CTRL_GPU_GET_ENGINE_RUNLIST_ERROR;
+            status = tmpStatus;
+        }
+
     }
     return status;
 }
@@ -2314,7 +2473,7 @@ subdeviceCtrlCmdGpuGetHwEngineId_IMPL
     OBJGPU     *pGpu        = GPU_RES_GET_GPU(pSubdevice);
     KernelFifo *pKernelFifo = GPU_GET_KERNEL_FIFO(pGpu);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     if (!kfifoIsHostEngineExpansionSupported(pKernelFifo))
     {
@@ -2382,12 +2541,13 @@ subdeviceCtrlCmdGpuGetMaxSupportedPageSize_IMPL
     OBJGPU   *pGpu = GPU_RES_GET_GPU(pSubdevice);
     NV_STATUS status  = NV_OK;
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmDeviceGpuLockIsOwner(pGpu->gpuInstance));
+    NV_ASSERT_OR_RETURN((rmapiLockIsOwner() && rmDeviceGpuLockIsOwner(pGpu->gpuInstance)) || rmapiInRtd3PmPath(),
+        NV_ERR_INVALID_LOCK_STATE);
 
     // Default to minimal page size (4k)
     pParams->maxSupportedPageSize = RM_PAGE_SIZE;
 
-    if (IS_VIRTUAL(pGpu))
+    if (IS_VIRTUAL_WITHOUT_SRIOV(pGpu) || IS_VIRTUAL_WITH_HEAVY_SRIOV(pGpu))
     {
         VGPU_STATIC_INFO *pVSI = GPU_GET_STATIC_INFO(pGpu);
 
@@ -2398,6 +2558,11 @@ subdeviceCtrlCmdGpuGetMaxSupportedPageSize_IMPL
 
     KernelGmmu *pKernelGmmu = GPU_GET_KERNEL_GMMU(pGpu);
 
+    if (kgmmuIsPageSize256gbSupported(pKernelGmmu))
+    {
+        pParams->maxSupportedPageSize = RM_PAGE_SIZE_256G;
+    }
+    else
     if (kgmmuIsPageSize512mbSupported(pKernelGmmu))
     {
         pParams->maxSupportedPageSize = RM_PAGE_SIZE_512M;
@@ -2411,13 +2576,13 @@ subdeviceCtrlCmdGpuGetMaxSupportedPageSize_IMPL
         pParams->maxSupportedPageSize = (NvU32)kgmmuGetMaxBigPageSize_HAL(pKernelGmmu);
     }
 
-    if (gpuIsSriovEnabled(pGpu)
+    if (gpuIsSriovEnabled(pGpu) || IS_VIRTUAL_WITH_SRIOV(pGpu)
         || gpuIsCCFeatureEnabled(pGpu)
-       )
+        )
     {
         NvU64 vmmuSegmentSize = gpuGetVmmuSegmentSize(pGpu);
         if (vmmuSegmentSize > 0 &&
-            vmmuSegmentSize < NV2080_CTRL_GPU_VMMU_SEGMENT_SIZE_512MB)
+            vmmuSegmentSize < NV2080_CTRL_GPU_VMMU_SEGMENT_SIZE_1024MB)
         {
             pParams->maxSupportedPageSize = RM_PAGE_SIZE_HUGE;
         }
@@ -2664,7 +2829,8 @@ NV_STATUS subdeviceCtrlCmdValidateMemMapRequest_IMPL
     NvU32         bar0MapSize;
     NvU64         bar0MapOffset;
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmDeviceGpuLockIsOwner(GPU_RES_GET_GPU(pSubdevice)->gpuInstance));
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmDeviceGpuLockIsOwner(GPU_RES_GET_GPU(pSubdevice)->gpuInstance),
+        NV_ERR_INVALID_LOCK_STATE);
 
     pParams->protection = NV_PROTECT_READ_WRITE;
 
@@ -2759,7 +2925,7 @@ subdeviceCtrlCmdGpuGetGfid_IMPL
     OBJGPU *pGpu = GPU_RES_GET_GPU(pSubdevice);
     NvU32  pciFunction, gfid;
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     if (!gpuIsSriovEnabled(pGpu))
         return NV_ERR_NOT_SUPPORTED;
@@ -2826,7 +2992,7 @@ gpuUpdateGfidP2pCapability
     NvBool  bSetP2PAccess = NV_FALSE;
     NvU32   idx;
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     if (!gpuIsSriovEnabled(pGpu))
         return NV_ERR_NOT_SUPPORTED;
@@ -2900,6 +3066,7 @@ subdeviceCtrlCmdUpdateGfidP2pCapability_IMPL
 {
     return gpuUpdateGfidP2pCapability(GPU_RES_GET_GPU(pSubdevice), pParams);
 }
+
 /*
  * Set the EGM fabric base address
  */
@@ -2930,9 +3097,9 @@ subdeviceCtrlCmdGpuGetEngineLoadTimes_IMPL
     NV2080_CTRL_GPU_GET_ENGINE_LOAD_TIMES_PARAMS *pParams
 )
 {
-    OBJGPU        *pGpu              = GPU_RES_GET_GPU(pSubdevice);
-    PENGDESCRIPTOR engDescriptorList = gpuGetInitEngineDescriptors(pGpu);
-    NvU32          numEngDescriptors = gpuGetNumEngDescriptors(pGpu);
+    OBJGPU        *pGpu               = GPU_RES_GET_GPU(pSubdevice);
+    ENGDESCRIPTOR *pEngDescriptorList = gpuGetInitEngineDescriptors(pGpu);
+    NvU32          numEngDescriptors  = gpuGetNumEngDescriptors(pGpu);
     NvU32          curEngDescIdx;
 
     NV_ASSERT_OR_RETURN(numEngDescriptors < NV2080_CTRL_GPU_MAX_ENGINE_OBJECTS, NV_ERR_BUFFER_TOO_SMALL);
@@ -2940,8 +3107,8 @@ subdeviceCtrlCmdGpuGetEngineLoadTimes_IMPL
     pParams->engineCount = numEngDescriptors;
     for (curEngDescIdx = 0; curEngDescIdx < numEngDescriptors; curEngDescIdx++)
     {
-        ENGDESCRIPTOR   curEngDescriptor = engDescriptorList[curEngDescIdx];
-        OBJENGSTATE    *pEngstate        = gpuGetEngstate(pGpu, curEngDescriptor);
+        ENGDESCRIPTOR curEngDescriptor = pEngDescriptorList[curEngDescIdx];
+        OBJENGSTATE  *pEngstate        = gpuGetEngstate(pGpu, curEngDescriptor);
 
         if (pEngstate == NULL)
         {
@@ -2970,18 +3137,20 @@ subdeviceCtrlCmdGpuSetFabricAddr_IMPL
     NV2080_CTRL_GPU_SET_FABRIC_BASE_ADDR_PARAMS *pParams
 )
 {
-    OBJGPU       *pGpu         = GPU_RES_GET_GPU(pSubdevice);
-    NvHandle      hClient      = RES_GET_CLIENT_HANDLE(pSubdevice);
+    OBJGPU       *pGpu  = GPU_RES_GET_GPU(pSubdevice);
+    RmClient *pRmClient = dynamicCast(RES_GET_CLIENT(pSubdevice), RmClient);
+    NV_ASSERT_OR_RETURN(NULL != pRmClient, NV_ERR_INVALID_CLIENT);
+
     CALL_CONTEXT *pCallContext = resservGetTlsCallContext();
 
     NV_ASSERT_OR_RETURN(RMCFG_FEATURE_KERNEL_RM, NV_ERR_NOT_SUPPORTED);
     NV_ASSERT_OR_RETURN(pCallContext != NULL, NV_ERR_INVALID_STATE);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
-    if (!rmclientIsCapableOrAdminByHandle(hClient,
-                                          NV_RM_CAP_EXT_FABRIC_MGMT,
-                                          pCallContext->secInfo.privLevel))
+    if (!rmclientIsCapableOrAdmin(pRmClient,
+                                  NV_RM_CAP_EXT_FABRIC_MGMT,
+                                  pCallContext->secInfo.privLevel))
     {
         NV_PRINTF(LEVEL_ERROR, "Non-privileged context issued privileged cmd\n");
         return NV_ERR_INSUFFICIENT_PERMISSIONS;
@@ -3047,9 +3216,14 @@ subdeviceCtrlCmdGetGpuFabricProbeInfo_IMPL
     NvU64 fmCaps = 0;
     NvUuid *pClusterUuid = (NvUuid*) pParams->clusterUuid;
     NvU32 mask = 0, healthMask = 0;
+    RM_API *pRmApi;
+    NvHandle hClient;
+    NvHandle hSubdevice;
+    NV2080_CTRL_NVLINK_GET_LOCAL_DEVICE_INFO_PARAMS localDeviceInfoParams = {0};
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() &&
-                           rmDeviceGpuLockIsOwner(gpuGetInstance(pGpu)));
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() &&
+                           rmDeviceGpuLockIsOwner(gpuGetInstance(pGpu)),
+                           NV_ERR_INVALID_LOCK_STATE);
 
     // Probe is not supported - Ex - Direct connected etc.
     if (!gpuFabricProbeIsSupported(pGpu))
@@ -3103,7 +3277,10 @@ subdeviceCtrlCmdGetGpuFabricProbeInfo_IMPL
     status = gpuFabricProbeGetfmCaps(pGpu->pGpuFabricProbeInfoKernel, &fmCaps);
     NV_ASSERT_OK_OR_RETURN(status);
 
-    pParams->fabricCaps = _convertGpuFabricProbeInfoCaps(fmCaps);
+    if (!gpuIsCCMultiGpuProtectedPcieModeEnabled(pGpu) && !gpuIsCCMultiGpuNvleModeEnabled(pGpu))
+    {
+        pParams->fabricCaps = _convertGpuFabricProbeInfoCaps(fmCaps);
+    }
 
     status = gpuFabricProbeGetFabricCliqueId(pGpu->pGpuFabricProbeInfoKernel,
                                              &pParams->fabricCliqueId);
@@ -3129,6 +3306,78 @@ subdeviceCtrlCmdGetGpuFabricProbeInfo_IMPL
     {
         healthMask |= FLD_SET_DRF(2080, _CTRL_GPU_FABRIC_HEALTH_MASK,
                                   _DEGRADED_BW, _NOT_SUPPORTED, healthMask);
+    }
+
+    if (FLD_TEST_DRF(LINK, _INBAND_FABRIC_HEALTH_MASK, _ROUTE_UPDATE,
+                     _TRUE, mask))
+    {
+        healthMask |= FLD_SET_DRF(2080, _CTRL_GPU_FABRIC_HEALTH_MASK,
+                                  _ROUTE_UPDATE, _TRUE, healthMask);
+    }
+    else if (FLD_TEST_DRF(LINK, _INBAND_FABRIC_HEALTH_MASK, _ROUTE_UPDATE,
+                          _FALSE, mask))
+    {
+        healthMask |= FLD_SET_DRF(2080, _CTRL_GPU_FABRIC_HEALTH_MASK,
+                                  _ROUTE_UPDATE, _FALSE, healthMask);
+    }
+    else if (FLD_TEST_DRF(LINK, _INBAND_FABRIC_HEALTH_MASK, _ROUTE_UPDATE,
+                          _NOT_SUPPORTED, mask))
+    {
+        healthMask |= FLD_SET_DRF(2080, _CTRL_GPU_FABRIC_HEALTH_MASK,
+                                  _ROUTE_UPDATE, _NOT_SUPPORTED, healthMask);
+    }
+
+    if (FLD_TEST_DRF(LINK, _INBAND_FABRIC_HEALTH_MASK, _CONNECTION_UNHEALTHY,
+                     _TRUE, mask))
+    {
+        healthMask |= FLD_SET_DRF(2080, _CTRL_GPU_FABRIC_HEALTH_MASK,
+                                  _CONNECTION_UNHEALTHY, _TRUE, healthMask);
+    }
+    else if (FLD_TEST_DRF(LINK, _INBAND_FABRIC_HEALTH_MASK, _CONNECTION_UNHEALTHY,
+                          _FALSE, mask))
+    {
+        healthMask |= FLD_SET_DRF(2080, _CTRL_GPU_FABRIC_HEALTH_MASK,
+                                  _CONNECTION_UNHEALTHY, _FALSE, healthMask);
+    }
+    else if (FLD_TEST_DRF(LINK, _INBAND_FABRIC_HEALTH_MASK, _CONNECTION_UNHEALTHY,
+                          _NOT_SUPPORTED, mask))
+    {
+        healthMask |= FLD_SET_DRF(2080, _CTRL_GPU_FABRIC_HEALTH_MASK,
+                                   _CONNECTION_UNHEALTHY, _NOT_SUPPORTED, healthMask);
+    }
+
+    if (gpuGetChipArch(pGpu) >= GPU_ARCHITECTURE_BLACKWELL_GB1XX)
+    {
+        pRmApi = rmapiGetInterface(RMAPI_GPU_LOCK_INTERNAL);
+        hClient = RES_GET_CLIENT_HANDLE(pSubdevice);
+        hSubdevice = RES_GET_HANDLE(pSubdevice);
+
+        NV_CHECK_OK_OR_RETURN(
+                LEVEL_ERROR,
+                pRmApi->Control(pRmApi,
+                                hClient,
+                                hSubdevice,
+                                NV2080_CTRL_CMD_NVLINK_GET_LOCAL_DEVICE_INFO,
+                                &localDeviceInfoParams,
+                                sizeof(localDeviceInfoParams)));
+
+        if (FLD_TEST_DRF(2080, _CTRL_NVLINK_DEVICE_INFO_FABRIC_RECOVERY_STATUS_MASK,
+                         _UNCONTAINED_ERROR_RECOVERY, _ACTIVE,
+                         localDeviceInfoParams.localDeviceInfo.fabricRecoveryStatusMask))
+        {
+            healthMask |= FLD_SET_DRF(2080, _CTRL_GPU_FABRIC_HEALTH_MASK, _ACCESS_TIMEOUT_RECOVERY,
+                                      _TRUE, healthMask);
+        }
+        else
+        {
+            healthMask |= FLD_SET_DRF(2080, _CTRL_GPU_FABRIC_HEALTH_MASK, _ACCESS_TIMEOUT_RECOVERY,
+                                      _FALSE, healthMask);
+        }
+    }
+    else
+    {
+        healthMask |= FLD_SET_DRF(2080, _CTRL_GPU_FABRIC_HEALTH_MASK, _ACCESS_TIMEOUT_RECOVERY,
+                                  _NOT_SUPPORTED, healthMask);
     }
 
     pParams->fabricHealthMask = healthMask;
@@ -3170,7 +3419,7 @@ subdeviceCtrlCmdGpuGetNameString_IMPL
 {
     OBJGPU *pGpu = GPU_RES_GET_GPU(pSubdevice);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     return gpuGetNameString(pGpu,
                             pNameStringParams->gpuNameStringFlags,
@@ -3192,7 +3441,7 @@ subdeviceCtrlCmdGpuGetShortNameString_IMPL
 {
     OBJGPU *pGpu = GPU_RES_GET_GPU(pSubdevice);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     return gpuGetShortNameString(pGpu, (void *)&pShortNameStringParams->gpuShortNameString);
 }
@@ -3250,7 +3499,7 @@ subdeviceCtrlCmdGpuReportNonReplayableFault_IMPL
 
     ct_assert(sizeof(GMMU_FAULT_PACKET) == NV2080_CTRL_GPU_FAULT_PACKET_SIZE);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     status = kgmmuHandleNonReplayableFaultPacket_HAL(pGpu, pKernelGmmu, pFaultPacket);
 
@@ -3269,26 +3518,601 @@ subdeviceCtrlCmdGpuGetChipDetails_IMPL
     return gpuGetChipDetails(pGpu, pParams);
 }
 
+NV_STATUS
+subdeviceCtrlCmdBiosGetSKUInfo_KERNEL
+(
+    Subdevice *pSubdevice,
+    NV2080_CTRL_BIOS_GET_SKU_INFO_PARAMS *pBiosGetSKUInfoParams
+)
+{
+    OBJGPU              *pGpu  = GPU_RES_GET_GPU(pSubdevice);
+    GspStaticConfigInfo *pGSCI = GPU_GET_GSP_STATIC_INFO(pGpu);
+
+    NV_ASSERT_OR_RETURN(pGSCI != NULL, NV_ERR_INVALID_STATE);
+
+    portMemCopy(pBiosGetSKUInfoParams,
+                sizeof(NV2080_CTRL_BIOS_GET_SKU_INFO_PARAMS),
+                &pGSCI->SKUInfo,
+                sizeof(NV2080_CTRL_BIOS_GET_SKU_INFO_PARAMS));
+
+    return NV_OK;
+}
+
 /*!
- * @brief   This Command is used to report if the specified logo illumination attribute
- *          is supported
+ * @brief   This Command is used to set a new value for the specified logo illumination
+ *          attribute on the specified GPU
  *
  * @param[in,out]   pConfigParams
  *                  attribute:  The attribute whose support is to be determined.
- *                  bSupported: indicator if the specified attribute is supported.
+ *                  value:      The new value of the specified attribute to be applied.
  *
  * @return  Returns NV_STATUS
+ *          NV_ERR_INVALID_ARGUMENT   Invalid value for attribute
+ *          NV_ERR_NOT_SUPPORTED      Invalid Attribute for specified GPU
  *          NV_OK                     Success
  *
  */
 NV_STATUS
-subdeviceCtrlCmdGpuQueryIllumSupport_VF
+subdeviceCtrlCmdGpuSetIllum_IMPL
 (
     Subdevice *pSubdevice,
-    NV2080_CTRL_CMD_GPU_QUERY_ILLUM_SUPPORT_PARAMS *pConfigParams
+    NV2080_CTRL_CMD_GPU_ILLUM_PARAMS *pConfigParams
 )
 {
-    pConfigParams->bSupported = NV_FALSE;
+    OBJGPU     *pGpu        = GPU_RES_GET_GPU(pSubdevice);
+    NV_STATUS   status      = NV_OK;
+    RM_API *pRmApi = rmapiGetInterface(RMAPI_GPU_LOCK_INTERNAL);
+    NvHandle hClient = RES_GET_CLIENT_HANDLE(pSubdevice);
+    NvHandle hSubdevice = RES_GET_HANDLE(pSubdevice);
+    NV2080_CTRL_INTERNAL_GPU_SET_ILLUM_PARAMS *pConfigParamsInternal = (NV2080_CTRL_INTERNAL_GPU_SET_ILLUM_PARAMS*)pConfigParams;
+
+    status = pRmApi->Control(pRmApi, hClient, hSubdevice,
+                            NV2080_CTRL_CMD_INTERNAL_GPU_SET_ILLUM,
+                            pConfigParamsInternal, sizeof(*pConfigParamsInternal));
+
+    if (NV_OK == status)
+    {
+        // convert the attribute to the GPIO function.
+        switch(pConfigParams->attribute)
+        {
+            case NV2080_CTRL_GPU_ILLUM_ATTRIB_LOGO_BRIGHTNESS:
+            {
+                osWriteRegistryDword(pGpu, NV_REG_STR_ILLUM_ATTRIB_LOGO_BRIGHTNESS, pConfigParams->value);
+                break;
+            }
+            case NV2080_CTRL_GPU_ILLUM_ATTRIB_SLI_BRIGHTNESS:
+            {
+                osWriteRegistryDword(pGpu, NV_REG_STR_ILLUM_ATTRIB_SLI_BRIGHTNESS, pConfigParams->value);
+                break;
+            }
+        }
+    }
+
+    return status;
+}
+
+/*!
+ * @brief   This Command is used to query the recovery action for a GPU to get
+ *          back to an operational state.
+ *
+ * @param[in,out]   pParams
+ *                  action: The GPU recovery action.
+ *
+ * @return  Returns NV_STATUS
+ *          NV_ERR_GPU_IS_LOST        The GPU has fallen off the bus
+ *          NV_OK                     Success
+ *
+ */
+NV_STATUS
+subdeviceCtrlCmdGpuGetRecoveryAction_IMPL(
+    Subdevice *pSubdevice,
+    NV2080_CTRL_GPU_GET_RECOVERY_ACTION_PARAMS *pParams
+)
+{
+    OBJGPU *pGpu = GPU_RES_GET_GPU(pSubdevice);
+
+    if (!API_GPU_ATTACHED_SANITY_CHECK(pGpu))
+    {
+        return NV_ERR_GPU_IS_LOST;
+    }
+
+    gpuGetRecoveryAction(pGpu, pParams);
 
     return NV_OK;
 }
+
+NV_STATUS
+subdeviceCtrlCmdGpuGetVgpuHeapStats_IMPL
+(
+    Subdevice *pSubdevice,
+    NV2080_CTRL_CMD_GSP_GET_VGPU_HEAP_STATS_PARAMS *pParams
+)
+{
+    return NV_ERR_NOT_SUPPORTED;
+}
+
+/*
+ * GSP RPC integrity test
+ */
+
+NV_STATUS
+subdeviceCtrlCmdGpuRpcGspTest_IMPL
+(
+    Subdevice *pSubdevice,
+    NV2080_CTRL_GPU_RPC_GSP_TEST_PARAMS *pParams
+)
+{
+    NV_STATUS status =  NV_OK;
+    NvU32 *data = (NvU32 *) pParams->data;
+    OBJGPU *pGpu = GPU_RES_GET_GPU(pSubdevice);
+
+    if (IS_GSP_CLIENT(pGpu))
+    {
+        CALL_CONTEXT *pCallContext  = resservGetTlsCallContext();
+        RmCtrlParams *pRmCtrlParams = pCallContext->pControlParams;
+        pParams->startTimestamp = osGetTimestamp();
+        if (pParams->test == NV2080_CTRL_GPU_RPC_GSP_TEST_SERIALIZED_INTEGRITY)
+        {
+            NV_RM_RPC_CONTROL(pGpu,
+                        pRmCtrlParams->hClient,
+                        pRmCtrlParams->hObject,
+                        pRmCtrlParams->cmd,
+                        pRmCtrlParams->pParams,
+                        pRmCtrlParams->paramsSize,
+                        status);
+        }
+        else if (pParams->test == NV2080_CTRL_GPU_RPC_GSP_TEST_UNSERIALIZED)
+        {
+            RM_API *pRmApi = GPU_GET_PHYSICAL_RMAPI(pGpu);
+            NV2080_CTRL_GPU_GET_IP_VERSION_PARAMS params = {0};
+            params.targetEngine = NV2080_CTRL_GPU_GET_IP_VERSION_PPWR_PMU;
+            status = pRmApi->Control(pRmApi,
+                                     pGpu->hInternalClient,
+                                     pGpu->hInternalSubdevice,
+                                     NV2080_CTRL_CMD_GPU_GET_IP_VERSION,
+                             &params, sizeof(params));
+        }
+        else
+        {
+            status = NV_ERR_INVALID_ARGUMENT;
+        }
+        pParams->stopTimestamp = osGetTimestamp();
+        return status;
+    }
+
+    for (NvU32 i = 0; i < pParams->dataSize; i++)
+    {
+        if (data[i] != i * 2) {
+            status = NV_ERR_INVALID_DATA;
+            NV_PRINTF(LEVEL_ERROR, "RPC TEST: mismatch in input data, expected %u, received %u\n", i * 2, data[i]);
+        }
+        data[i] = i * 3;
+    }
+    return status;
+}
+
+/*
+ * Used to query information for RPC integrity tests
+ */
+
+NV_STATUS
+subdeviceCtrlCmdGpuRpcGspQuerySizes_IMPL
+(
+    Subdevice *pSubdevice,
+    NV2080_CTRL_GPU_RPC_GSP_QUERY_SIZES_PARAMS *pParams
+)
+{
+    OBJGPU *pGpu = GPU_RES_GET_GPU(pSubdevice);
+    OBJRPC *pRpc = GPU_GET_RPC(pGpu);
+
+    pParams->maxRpcSize = pRpc->maxRpcSize;
+    pParams->finnRmapiSize = sizeof(FINN_RM_API);
+    pParams->rpcGspControlSize = sizeof(rpc_gsp_rm_control_v);
+    pParams->rpcMessageHeaderSize = sizeof(rpc_message_header_v);
+    pParams->timestampFreq = osGetTimestampFreq();
+
+    return NV_OK;
+}
+
+static void
+subdeviceCtrlCmdThermalSystemExecuteV2_updateCache(Subdevice *pSubdevice,
+                                NV2080_CTRL_THERMAL_SYSTEM_EXECUTE_V2_PARAMS *pSystemExecuteParams)
+{
+    OBJGPU *pGpu = GPU_RES_GET_GPU(pSubdevice);
+
+    for (NvU32 i = 0; i < pSystemExecuteParams->instructionListSize; i++)
+    {
+        if ((!pSystemExecuteParams->instructionList[i].executed) ||
+            ( pSystemExecuteParams->instructionList[i].result != NV_OK))
+            continue;
+
+        switch (pSystemExecuteParams->instructionList[i].opcode)
+        {
+            case NV2080_CTRL_THERMAL_SYSTEM_GET_INFO_SENSORS_AVAILABLE_OPCODE:
+            {
+                pGpu->thermalSystemExecuteV2Cache.numSensors =
+                    pSystemExecuteParams->instructionList[i].operands.getInfoSensorsAvailable.availableSensors;
+
+                pGpu->thermalSystemExecuteV2Cache.bNumSensorsCached = NV_TRUE;
+
+                break;
+            }
+
+            case NV2080_CTRL_THERMAL_SYSTEM_GET_INFO_PROVIDER_TYPE_OPCODE:
+            {
+                for (NvU32 j = 0; j < NV_ARRAY_ELEMENTS(pGpu->thermalSystemExecuteV2Cache.sensors); j++)
+                {
+                    if ((pGpu->thermalSystemExecuteV2Cache.sensors[j].bIsCached[THERMAL_SYSTEM_EXECUTE_V2_CACHE_ENTRY_PROVIDER_INDEX]) &&
+                        (pGpu->thermalSystemExecuteV2Cache.sensors[j].cache[THERMAL_SYSTEM_EXECUTE_V2_CACHE_ENTRY_PROVIDER_INDEX] ==
+                         pSystemExecuteParams->instructionList[i].operands.getInfoProviderType.providerIndex))
+                    {
+                        pGpu->thermalSystemExecuteV2Cache.sensors[j].cache[THERMAL_SYSTEM_EXECUTE_V2_CACHE_ENTRY_PROVIDER_TYPE] =
+                            pSystemExecuteParams->instructionList[i].operands.getInfoProviderType.type;
+                        pGpu->thermalSystemExecuteV2Cache.sensors[j].bIsCached[THERMAL_SYSTEM_EXECUTE_V2_CACHE_ENTRY_PROVIDER_TYPE] = NV_TRUE;
+                        break;
+                    }
+                }
+
+                break;
+            }
+
+            case NV2080_CTRL_THERMAL_SYSTEM_GET_INFO_TARGET_TYPE_OPCODE:
+            {
+                for (NvU32 j = 0; j < NV_ARRAY_ELEMENTS(pGpu->thermalSystemExecuteV2Cache.sensors); j++)
+                {
+                    if ((pGpu->thermalSystemExecuteV2Cache.sensors[j].bIsCached[THERMAL_SYSTEM_EXECUTE_V2_CACHE_ENTRY_TARGET_INDEX]) &&
+                        (pGpu->thermalSystemExecuteV2Cache.sensors[j].cache[THERMAL_SYSTEM_EXECUTE_V2_CACHE_ENTRY_TARGET_INDEX] ==
+                         pSystemExecuteParams->instructionList[i].operands.getInfoTargetType.targetIndex))
+                    {
+                        pGpu->thermalSystemExecuteV2Cache.sensors[j].cache[THERMAL_SYSTEM_EXECUTE_V2_CACHE_ENTRY_TARGET_TYPE] =
+                            pSystemExecuteParams->instructionList[i].operands.getInfoTargetType.type;
+                        pGpu->thermalSystemExecuteV2Cache.sensors[j].bIsCached[THERMAL_SYSTEM_EXECUTE_V2_CACHE_ENTRY_TARGET_TYPE] = NV_TRUE;
+                        break;
+                    }
+                }
+
+                break;
+            }
+
+            case NV2080_CTRL_THERMAL_SYSTEM_GET_INFO_SENSOR_READING_RANGE_OPCODE:
+            {
+                NvU32 sensorIdx = pSystemExecuteParams->instructionList[i].operands.getInfoSensorReadingRange.sensorIndex;
+
+                if (sensorIdx < NV_ARRAY_ELEMENTS(pGpu->thermalSystemExecuteV2Cache.sensors))
+                {
+                    pGpu->thermalSystemExecuteV2Cache.sensors[sensorIdx].cache[THERMAL_SYSTEM_EXECUTE_V2_CACHE_ENTRY_DEFAULT_MIN_TEMP] =
+                        pSystemExecuteParams->instructionList[i].operands.getInfoSensorReadingRange.minimum;
+                    pGpu->thermalSystemExecuteV2Cache.sensors[sensorIdx].bIsCached[THERMAL_SYSTEM_EXECUTE_V2_CACHE_ENTRY_DEFAULT_MIN_TEMP] = NV_TRUE;
+
+                    pGpu->thermalSystemExecuteV2Cache.sensors[sensorIdx].cache[THERMAL_SYSTEM_EXECUTE_V2_CACHE_ENTRY_DEFAULT_MAX_TEMP] =
+                        pSystemExecuteParams->instructionList[i].operands.getInfoSensorReadingRange.maximum;
+                    pGpu->thermalSystemExecuteV2Cache.sensors[sensorIdx].bIsCached[THERMAL_SYSTEM_EXECUTE_V2_CACHE_ENTRY_DEFAULT_MAX_TEMP] = NV_TRUE;
+                }
+
+                break;
+            }
+
+            case NV2080_CTRL_THERMAL_SYSTEM_GET_INFO_SENSOR_PROVIDER_OPCODE:
+            {
+                NvU32 sensorIdx = pSystemExecuteParams->instructionList[i].operands.getInfoSensorProvider.sensorIndex;
+
+                if (sensorIdx < NV_ARRAY_ELEMENTS(pGpu->thermalSystemExecuteV2Cache.sensors))
+                {
+                    pGpu->thermalSystemExecuteV2Cache.sensors[sensorIdx].cache[THERMAL_SYSTEM_EXECUTE_V2_CACHE_ENTRY_PROVIDER_INDEX] =
+                        pSystemExecuteParams->instructionList[i].operands.getInfoSensorProvider.providerIndex;
+                    pGpu->thermalSystemExecuteV2Cache.sensors[sensorIdx].bIsCached[THERMAL_SYSTEM_EXECUTE_V2_CACHE_ENTRY_PROVIDER_INDEX] = NV_TRUE;
+                }
+
+                break;
+            }
+
+            case NV2080_CTRL_THERMAL_SYSTEM_GET_INFO_SENSOR_TARGET_OPCODE:
+            {
+                NvU32 sensorIdx = pSystemExecuteParams->instructionList[i].operands.getInfoSensorTarget.sensorIndex;
+
+                if (sensorIdx < NV_ARRAY_ELEMENTS(pGpu->thermalSystemExecuteV2Cache.sensors))
+                {
+                    pGpu->thermalSystemExecuteV2Cache.sensors[sensorIdx].cache[THERMAL_SYSTEM_EXECUTE_V2_CACHE_ENTRY_TARGET_INDEX] =
+                        pSystemExecuteParams->instructionList[i].operands.getInfoSensorTarget.targetIndex;
+                    pGpu->thermalSystemExecuteV2Cache.sensors[sensorIdx].bIsCached[THERMAL_SYSTEM_EXECUTE_V2_CACHE_ENTRY_TARGET_INDEX] = NV_TRUE;
+                }
+
+                break;
+            }
+        }
+    }
+}
+
+NV_STATUS
+subdeviceCtrlCmdThermalSystemExecuteV2_IMPL(Subdevice *pSubdevice,
+                                NV2080_CTRL_THERMAL_SYSTEM_EXECUTE_V2_PARAMS *pSystemExecuteParams)
+{
+    OBJGPU *pGpu = GPU_RES_GET_GPU(pSubdevice);
+    RM_API *pRmApi = GPU_GET_PHYSICAL_RMAPI(pGpu);
+    NvU32 instructionListSize = pSystemExecuteParams->instructionListSize;
+    (void)instructionListSize;
+
+    NV_STATUS status = NV_OK;
+    NvBool bForwardRmctrl;
+
+    for (NvU32 i = 0; i < instructionListSize; i++)
+    {
+        pSystemExecuteParams->instructionList[i].executed = NV_FALSE;
+    }
+
+    // Skip unsupported version
+    if (pSystemExecuteParams->clientAPIVersion != THERMAL_SYSTEM_API_VER  ||
+        pSystemExecuteParams->clientAPIRevision != THERMAL_SYSTEM_API_REV ||
+        pSystemExecuteParams->clientInstructionSizeOf != sizeof(NV2080_CTRL_THERMAL_SYSTEM_INSTRUCTION))
+    {
+        return pRmApi->Control(pRmApi, pGpu->hInternalClient, pGpu->hInternalSubdevice,
+                               NV2080_CTRL_CMD_THERMAL_SYSTEM_EXECUTE_V2_PHYSICAL,
+                               pSystemExecuteParams, sizeof(*pSystemExecuteParams));
+    }
+
+    // If we cannot service the control by servicing data from cache entirely, forward to physical RM
+    bForwardRmctrl = NV_FALSE;
+
+    // Service values from cache
+    for (NvU32 i = 0; i < instructionListSize; i++)
+    {
+        // Verify that the size of the union NV2080_CTRL_THERMAL_SYSTEM_INSTRUCTION_OPERANDS is dictated by
+        // NV2080_CTRL_THERMAL_SYSTEM_INSTRUCTION_OPERANDS::space
+        ct_assert(sizeof(pSystemExecuteParams->instructionList[0].operands.space) ==
+                  sizeof(NV2080_CTRL_THERMAL_SYSTEM_INSTRUCTION_OPERANDS));
+
+        switch (pSystemExecuteParams->instructionList[i].opcode)
+        {
+            case NV2080_CTRL_THERMAL_SYSTEM_GET_INFO_SENSORS_AVAILABLE_OPCODE:
+            {
+                if (pGpu->thermalSystemExecuteV2Cache.bNumSensorsCached)
+                {
+                    pSystemExecuteParams->instructionList[i].operands.getInfoSensorsAvailable.availableSensors =
+                        pGpu->thermalSystemExecuteV2Cache.numSensors;
+
+                    pSystemExecuteParams->instructionList[i].executed = NV_TRUE;
+                    pSystemExecuteParams->instructionList[i].result = NV_OK;
+                    pSystemExecuteParams->successfulInstructions++;
+                }
+                else
+                {
+                    bForwardRmctrl = NV_TRUE;
+                }
+
+                break;
+            }
+
+            case NV2080_CTRL_THERMAL_SYSTEM_GET_INFO_PROVIDER_TYPE_OPCODE:
+            {
+                NvBool bTypeFound = NV_FALSE;
+
+                for (NvU32 j = 0; j < NV_ARRAY_ELEMENTS(pGpu->thermalSystemExecuteV2Cache.sensors); j++)
+                {
+                    if ((pGpu->thermalSystemExecuteV2Cache.sensors[j].bIsCached[THERMAL_SYSTEM_EXECUTE_V2_CACHE_ENTRY_PROVIDER_INDEX]) &&
+                        (pGpu->thermalSystemExecuteV2Cache.sensors[j].cache[THERMAL_SYSTEM_EXECUTE_V2_CACHE_ENTRY_PROVIDER_INDEX] ==
+                         pSystemExecuteParams->instructionList[i].operands.getInfoProviderType.providerIndex) &&
+                        (pGpu->thermalSystemExecuteV2Cache.sensors[j].bIsCached[THERMAL_SYSTEM_EXECUTE_V2_CACHE_ENTRY_PROVIDER_TYPE]))
+                    {
+                        pSystemExecuteParams->instructionList[i].operands.getInfoProviderType.type =
+                            pGpu->thermalSystemExecuteV2Cache.sensors[j].cache[THERMAL_SYSTEM_EXECUTE_V2_CACHE_ENTRY_PROVIDER_TYPE];
+
+                        pSystemExecuteParams->instructionList[i].executed = NV_TRUE;
+                        pSystemExecuteParams->instructionList[i].result = NV_OK;
+                        pSystemExecuteParams->successfulInstructions++;
+
+                        bTypeFound = NV_TRUE;
+                        break;
+                    }
+                }
+
+                if (!bTypeFound)
+                {
+                    bForwardRmctrl = NV_TRUE;
+                }
+
+                break;
+            }
+
+            case NV2080_CTRL_THERMAL_SYSTEM_GET_INFO_TARGET_TYPE_OPCODE:
+            {
+                NvBool bTypeFound = NV_FALSE;
+
+                for (NvU32 j = 0; j < NV_ARRAY_ELEMENTS(pGpu->thermalSystemExecuteV2Cache.sensors); j++)
+                {
+                    if ((pGpu->thermalSystemExecuteV2Cache.sensors[j].bIsCached[THERMAL_SYSTEM_EXECUTE_V2_CACHE_ENTRY_TARGET_INDEX]) &&
+                        (pGpu->thermalSystemExecuteV2Cache.sensors[j].cache[THERMAL_SYSTEM_EXECUTE_V2_CACHE_ENTRY_TARGET_INDEX] ==
+                         pSystemExecuteParams->instructionList[i].operands.getInfoProviderType.providerIndex) &&
+                        (pGpu->thermalSystemExecuteV2Cache.sensors[j].bIsCached[THERMAL_SYSTEM_EXECUTE_V2_CACHE_ENTRY_TARGET_TYPE]))
+                    {
+                        pSystemExecuteParams->instructionList[i].operands.getInfoProviderType.type =
+                            pGpu->thermalSystemExecuteV2Cache.sensors[j].cache[THERMAL_SYSTEM_EXECUTE_V2_CACHE_ENTRY_TARGET_TYPE];
+
+                        pSystemExecuteParams->instructionList[i].executed = NV_TRUE;
+                        pSystemExecuteParams->instructionList[i].result = NV_OK;
+                        pSystemExecuteParams->successfulInstructions++;
+
+                        bTypeFound = NV_TRUE;
+                        break;
+                    }
+                }
+
+                if (!bTypeFound)
+                {
+                    bForwardRmctrl = NV_TRUE;
+                }
+
+                break;
+            }
+
+            case NV2080_CTRL_THERMAL_SYSTEM_GET_INFO_SENSOR_READING_RANGE_OPCODE:
+            {
+                NvU32 sensorIdx = pSystemExecuteParams->instructionList[i].operands.getInfoSensorReadingRange.sensorIndex;
+
+                if (sensorIdx >= NV_ARRAY_ELEMENTS(pGpu->thermalSystemExecuteV2Cache.sensors))
+                {
+                    bForwardRmctrl = NV_TRUE;
+                    break;
+                }
+
+                if (pGpu->thermalSystemExecuteV2Cache.sensors[sensorIdx].bIsCached[THERMAL_SYSTEM_EXECUTE_V2_CACHE_ENTRY_DEFAULT_MIN_TEMP] &&
+                    pGpu->thermalSystemExecuteV2Cache.sensors[sensorIdx].bIsCached[THERMAL_SYSTEM_EXECUTE_V2_CACHE_ENTRY_DEFAULT_MAX_TEMP])
+                {
+                    pSystemExecuteParams->instructionList[i].operands.getInfoSensorReadingRange.minimum =
+                        pGpu->thermalSystemExecuteV2Cache.sensors[sensorIdx].cache[THERMAL_SYSTEM_EXECUTE_V2_CACHE_ENTRY_DEFAULT_MIN_TEMP];
+                    pSystemExecuteParams->instructionList[i].operands.getInfoSensorReadingRange.maximum =
+                        pGpu->thermalSystemExecuteV2Cache.sensors[sensorIdx].cache[THERMAL_SYSTEM_EXECUTE_V2_CACHE_ENTRY_DEFAULT_MAX_TEMP];
+
+                    pSystemExecuteParams->instructionList[i].executed = NV_TRUE;
+                    pSystemExecuteParams->instructionList[i].result = NV_OK;
+                    pSystemExecuteParams->successfulInstructions++;
+                }
+                else
+                {
+                    bForwardRmctrl = NV_TRUE;
+                }
+
+                break;
+            }
+
+            case NV2080_CTRL_THERMAL_SYSTEM_GET_INFO_SENSOR_PROVIDER_OPCODE:
+            {
+                NvU32 sensorIdx = pSystemExecuteParams->instructionList[i].operands.getInfoSensorProvider.sensorIndex;
+
+                if (sensorIdx >= NV_ARRAY_ELEMENTS(pGpu->thermalSystemExecuteV2Cache.sensors))
+                {
+                    bForwardRmctrl = NV_TRUE;
+                    break;
+                }
+
+                if (pGpu->thermalSystemExecuteV2Cache.sensors[sensorIdx].bIsCached[THERMAL_SYSTEM_EXECUTE_V2_CACHE_ENTRY_PROVIDER_INDEX])
+                {
+                    pSystemExecuteParams->instructionList[i].operands.getInfoSensorProvider.providerIndex =
+                        pGpu->thermalSystemExecuteV2Cache.sensors[sensorIdx].cache[THERMAL_SYSTEM_EXECUTE_V2_CACHE_ENTRY_PROVIDER_INDEX];
+
+                    pSystemExecuteParams->instructionList[i].executed = NV_TRUE;
+                    pSystemExecuteParams->instructionList[i].result = NV_OK;
+                    pSystemExecuteParams->successfulInstructions++;
+                }
+                else
+                {
+                    bForwardRmctrl = NV_TRUE;
+                }
+
+                break;
+            }
+
+            case NV2080_CTRL_THERMAL_SYSTEM_GET_INFO_SENSOR_TARGET_OPCODE:
+            {
+                NvU32 sensorIdx = pSystemExecuteParams->instructionList[i].operands.getInfoSensorTarget.sensorIndex;
+
+                if (sensorIdx >= NV_ARRAY_ELEMENTS(pGpu->thermalSystemExecuteV2Cache.sensors))
+                {
+                    bForwardRmctrl = NV_TRUE;
+                    break;
+                }
+
+                if (pGpu->thermalSystemExecuteV2Cache.sensors[sensorIdx].bIsCached[THERMAL_SYSTEM_EXECUTE_V2_CACHE_ENTRY_TARGET_INDEX])
+                {
+                    pSystemExecuteParams->instructionList[i].operands.getInfoSensorTarget.targetIndex =
+                        pGpu->thermalSystemExecuteV2Cache.sensors[sensorIdx].cache[THERMAL_SYSTEM_EXECUTE_V2_CACHE_ENTRY_TARGET_INDEX];
+
+                    pSystemExecuteParams->instructionList[i].executed = NV_TRUE;
+                    pSystemExecuteParams->instructionList[i].result = NV_OK;
+                    pSystemExecuteParams->successfulInstructions++;
+                }
+                else
+                {
+                    bForwardRmctrl = NV_TRUE;
+                }
+
+                break;
+            }
+
+            case NV2080_CTRL_THERMAL_SYSTEM_GET_STATUS_SENSOR_READING_OPCODE:
+            {
+                NvU32 sensorIdx = pSystemExecuteParams->instructionList[i].operands.getStatusSensorReading.sensorIndex;
+
+                if ((sensorIdx >= NV_ARRAY_ELEMENTS(pGpu->thermalSystemExecuteV2Cache.sensors)) ||
+                    !(pGpu->thermalSystemExecuteV2Cache.sensors[sensorIdx].bIsCached[THERMAL_SYSTEM_EXECUTE_V2_CACHE_ENTRY_TARGET_TYPE]) ||
+                    (pGpu->userSharedData.pMapBuffer == NULL))
+                {
+                    bForwardRmctrl = NV_TRUE;
+                    break;
+                }
+
+                RUSD_TEMPERATURE rusdTemperature;
+                RUSD_TEMPERATURE_TYPE temperatureType;
+
+                temperatureType = RUSD_TEMPERATURE_TYPE_MAX;
+                switch (pGpu->thermalSystemExecuteV2Cache.sensors[sensorIdx].cache[THERMAL_SYSTEM_EXECUTE_V2_CACHE_ENTRY_TARGET_TYPE])
+                {
+                    case NV2080_CTRL_THERMAL_SYSTEM_TARGET_GPU:
+                    {
+                        temperatureType = RUSD_TEMPERATURE_TYPE_GPU;
+                        break;
+                    }
+                    case NV2080_CTRL_THERMAL_SYSTEM_TARGET_MEMORY:
+                    {
+                        temperatureType = RUSD_TEMPERATURE_TYPE_MEMORY;
+                        break;
+                    }
+                    case NV2080_CTRL_THERMAL_SYSTEM_TARGET_POWER_SUPPLY:
+                    {
+                        temperatureType = RUSD_TEMPERATURE_TYPE_POWER_SUPPLY;
+                        break;
+                    }
+                    case NV2080_CTRL_THERMAL_SYSTEM_TARGET_BOARD:
+                    {
+                        temperatureType = RUSD_TEMPERATURE_TYPE_BOARD;
+                        break;
+                    }
+                }
+
+                if (temperatureType != RUSD_TEMPERATURE_TYPE_MAX)
+                {
+                    RUSD_READ_DATA((NV00DE_SHARED_DATA*)(pGpu->userSharedData.pMapBuffer), temperatures[temperatureType], &rusdTemperature);
+                }
+
+                if ((temperatureType == RUSD_TEMPERATURE_TYPE_MAX) ||
+                    (rusdTemperature.lastModifiedTimestamp == RUSD_TIMESTAMP_INVALID))
+                {
+                    bForwardRmctrl = NV_TRUE;
+                    break;
+                }
+
+
+                pSystemExecuteParams->instructionList[i].operands.getStatusSensorReading.value =
+                    NV_TYPES_NV_TEMP_TO_CELSIUS_ROUNDED(rusdTemperature.temperature);
+
+                pSystemExecuteParams->instructionList[i].executed = NV_TRUE;
+                pSystemExecuteParams->instructionList[i].result = NV_OK;
+                pSystemExecuteParams->successfulInstructions++;
+
+                break;
+            }
+
+            // Unknown opcode
+            default:
+            {
+                bForwardRmctrl = NV_TRUE;
+            }
+        }
+    }
+
+    if (!bForwardRmctrl)
+    {
+        status = NV_OK;
+    }
+    else
+    {
+        status = pRmApi->Control(pRmApi, pGpu->hInternalClient, pGpu->hInternalSubdevice,
+                                 NV2080_CTRL_CMD_THERMAL_SYSTEM_EXECUTE_V2_PHYSICAL,
+                                 pSystemExecuteParams, sizeof(*pSystemExecuteParams));
+
+        subdeviceCtrlCmdThermalSystemExecuteV2_updateCache(pSubdevice, pSystemExecuteParams);
+    }
+
+    return status;
+
+}
+

@@ -39,7 +39,9 @@
  *   | VGA WORKSPACE            |
  *   ---------------------------- <- vbiosReservedOffset  (64K? aligned)
  *   | (potential align. gap)   |
- *   ---------------------------- <- gspFwWprEnd (128K aligned)
+ *   ---------------------------- <- gspFwWprEnd + frtsSize + pmuReservedSize
+ *   | PMU mem reservation      |
+ *   ---------------------------- <- gspFwWprEnd (128K aligned) + frtsSize
  *   | FRTS data                |    (frtsSize is 0 on GA100)
  *   | ------------------------ | <- frtsOffset
  *   | BOOT BIN (e.g. SK + BL)  |
@@ -192,7 +194,14 @@ typedef struct
 
     // Pad structure to exactly 256 bytes.  Can replace padding with additional
     // fields without incrementing revision.  Padding initialized to 0.
-    NvU8 padding[6];
+    NvU8 padding[2];
+
+    //
+    // Starts at gspFwWprEnd+frtsSize b/c FRTS is positioned
+    // to end where this allocation starts (when RM requests FSP to create
+    // FRTS).
+    //
+    NvU32 pmuReservedSize;
 
     // BL to use for verification (i.e. Booter says OK to boot)
     NvU64 verified;  // 0x0 -> unverified, 0xa0a0a0a0a0a0a0a0 -> verified
@@ -223,8 +232,11 @@ typedef struct
 
 #define GSP_FW_HEAP_FREE_LIST_MAGIC 0x4845415046524545ULL
 
-#define GSP_FW_FLAGS                            8:0
-#define GSP_FW_FLAGS_CLOCK_BOOST                NVBIT(0)
-#define GSP_FW_FLAGS_RECOVERY_MARGIN_PRESENT    NVBIT(1)
+#define GSP_FW_FLAGS                                       8:0
+#define GSP_FW_FLAGS_CLOCK_BOOST                           NVBIT(0)
+#define GSP_FW_FLAGS_RECOVERY_MARGIN_PRESENT               NVBIT(1)
+#define GSP_FW_FLAGS_PPCIE_ENABLED                         NVBIT(2)
+#define GSP_FW_FLAGS_MULTI_GPU_NVLE_ENABLED                NVBIT(3)
+#define GSP_FW_FLAGS_SCAN_RECOVERY_MARGIN                  NVBIT(4)
 
 #endif // GSP_FW_WPR_META_H_

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2020-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2020-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -30,11 +30,7 @@
 #include "os-interface.h"
 #include "nv-linux.h"
 
-#if !defined(NVCPU_PPC64LE)
 #define NV_NANO_TIMER_USE_HRTIMER 1
-#else
-#define NV_NANO_TIMER_USE_HRTIMER 0
-#endif  // !defined(NVCPU_PPC64LE)
 
 struct nv_nano_timer
 {
@@ -62,7 +58,7 @@ nvidia_nano_timer_callback(
     nv_linux_state_t *nvl = nv_nstimer->nv_linux_state;
     nvidia_stack_t *sp = NULL;
 
-    if (nv_kmem_cache_alloc_stack(&sp) != 0)
+    if (nv_kmem_cache_alloc_stack_atomic(&sp) != 0)
     {
         nv_printf(NV_DBG_ERRORS, "NVRM: no cache memory \n");
         return;
@@ -154,8 +150,13 @@ void NV_API_CALL nv_create_nano_timer(
     nv_nstimer->nv_nano_timer_callback = nvidia_nano_timer_callback;
 
 #if NV_NANO_TIMER_USE_HRTIMER
+#if NV_IS_EXPORT_SYMBOL_PRESENT_hrtimer_setup
+    hrtimer_setup(&nv_nstimer->hr_timer, &nv_nano_timer_callback_typed_data,
+                  CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+#else
     hrtimer_init(&nv_nstimer->hr_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
     nv_nstimer->hr_timer.function = nv_nano_timer_callback_typed_data;
+#endif // NV_IS_EXPORT_SYMBOL_PRESENT_hrtimer_setup
 #else
 #if defined(NV_TIMER_SETUP_PRESENT)
     timer_setup(&nv_nstimer->jiffy_timer, nv_jiffy_timer_callback_typed_data, 0);
@@ -189,12 +190,6 @@ void NV_API_CALL nv_start_nano_timer(
     NvU32 time_us;
 
     time_us = (NvU32)(time_ns / 1000);
-
-    if (time_us == 0)
-    {
-        nv_printf(NV_DBG_WARNINGS, "NVRM: Timer value cannot be less than 1 usec.\n");
-    }
-
     time_jiffies = usecs_to_jiffies(time_us);
     mod_timer(&nv_nstimer->jiffy_timer, jiffies + time_jiffies);
 #endif
@@ -213,7 +208,7 @@ void NV_API_CALL nv_cancel_nano_timer(
 #if NV_NANO_TIMER_USE_HRTIMER
     hrtimer_cancel(&nv_nstimer->hr_timer);
 #else
-    del_timer_sync(&nv_nstimer->jiffy_timer);
+    nv_timer_delete_sync(&nv_nstimer->jiffy_timer);
 #endif
 
 }

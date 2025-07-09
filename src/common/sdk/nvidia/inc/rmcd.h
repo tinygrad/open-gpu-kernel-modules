@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2002-2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2002-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -130,6 +130,7 @@ typedef RmProtoBuf_RECORD *PRmProtoBuf_RECORD;
 #define NV_RM_JOURNAL_STATE_MASK_VIDMEM_FAILED_BAR0                0x00004000
 #define NV_RM_JOURNAL_STATE_MASK_VIDMEM_FAILED_BAR2                0x00008000
 #define NV_RM_JOURNAL_STATE_MASK_VIDMEM_FAILED_FBHUB               0x00010000
+#define NV_RM_JOURNAL_STATE_MASK_GSP_RM_ENABLED                    0x00020000
 
 
 typedef struct _RmRCCommonJournal_RECORD

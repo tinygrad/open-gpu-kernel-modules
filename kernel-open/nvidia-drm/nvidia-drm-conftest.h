@@ -62,6 +62,31 @@
 #undef NV_DRM_FENCE_AVAILABLE
 #endif
 
+#if defined(NV_DRM_FBDEV_GENERIC_SETUP_PRESENT) &&                             \
+    defined(NV_DRM_APERTURE_REMOVE_CONFLICTING_PCI_FRAMEBUFFERS_PRESENT)
+#define NV_DRM_FBDEV_AVAILABLE
+#define NV_DRM_FBDEV_GENERIC_AVAILABLE
+#endif
+
+#if defined(NV_DRM_FBDEV_TTM_SETUP_PRESENT) &&                                 \
+    defined(NV_DRM_APERTURE_REMOVE_CONFLICTING_PCI_FRAMEBUFFERS_PRESENT)
+#if IS_ENABLED(CONFIG_DRM_TTM_HELPER)
+#define NV_DRM_FBDEV_AVAILABLE
+#define NV_DRM_FBDEV_TTM_AVAILABLE
+#endif
+#endif
+
+#if defined(NV_DRM_CLIENT_SETUP_PRESENT) &&                                    \
+    (defined(NV_DRM_APERTURE_REMOVE_CONFLICTING_PCI_FRAMEBUFFERS_PRESENT) ||   \
+     defined(NV_APERTURE_REMOVE_CONFLICTING_PCI_DEVICES_PRESENT))
+// XXX remove dependency on DRM_TTM_HELPER by implementing nvidia-drm's own
+// .fbdev_probe callback that uses NVKMS kapi
+#if IS_ENABLED(CONFIG_DRM_TTM_HELPER)
+#define NV_DRM_FBDEV_AVAILABLE
+#define NV_DRM_CLIENT_AVAILABLE
+#endif
+#endif
+
 /*
  * We can support color management if either drm_helper_crtc_enable_color_mgmt()
  * or drm_crtc_enable_color_mgmt() exist.
@@ -85,7 +110,11 @@
 
 /* For nv_drm_gem_prime_force_fence_signal */
 #ifndef spin_is_locked
+#if ((__FreeBSD_version >= 1500000) && (__FreeBSD_version < 1500018)) || (__FreeBSD_version < 1401501)
 #define spin_is_locked(lock) mtx_owned(lock.m)
+#else
+#define spin_is_locked(lock) mtx_owned(lock)
+#endif
 #endif
 
 #ifndef rwsem_is_locked

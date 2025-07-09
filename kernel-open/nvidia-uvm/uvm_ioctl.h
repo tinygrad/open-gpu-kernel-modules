@@ -1,5 +1,5 @@
 /*******************************************************************************
-    Copyright (c) 2013-2023 NVidia Corporation
+    Copyright (c) 2013-2024 NVidia Corporation
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"), to
@@ -494,7 +494,7 @@ typedef struct
     NvU64                   base                            NV_ALIGN_BYTES(8); // IN
     NvU64                   length                          NV_ALIGN_BYTES(8); // IN
     NvU64                   offset                          NV_ALIGN_BYTES(8); // IN
-    UvmGpuMappingAttributes perGpuAttributes[UVM_MAX_GPUS_V2];                 // IN
+    UvmGpuMappingAttributes perGpuAttributes[UVM_MAX_GPUS];                    // IN
     NvU64                   gpuAttributesCount              NV_ALIGN_BYTES(8); // IN
     NvS32                   rmCtrlFd;                                          // IN
     NvU32                   hClient;                                           // IN
@@ -525,25 +525,6 @@ typedef struct
     NvU64     regionLength NV_ALIGN_BYTES(8); // IN
     NV_STATUS rmStatus;                       // OUT
 } UVM_MEM_MAP_PARAMS;
-
-//
-// UvmDebugAccessMemory
-//
-#define UVM_DEBUG_ACCESS_MEMORY                                       UVM_IOCTL_BASE(36)
-
-typedef struct
-{
-#ifdef __linux__
-    NvS32               sessionIndex;                    // IN
-#endif
-    NvU64               baseAddress   NV_ALIGN_BYTES(8); // IN
-    NvU64               sizeInBytes   NV_ALIGN_BYTES(8); // IN
-    NvU32               accessType;                      // IN (UvmDebugAccessType)
-    NvU64               buffer        NV_ALIGN_BYTES(8); // IN/OUT
-    NvBool              isBitmaskSet;                    // OUT
-    NvU64               bitmask       NV_ALIGN_BYTES(8); // IN/OUT
-    NV_STATUS           rmStatus;                        // OUT
-} UVM_DEBUG_ACCESS_MEMORY_PARAMS;
 
 //
 // UvmRegisterGpu
@@ -837,12 +818,6 @@ typedef struct
 // Initialize any tracker object such as a queue or counter
 // UvmToolsCreateEventQueue, UvmToolsCreateProcessAggregateCounters,
 // UvmToolsCreateProcessorCounters.
-// Note that the order of structure elements has the version as the last field.
-// This is used to tell whether the kernel supports V2 events or not because
-// the V1 UVM_TOOLS_INIT_EVENT_TRACKER ioctl would not read or update that
-// field but V2 will. This is needed because it is possible to create an event
-// queue before CUDA is initialized which means UvmSetDriverVersion() hasn't
-// been called yet and the kernel version is unknown.
 //
 #define UVM_TOOLS_INIT_EVENT_TRACKER                                  UVM_IOCTL_BASE(56)
 typedef struct
@@ -854,8 +829,6 @@ typedef struct
     NvU32           allProcessors;                        // IN
     NvU32           uvmFd;                                // IN
     NV_STATUS       rmStatus;                             // OUT
-    NvU32           requestedVersion;                     // IN
-    NvU32           grantedVersion;                       // OUT
 } UVM_TOOLS_INIT_EVENT_TRACKER_PARAMS;
 
 //
@@ -936,22 +909,13 @@ typedef struct
 
 //
 // UvmToolsGetProcessorUuidTable
-// Note that tablePtr != 0 and count == 0 means that tablePtr is assumed to be
-// an array of size UVM_MAX_PROCESSORS_V1 and that only UvmEventEntry_V1
-// processor IDs (physical GPU UUIDs) will be reported.
-// tablePtr == 0 and count == 0 can be used to query how many processors are
-// present in order to dynamically allocate the correct size array since the
-// total number of processors is returned in 'count'.
 //
 #define UVM_TOOLS_GET_PROCESSOR_UUID_TABLE                            UVM_IOCTL_BASE(64)
 typedef struct
 {
     NvU64     tablePtr                 NV_ALIGN_BYTES(8); // IN
-    NvU32     count;                                      // IN/OUT
     NV_STATUS rmStatus;                                   // OUT
-    NvU32     version;                                    // OUT
 } UVM_TOOLS_GET_PROCESSOR_UUID_TABLE_PARAMS;
-
 
 //
 // UvmMapDynamicParallelismRegion
@@ -995,7 +959,7 @@ typedef struct
 {
     NvU64                   base                            NV_ALIGN_BYTES(8); // IN
     NvU64                   length                          NV_ALIGN_BYTES(8); // IN
-    UvmGpuMappingAttributes perGpuAttributes[UVM_MAX_GPUS_V2];                 // IN
+    UvmGpuMappingAttributes perGpuAttributes[UVM_MAX_GPUS];                    // IN
     NvU64                   gpuAttributesCount              NV_ALIGN_BYTES(8); // IN
     NV_STATUS               rmStatus;                                          // OUT
 } UVM_ALLOC_SEMAPHORE_POOL_PARAMS;
@@ -1026,20 +990,35 @@ typedef struct
 //
 #define UVM_POPULATE_PAGEABLE                                         UVM_IOCTL_BASE(71)
 
-// Allow population of managed ranges.
-//
-// The UVM driver must have builtin tests enabled for the API to use the
-// following two flags.
+// Allow population of managed ranges. The goal is to validate that it is
+// possible to populate pageable ranges backed by VMAs with the VM_MIXEDMAP or
+// VM_DONTEXPAND special flags set. But since there is no portable way to force
+// allocation of such memory from user space, and it is not safe to change the
+// flags of an already-created VMA from kernel space, we take advantage of the
+// fact that managed ranges have both special flags set at creation time (see
+// uvm_mmap).
 #define UVM_POPULATE_PAGEABLE_FLAG_ALLOW_MANAGED              0x00000001
 
 // By default UVM_POPULATE_PAGEABLE returns an error if the destination vma
 // does not have read permission. This flag skips that check.
 #define UVM_POPULATE_PAGEABLE_FLAG_SKIP_PROT_CHECK            0x00000002
 
-#define UVM_POPULATE_PAGEABLE_FLAGS_TEST_ALL    (UVM_POPULATE_PAGEABLE_FLAG_ALLOW_MANAGED | \
+// By default UVM_POPULATE_PAGEABLE returns an error if the destination vma
+// is VM_IO or VM_PFNMAP. This flag skips that check.
+#define UVM_POPULATE_PAGEABLE_FLAG_ALLOW_SPECIAL              0x00000004
+
+// These flags are used internally within the driver and are not allowed from
+// user space.
+#define UVM_POPULATE_PAGEABLE_FLAGS_INTERNAL    UVM_POPULATE_PAGEABLE_FLAG_ALLOW_SPECIAL
+
+// These flags are allowed from user space only when builtin tests are enabled.
+// Some of them may also be used internally within the driver in non-test use
+// cases.
+#define UVM_POPULATE_PAGEABLE_FLAGS_TEST        (UVM_POPULATE_PAGEABLE_FLAG_ALLOW_MANAGED | \
                                                  UVM_POPULATE_PAGEABLE_FLAG_SKIP_PROT_CHECK)
 
-#define UVM_POPULATE_PAGEABLE_FLAGS_ALL         UVM_POPULATE_PAGEABLE_FLAGS_TEST_ALL
+#define UVM_POPULATE_PAGEABLE_FLAGS_ALL         (UVM_POPULATE_PAGEABLE_FLAGS_INTERNAL | \
+                                                 UVM_POPULATE_PAGEABLE_FLAGS_TEST)
 
 typedef struct
 {
@@ -1112,6 +1091,36 @@ typedef struct
     NV_STATUS               rmStatus; // OUT
 } UVM_MM_INITIALIZE_PARAMS;
 
+#define UVM_TOOLS_INIT_EVENT_TRACKER_V2                               UVM_IOCTL_BASE(76)
+typedef UVM_TOOLS_INIT_EVENT_TRACKER_PARAMS UVM_TOOLS_INIT_EVENT_TRACKER_V2_PARAMS;
+
+#define UVM_TOOLS_GET_PROCESSOR_UUID_TABLE_V2                         UVM_IOCTL_BASE(77)
+typedef UVM_TOOLS_GET_PROCESSOR_UUID_TABLE_PARAMS UVM_TOOLS_GET_PROCESSOR_UUID_TABLE_V2_PARAMS;
+
+//
+// UvmAllocDeviceP2P
+//
+#define UVM_ALLOC_DEVICE_P2P                                          UVM_IOCTL_BASE(78)
+typedef struct
+{
+    NvU64                   base                            NV_ALIGN_BYTES(8); // IN
+    NvU64                   length                          NV_ALIGN_BYTES(8); // IN
+    NvU64                   offset                          NV_ALIGN_BYTES(8); // IN
+    NvProcessorUuid         gpuUuid;                                           // IN
+    NvS32                   rmCtrlFd;                                          // IN
+    NvU32                   hClient;                                           // IN
+    NvU32                   hMemory;                                           // IN
+
+    NV_STATUS               rmStatus;                                          // OUT
+} UVM_ALLOC_DEVICE_P2P_PARAMS;
+
+#define UVM_CLEAR_ALL_ACCESS_COUNTERS                                 UVM_IOCTL_BASE(79)
+
+typedef struct
+{
+    NV_STATUS       rmStatus; // OUT
+} UVM_CLEAR_ALL_ACCESS_COUNTERS_PARAMS;
+
 //
 // Temporary ioctls which should be removed before UVM 8 release
 // Number backwards from 2047 - highest custom ioctl function number
@@ -1128,7 +1137,6 @@ typedef struct
     NvU32     is8Supported; // OUT
     NV_STATUS rmStatus;     // OUT
 } UVM_IS_8_SUPPORTED_PARAMS;
-
 
 #ifdef __cplusplus
 }

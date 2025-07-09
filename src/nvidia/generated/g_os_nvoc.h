@@ -1,13 +1,22 @@
+
 #ifndef _G_OS_NVOC_H_
 #define _G_OS_NVOC_H_
+
+// Version of generated metadata structures
+#ifdef NVOC_METADATA_VERSION
+#undef NVOC_METADATA_VERSION
+#endif
+#define NVOC_METADATA_VERSION 2
+
 #include "nvoc/runtime.h"
+#include "nvoc/rtti.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -29,6 +38,7 @@ extern "C" {
  * DEALINGS IN THE SOFTWARE.
  */
 
+#pragma once
 #include "g_os_nvoc.h"
 
 
@@ -42,8 +52,10 @@ extern "C" {
 
 /* ------------------------ Core & Library Includes ------------------------- */
 #include "core/core.h"
+#include "nvoc/object.h"
 #include "containers/btree.h"
 #include "ctrl/ctrl0073/ctrl0073dfp.h"
+#include "kernel/diagnostics/xid_context.h"
 
 /* ------------------------ SDK & Interface Includes ------------------------ */
 #include "nvsecurityinfo.h"
@@ -53,9 +65,11 @@ extern "C" {
 
 /* ------------------------ OS Includes ------------------------------------- */
 #include "os/nv_memory_type.h"
+#include "os/nv_memory_area.h"
 #include "os/capability.h"
 
 /* ------------------------ Forward Declarations ---------------------------- */
+
 struct OBJOS;
 
 #ifndef __NVOC_CLASS_OBJOS_TYPEDEF__
@@ -140,13 +154,6 @@ typedef struct RM_PAGEABLE_SECTION {
 } RM_PAGEABLE_SECTION;
 
 
-// OSSetVideoSource defines
-#define NV_OS_VIDEO_SOURCE_MCE    0x0
-#define NV_OS_VIDEO_SOURCE_WINDVR 0x1
-#define NV_OS_VIDEO_SOURCE_WMP9   0x2
-#define NV_OS_VIDEO_SOURCE_VMR9   0x3
-#define NV_OS_VIDEO_SOURCE_WINDVD 0x4
-
 // OSPollHotkeyState return values
 #define NV_OS_HOTKEY_STATE_DISPLAY_CHANGE                        0:0
 #define NV_OS_HOTKEY_STATE_DISPLAY_CHANGE_NOT_FOUND       0x00000000
@@ -173,10 +180,6 @@ typedef struct RM_PAGEABLE_SECTION {
 #define NV_ACPI_DOD_DISPLAY_OWNER_MGPU                 0x00000001
 #define NV_ACPI_DOD_DISPLAY_OWNER_DGPU1                0x00000002
 
-#define NV_OS_ALLOCFLAGS_LOCKPAGES                       NVBIT(0)
-#define NV_OS_ALLOCFLAGS_PAGEDPOOL                       NVBIT(1)
-#define NV_OS_ALLOCFLAGS_NONPAGEDPOOL                    0
-
 // ACPI 3.0a definitions for requested data length
 #define NV_ACPI_DDC_REQUESTED_DATA_LENGTH_128B              0x00000001
 #define NV_ACPI_DDC_REQUESTED_DATA_LENGTH_256B              0x00000002
@@ -184,19 +187,12 @@ typedef struct RM_PAGEABLE_SECTION {
 #define NV_ACPI_DDC_REQUESTED_DATA_LENGTH_512B              0x00000004
 #define NV_ACPI_DDC_REQUESTED_DATA_LENGTH_DEFAULT           0x00000001
 
-typedef enum _OS_PEX_RECOVERY_STATUS
-{
-    OS_PEX_RECOVERY_GPU_RESET_PENDING = 0,
-    OS_PEX_RECOVERY_GPU_RESTORED,
-    OS_PEX_RECOVERY_GPU_REMOVED
-} OS_PEX_RECOVERY_STATUS;
-
 // osBugCheck bugcode defines
 #define OS_BUG_CHECK_BUGCODE_UNKNOWN             (0)
 #define OS_BUG_CHECK_BUGCODE_INTERNAL_TEST       (1)
 #define OS_BUG_CHECK_BUGCODE_BUS                 (2)
-#define OS_BUG_CHECK_BUGCODE_ECC_DBE             (3)
-#define OS_BUG_CHECK_BUGCODE_NVLINK_TL_ERR       (4)
+#define OS_BUG_CHECK_BUGCODE_RESERVED_3          (3) // previously ECC_DBE
+#define OS_BUG_CHECK_BUGCODE_RESERVED_4          (4) // previously NVLINK_TL_ERR
 #define OS_BUG_CHECK_BUGCODE_PAGED_SEGMENT       (5)
 #define OS_BUG_CHECK_BUGCODE_BSOD_ON_ASSERT      (6)
 #define OS_BUG_CHECK_BUGCODE_DISPLAY_UNDERFLOW   (7)
@@ -207,8 +203,8 @@ typedef enum _OS_PEX_RECOVERY_STATUS
         "Unknown Error",                    \
         "Nv Internal Testing",              \
         "Bus Error",                        \
-        "Double Bit Error",                 \
-        "NVLink TL Error",                  \
+        "Reserved",                         \
+        "Reserved",                         \
         "Invalid Bindata Access",           \
         "BSOD on Assert or Breakpoint",     \
         "Display Underflow"                 \
@@ -336,18 +332,16 @@ typedef NvU32      OSCountTailPages(NvU64);
 typedef NvU64      OSGetPageSize(void);
 typedef NvU8       OSGetPageShift(void);
 
-
-// We use osAcquireRmSema to catch "unported" sema code to new lock model
 typedef NV_STATUS  NV_FORCERESULTCHECK OSAcquireRmSema(void *);
 typedef NvBool     NV_FORCERESULTCHECK OSIsRmSemaOwner(void *);
+typedef NV_STATUS  NV_FORCERESULTCHECK OSCondAcquireRmSema(void *);
+typedef NvU32      OSReleaseRmSema(void *, OBJGPU *);
 
 #define DPC_RELEASE_ALL_GPU_LOCKS                       (1)
 #define DPC_RELEASE_SINGLE_GPU_LOCK                     (2)
 
 typedef NV_STATUS   OSGpuLocksQueueRelease(OBJGPU *pGpu, NvU32 dpcGpuLockRelease);
 typedef NvU32       OSApiLockAcquireConfigureFlags(NvU32 flags);
-typedef NV_STATUS  NV_FORCERESULTCHECK OSCondAcquireRmSema(void *);
-typedef NvU32      OSReleaseRmSema(void *, OBJGPU *);
 
 typedef NvU32      OSGetCpuCount(void);
 typedef NvU32      OSGetMaximumCoreCount(void);
@@ -366,6 +360,7 @@ typedef NV_STATUS  OSAttachToProcess(void **, NvU32);
 typedef void       OSDetachFromProcess(void*);
 typedef NV_STATUS  OSVirtualToPhysicalAddr(MEMORY_DESCRIPTOR *, NvP64, RmPhysAddr *);
 typedef NV_STATUS  NV_FORCERESULTCHECK OSMapPciMemoryUser(OS_GPU_INFO *, RmPhysAddr, NvU64, NvU32, NvP64 *, NvP64 *, NvU32);
+typedef NV_STATUS  NV_FORCERESULTCHECK OSMapPciMemoryAreaUser(OS_GPU_INFO *, MemoryArea, NvU32, NvU32, NvP64 *, NvP64 *);
 typedef void       OSUnmapPciMemoryUser(OS_GPU_INFO *, NvP64, NvU64, NvP64);
 typedef NV_STATUS  NV_FORCERESULTCHECK OSMapPciMemoryKernelOld(OBJGPU *, RmPhysAddr, NvU64, NvU32, void **, NvU32);
 typedef void       OSUnmapPciMemoryKernelOld(OBJGPU *, void *);
@@ -385,10 +380,6 @@ typedef void       OSInitScalabilityOptions(OBJGPU *, void *);
 typedef void       OSHandleDeferredRecovery(OBJGPU *);
 typedef NvBool     OSIsSwPreInitOnly(OS_GPU_INFO *);
 
-#define NVRM_MAX_FILE_NAME_LENGTH     (128)
-#define NVRM_FILE_ACCESS_READ         NVBIT(0)
-#define NVRM_FILE_ACCESS_WRITE        NVBIT(1)
-
 typedef void       OSGetTimeoutParams(OBJGPU *, NvU32 *, NvU32 *, NvU32 *);
 typedef NvBool     OSIsRaisedIRQL(void);
 typedef NvBool     OSIsISR(void);
@@ -406,18 +397,17 @@ typedef NvBool     OSIsEqualGUID(void *, void *);
 #define OS_QUEUE_WORKITEM_FLAGS_LOCK_SEMA                    NVBIT(8)
 #define OS_QUEUE_WORKITEM_FLAGS_LOCK_API_RW                  NVBIT(9)
 #define OS_QUEUE_WORKITEM_FLAGS_LOCK_API_RO                  NVBIT(10)
-#define OS_QUEUE_WORKITEM_FLAGS_LOCK_GPUS_RW                 NVBIT(11)
-#define OS_QUEUE_WORKITEM_FLAGS_LOCK_GPUS_RO                 NVBIT(12)
-#define OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_DEVICE_RW     NVBIT(13)
-#define OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_DEVICE_RO     NVBIT(14)
-#define OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_SUBDEVICE_RW  NVBIT(15)
-#define OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_SUBDEVICE_RO  NVBIT(16)
+#define OS_QUEUE_WORKITEM_FLAGS_LOCK_GPUS                    NVBIT(11)
+#define OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_DEVICE        NVBIT(12)
+#define OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_SUBDEVICE     NVBIT(13)
 //
 // Perform a GPU full power sanity after getting GPU locks.
 // One of the above LOCK_GPU flags must be provided when using this flag.
 //
-#define OS_QUEUE_WORKITEM_FLAGS_FULL_GPU_SANITY              NVBIT(17)
-#define OS_QUEUE_WORKITEM_FLAGS_FOR_PM_RESUME                NVBIT(18)
+#define OS_QUEUE_WORKITEM_FLAGS_FULL_GPU_SANITY              NVBIT(14)
+#define OS_QUEUE_WORKITEM_FLAGS_FOR_PM_RESUME                NVBIT(15)
+
+#define OS_QUEUE_WORKITEM_FLAGS_DROP_ON_UNLOAD_QUEUE_FLUSH   NVBIT(16)
 typedef void       OSWorkItemFunction(NvU32 gpuInstance, void *);
 typedef void       OSSystemWorkItemFunction(void *);
 NV_STATUS  osQueueWorkItemWithFlags(OBJGPU *, OSWorkItemFunction, void *, NvU32);
@@ -466,17 +456,9 @@ void       osQADbgRegistryInit(void);
 typedef NV_STATUS  OSGetVersionDump(void *);
 // End of WinNT
 
-// OS functions typically only implemented for MacOS core
-//   These next functions also appear on UNIX
-typedef NvU32      OSnv_rdcr4(struct OBJOS *);
-typedef NvU64      OSnv_rdxcr0(struct OBJOS *);
-typedef int        OSnv_cpuid(struct OBJOS *, int, int, NvU32 *, NvU32 *, NvU32 *, NvU32 *);
-// end of functions shared between MacOSX and UNIX
-
-//   These next functions also appear on UNIX
-typedef NvU32           OSnv_rdmsr(struct OBJOS *, NvU32, NvU32 *, NvU32 *);
-typedef NvU32           OSnv_wrmsr(struct OBJOS *, NvU32, NvU32, NvU32);
-// end functions shared by MacOS and UNIX
+NvU32      osNv_rdcr4(void);
+NvU64      osNv_rdxcr0(void);
+int        osNv_cpuid(int, int, NvU32 *, NvU32 *, NvU32 *, NvU32 *);
 
 // NOTE: The following functions are also implemented in MODS
 NV_STATUS       osSimEscapeWrite(OBJGPU *, const char *path, NvU32 Index, NvU32 Size, NvU32 Value);
@@ -496,64 +478,8 @@ NV_STATUS       osSetupVBlank(OBJGPU *pGpu, void * pProc,
                               void * pParm1, void * pParm2, NvU32 Head, void * pParm3);
 
 // Heap reserve tracking functions
-typedef void            OSInternalReserveAllocCallback(NvU64 offset, NvU64 size, NvU32 gpuId);
-typedef void            OSInternalReserveFreeCallback(NvU64 offset, NvU32 gpuId);
-
-
-//
-// SPB_GPS (Vista) specific defines
-//
-typedef struct
-{
-    NvU64 cpuFPCounter1;   // CPU Fixed Performance Counter 1
-    NvU64 cpuFPCounter2;   // CPU Fixed Performance Counter 2
-    NvU64 cpuC0Counter;    // C0 Counter
-    NvU64 cpuCoreTSC;      // per core Time Stamp Counter value
-    NvU8  cpuCoreC0Value;  // average C0 residency per core
-    NvU8  cpuCoreAperf;    // CPU Aperf value per core
-
-}OS_CPU_CORE_PERF_COUNTERS, *POS_CPU_CORE_PERF_COUNTERS;
-
-typedef NV_STATUS       OsGetSystemCpuLogicalCoreCounts(NvU32 *pCpuCoreCount);
-typedef NV_STATUS       OsGetSystemCpuC0AndAPerfCounters(NvU32 coreIndex, POS_CPU_CORE_PERF_COUNTERS pCpuPerfData);
-typedef void            OsEnableCpuPerformanceCounters(struct OBJOS *pOS);
-typedef NV_STATUS       OsCpuDpcObjInit(void **ppCpuDpcObj, OBJGPU  *pGpu, NvU32 coreCount);
-typedef void            OsCpuDpcObjQueue(void **ppCpuDpcObj, NvU32 coreCount, POS_CPU_CORE_PERF_COUNTERS pCpuPerfData);
-typedef void            OsCpuDpcObjFree(void **ppCpuDpcObj);
-typedef NV_STATUS       OsSystemGetBatteryDrain(NvS32 *pChargeRate);
-
-// OSDRIVERERROR structure
-typedef struct
-{
-    enum {
-        OS_DRIVER_ERROR_CODE_NONE = 0,
-        OS_DRIVER_ERROR_CODE_HP_GT216_VBIOS_BUG_587560,
-        OS_DRIVER_ERROR_CODE_COUNT,                    // Must always be last
-    } code;
-
-    union
-    {
-        void *osDriverErrorContextNone;
-
-    } context;
-
-} OSDRIVERERROR, * POSDRIVERERROR;
-
-typedef NV_STATUS       OSPexRecoveryCallback(OS_GPU_INFO *, OS_PEX_RECOVERY_STATUS);
-
-//
-// Function pointer typedef for use as callback prototype when filtering
-// address ranges in os memory access routines
-//
-typedef NV_STATUS       (OSMemFilterCb)(void *pPriv, NvU64 addr, void *pData, NvU64 size, NvBool bRead);
-
-// Structure typedef for storing the callback pointer and priv data
-typedef struct
-{
-    NODE                node;
-    OSMemFilterCb      *pFilterCb;
-    void               *pPriv;
-} OSMEMFILTERDATA, *POSMEMFILTERDATA;
+void            osInternalReserveAllocCallback(NvU64 offset, NvU64 size, NvU32 gpuId);
+void            osInternalReserveFreeCallback(NvU64 offset, NvU32 gpuId);
 
 //
 // OS Functions typically only implemented for MODS
@@ -562,29 +488,20 @@ typedef struct
 //       OS's.
 //
 
-typedef NvBool          OSRmInitRm(struct OBJOS *);
-typedef NV_STATUS       OSGetPanelStrapAndIndex(struct OBJOS *, OBJGPU *, NvU32 *, NvU32 *);
-typedef NV_STATUS       OSNotifySbiosDisplayChangeEnd(OBJGPU *, NvU32);
-typedef NvU32           OSGetDfpScalerFromSbios(OBJGPU *);
+NV_STATUS          osRmInitRm(void);
+
 typedef NvU32           OSPollHotkeyState(OBJGPU *);
 
-typedef NV_STATUS       OSInitGpuMgr(OBJGPUMGR *);
 typedef void            OSSyncWithRmDestroy(void);
 typedef void            OSSyncWithGpuDestroy(NvBool);
 
 typedef void            OSModifyGpuSwStatePersistence(OS_GPU_INFO *, NvBool);
 
-typedef NV_STATUS       OSMemAddFilter(NvU64, NvU64, OSMemFilterCb*, void *);
-typedef NV_STATUS       OSMemRemoveFilter(NvU64);
-typedef POSMEMFILTERDATA OSMemGetFilter(NvUPtr);
-
 typedef NV_STATUS       OSGetCarveoutInfo(NvU64*, NvU64*);
 typedef NV_STATUS       OSGetVPRInfo(NvU64*, NvU64*);
 typedef NV_STATUS       OSAllocInVPR(MEMORY_DESCRIPTOR*);
 typedef NV_STATUS       OSGetGenCarveout(NvU64*, NvU64 *, NvU32, NvU64);
-
-typedef NvU32           OSPepReadReg(OBJGPU *, NvU32);
-typedef void            OSPepWriteReg(OBJGPU *, NvU32, NvU32);
+typedef NV_STATUS       OSGetSysmemInfo(OBJGPU *, NvU64*, NvU64*);
 
 typedef NV_STATUS       OSI2CClosePorts(OS_GPU_INFO *, NvU32);
 typedef NV_STATUS       OSWriteI2CBufferDirect(OBJGPU *, NvU32, NvU8, void *, NvU32, void *, NvU32);
@@ -593,20 +510,11 @@ typedef NV_STATUS       OSI2CTransfer(OBJGPU *, NvU32, NvU8, nv_i2c_msg_t *, NvU
 typedef NV_STATUS       OSSetGpuRailVoltage(OBJGPU *, NvU32, NvU32*);
 typedef NV_STATUS       OSGetGpuRailVoltage(OBJGPU *, NvU32*);
 typedef NV_STATUS       OSGetGpuRailVoltageInfo(OBJGPU *, NvU32 *, NvU32 *, NvU32 *);
-typedef NV_STATUS       OSTegraSocGetImpImportData(TEGRA_IMP_IMPORT_DATA *);
-typedef NV_STATUS       OSTegraSocEnableDisableRfl(OS_GPU_INFO *, NvBool);
-typedef NV_STATUS       OSTegraAllocateDisplayBandwidth(OS_GPU_INFO *, NvU32, NvU32);
-
-typedef NV_STATUS       OSMemdrvQueryInterface(OS_GPU_INFO *);
-typedef void            OSMemdrvReleaseInterface(void);
-typedef NV_STATUS       OSMemdrvGetAsid(NvU32, NvU32 *);
-typedef NV_STATUS       OSMemdrvGetStreamId(NvU32, NvU32 *);
 
 typedef NV_STATUS       OSGC6PowerControl(OBJGPU *, NvU32, NvU32 *);
 
-typedef RmPhysAddr      OSPageArrayGetPhysAddr(OS_GPU_INFO *pOsGpuInfo, void* pPageData, NvU32 pageIndex);
+RmPhysAddr      osPageArrayGetPhysAddr(OS_GPU_INFO *pOsGpuInfo, void* pPageData, NvU32 pageIndex);
 typedef NV_STATUS       OSGetChipInfo(OBJGPU *, NvU32*, NvU32*, NvU32*, NvU32*);
-typedef NV_STATUS       OSGetCurrentIrqPrivData(OS_GPU_INFO *, NvU32*);
 
 typedef enum
 {
@@ -631,11 +539,28 @@ typedef NV_STATUS       OSReadPFPciConfigInVF(NvU32, NvU32*);
 #define PRIVATE_FIELD(x) NVOC_PRIVATE_FIELD(x)
 #endif
 
+
+// Metadata with per-class RTTI with ancestor(s)
+struct NVOC_METADATA__OBJOS;
+struct NVOC_METADATA__Object;
+
+
 struct OBJOS {
-    const struct NVOC_RTTI *__nvoc_rtti;
+
+    // Metadata starts with RTTI structure.
+    union {
+         const struct NVOC_METADATA__OBJOS *__nvoc_metadata_ptr;
+         const struct NVOC_RTTI *__nvoc_rtti;
+    };
+
+    // Parent (i.e. superclass or base class) objects
     struct Object __nvoc_base_Object;
-    struct Object *__nvoc_pbase_Object;
-    struct OBJOS *__nvoc_pbase_OBJOS;
+
+    // Ancestor object pointers for `staticCast` feature
+    struct Object *__nvoc_pbase_Object;    // obj super
+    struct OBJOS *__nvoc_pbase_OBJOS;    // os
+
+    // 13 PDB properties
     NvBool PDB_PROP_OS_PAT_UNSUPPORTED;
     NvBool PDB_PROP_OS_SLI_ALLOWED;
     NvBool PDB_PROP_OS_SYSTEM_EVENTS_SUPPORTED;
@@ -649,18 +574,17 @@ struct OBJOS {
     NvBool PDB_PROP_OS_SUPPORTS_DISPLAY_REMAPPER;
     NvBool PDB_PROP_OS_DOES_NOT_ALLOW_DIRECT_PCIE_MAPPINGS;
     NvBool PDB_PROP_OS_NO_PAGED_SEGMENT_ACCESS;
-    OSnv_rdcr4 *osNv_rdcr4;
-    OSnv_rdxcr0 *osNv_rdxcr0;
-    OSnv_cpuid *osNv_cpuid;
-    OSnv_rdmsr *osNv_rdmsr;
-    OSnv_wrmsr *osNv_wrmsr;
-    OSRmInitRm *osRmInitRm;
-    OSPexRecoveryCallback *osPexRecoveryCallback;
-    OSInternalReserveAllocCallback *osInternalReserveAllocCallback;
-    OSInternalReserveFreeCallback *osInternalReserveFreeCallback;
-    OSPageArrayGetPhysAddr *osPageArrayGetPhysAddr;
+
+    // Data members
     NvU32 dynamicPowerSupportGpuMask;
     NvBool bIsSimMods;
+};
+
+
+// Metadata with per-class RTTI with ancestor(s)
+struct NVOC_METADATA__OBJOS {
+    const struct NVOC_RTTI rtti;
+    const struct NVOC_METADATA__Object metadata__Object;
 };
 
 #ifndef __NVOC_CLASS_OBJOS_TYPEDEF__
@@ -672,18 +596,20 @@ typedef struct OBJOS OBJOS;
 #define __nvoc_class_id_OBJOS 0xaa1d70
 #endif /* __nvoc_class_id_OBJOS */
 
+// Casting support
 extern const struct NVOC_CLASS_DEF __nvoc_class_def_OBJOS;
 
 #define __staticCast_OBJOS(pThis) \
     ((pThis)->__nvoc_pbase_OBJOS)
 
 #ifdef __nvoc_os_h_disabled
-#define __dynamicCast_OBJOS(pThis) ((OBJOS*)NULL)
+#define __dynamicCast_OBJOS(pThis) ((OBJOS*) NULL)
 #else //__nvoc_os_h_disabled
 #define __dynamicCast_OBJOS(pThis) \
-    ((OBJOS*)__nvoc_dynamicCast(staticCast((pThis), Dynamic), classInfo(OBJOS)))
+    ((OBJOS*) __nvoc_dynamicCast(staticCast((pThis), Dynamic), classInfo(OBJOS)))
 #endif //__nvoc_os_h_disabled
 
+// Property macros
 #define PDB_PROP_OS_SUPPORTS_DISPLAY_REMAPPER_BASE_CAST
 #define PDB_PROP_OS_SUPPORTS_DISPLAY_REMAPPER_BASE_NAME PDB_PROP_OS_SUPPORTS_DISPLAY_REMAPPER
 #define PDB_PROP_OS_NO_PAGED_SEGMENT_ACCESS_BASE_CAST
@@ -717,6 +643,10 @@ NV_STATUS __nvoc_objCreate_OBJOS(OBJOS**, Dynamic*, NvU32);
 #define __objCreate_OBJOS(ppNewObj, pParent, createFlags) \
     __nvoc_objCreate_OBJOS((ppNewObj), staticCast((pParent), Dynamic), (createFlags))
 
+
+// Wrapper macros
+
+// Dispatch functions
 #undef PRIVATE_FIELD
 
 
@@ -724,6 +654,7 @@ NV_STATUS       addProbe(OBJGPU *, NvU32);
 
 
 typedef NV_STATUS  OSFlushCpuCache(void);
+
 typedef void       OSAddRecordForCrashLog(void *, NvU32);
 typedef void       OSDeleteRecordForCrashLog(void *);
 
@@ -731,15 +662,18 @@ OSFlushCpuCache                  osFlushCpuCache;
 OSAddRecordForCrashLog           osAddRecordForCrashLog;
 OSDeleteRecordForCrashLog        osDeleteRecordForCrashLog;
 
+NV_STATUS osTegraSocPowerManagement(OS_GPU_INFO *pOsGpuInfo,
+                                    NvBool bInPMTransition,
+                                    NvU32 newPMLevel);
 
 //
 // This file should only contain the most common OS functions that provide
 // direct call.  Ex. osDelay, osIsAdministrator
 //
-NV_STATUS osTegraSocPmPowergate(OS_GPU_INFO *pOsGpuInfo);
-NV_STATUS osTegraSocPmUnpowergate(OS_GPU_INFO *pOsGpuInfo);
+NV_STATUS osTegraSocPmPowergate(OBJGPU *pGpu);
+NV_STATUS osTegraSocPmUnpowergate(OBJGPU *pGpu);
 NV_STATUS osTegraSocDeviceReset(OS_GPU_INFO *pOsGpuInfo);
-NV_STATUS osTegraSocBpmpSendMrq(OS_GPU_INFO *pOsGpuInfo,
+NV_STATUS osTegraSocBpmpSendMrq(OBJGPU      *pGpu,
                                 NvU32        mrq,
                                 const void  *pRequestData,
                                 NvU32        requestDataSize,
@@ -747,6 +681,7 @@ NV_STATUS osTegraSocBpmpSendMrq(OS_GPU_INFO *pOsGpuInfo,
                                 NvU32        responseDataSize,
                                 NvS32       *pRet,
                                 NvS32       *pApiRet);
+NV_STATUS osMapGsc(NvU64 gsc_base, NvU64 *va);
 NV_STATUS osTegraSocGetImpImportData(TEGRA_IMP_IMPORT_DATA *pTegraImpImportData);
 NV_STATUS osTegraSocEnableDisableRfl(OS_GPU_INFO *pOsGpuInfo, NvBool bEnable);
 NV_STATUS osTegraAllocateDisplayBandwidth(OS_GPU_INFO *pOsGpuInfo,
@@ -755,9 +690,9 @@ NV_STATUS osTegraAllocateDisplayBandwidth(OS_GPU_INFO *pOsGpuInfo,
 
 NV_STATUS osGetCurrentProcessGfid(NvU32 *pGfid);
 NvBool osIsAdministrator(void);
-NvBool osAllowPriorityOverride(void);
+NvBool osCheckAccess(RsAccessRight accessRight);
 NV_STATUS osGetCurrentTime(NvU32 *pSec,NvU32 *puSec);
-NV_STATUS osGetCurrentTick(NvU64 *pTimeInNs);
+NvU64 osGetCurrentTick(void);
 NvU64 osGetTickResolution(void);
 NvU64 osGetTimestamp(void);
 NvU64 osGetTimestampFreq(void);
@@ -842,7 +777,6 @@ NV_STATUS osGetForcedNVLinkConnection(OBJGPU *pGpu,
 NV_STATUS osGetForcedC2CConnection(OBJGPU *pGpu,
                                    NvU32   maxLinks,
                                    NvU32   *pLinkConnection);
-void osSetNVLinkSysmemLinkState(OBJGPU *pGpu,NvBool enabled);
 NV_STATUS osGetPlatformNvlinkLinerate(OBJGPU *pGpu,NvU32   *lineRate);
 const struct nvlink_link_handlers* osGetNvlinkLinkCallbacks(void);
 
@@ -851,11 +785,14 @@ NvBool osRemoveGpuSupported(void);
 
 void initVGXSpecificRegistry(OBJGPU *);
 
-NV_STATUS osVgpuVfioWake(void *waitQueue);
-NV_STATUS osVgpuInjectInterrupt(void *pArg1);
-NV_STATUS osVgpuRegisterMdev(OS_GPU_INFO  *pArg1);
+NV_STATUS nv_vgpu_rm_get_bar_info(OBJGPU *pGpu, const NvU8 *pVgpuDevName, NvU64 *barSizes,
+                                  NvU64 *sparseOffsets, NvU64 *sparseSizes,
+                                  NvU32 *sparseCount, NvBool *isBar064bit,
+                                  NvU8 *configParams);
 NV_STATUS osIsVgpuVfioPresent(void);
 NV_STATUS osIsVfioPciCorePresent(void);
+NV_STATUS osIsVgpuDeviceVmPresent(void);
+void osWakeRemoveVgpu(NvU32, NvU32);
 NV_STATUS rm_is_vgpu_supported_device(OS_GPU_INFO *pNv, NvU32 pmc_boot_1,
                                       NvU32 pmc_boot_42);
 NV_STATUS osLockPageableDataSection(RM_PAGEABLE_SECTION   *pSection);
@@ -910,6 +847,7 @@ void osReleaseCpuAddressSpaceUpperBound(void *pSectionHandle);
 void* osGetPidInfo(void);
 void osPutPidInfo(void *pOsPidInfo);
 NV_STATUS osFindNsPid(void *pOsPidInfo, NvU32 *pNsPid);
+NvBool osIsInitNs(void);
 
 // OS Tegra IPC functions
 NV_STATUS osTegraDceRegisterIpcClient(NvU32 interfaceType, void *usrCtx,
@@ -935,8 +873,8 @@ NV_STATUS osTegraSocSetParent(OS_GPU_INFO *pOsGpuInfo, OS_CLKWHICH whichClkRMsou
 NV_STATUS osTegraSocGetParent(OS_GPU_INFO *pOsGpuInfo, OS_CLKWHICH whichClkRMsource, OS_CLKWHICH *pWhichClkRMparent);
 
 NV_STATUS osTegraSocDeviceReset(OS_GPU_INFO *pOsGpuInfo);
-NV_STATUS osTegraSocPmPowergate(OS_GPU_INFO *pOsGpuInfo);
-NV_STATUS osTegraSocPmUnpowergate(OS_GPU_INFO *pOsGpuInfo);
+NV_STATUS osTegraSocPmPowergate(OBJGPU *pGpu);
+NV_STATUS osTegraSocPmUnpowergate(OBJGPU *pGpu);
 NV_STATUS osGetSyncpointAperture(OS_GPU_INFO *pOsGpuInfo,
                                  NvU32 syncpointId,
                                  NvU64 *physAddr,
@@ -954,6 +892,8 @@ NV_STATUS osGetVersion(NvU32 *pMajorVer,
                        NvU16 *pServicePackMaj,
                        NvU16 *pProductType);
 
+NV_STATUS osGetIsOpenRM(NvBool *bOpenRm);
+
 NvBool osGrService(OS_GPU_INFO *pOsGpuInfo, NvU32 grIdx, NvU32 intr, NvU32 nstatus, NvU32 addr, NvU32 dataLo);
 
 NvBool osDispService(NvU32 Intr0, NvU32 Intr1);
@@ -969,7 +909,7 @@ NV_STATUS osDereferenceObjectCount(void *pEvent);
 // osErrorLogV() call, create a copy of the va_list using va_copy().
 // The caller controls the lifetime of the va_list argument, and should free it using va_end.
 //
-void osErrorLogV(OBJGPU *pGpu, NvU32 num, const char * pFormat, va_list arglist);
+void osErrorLogV(OBJGPU *pGpu, XidContext context, const char * pFormat, va_list arglist);
 void osErrorLog(OBJGPU *pGpu, NvU32 num, const char* pFormat, ...);
 
 NV_STATUS osNvifInitialize(OBJGPU *pGpu);
@@ -1023,15 +963,6 @@ NV_STATUS osInitGetAcpiTable(void);
 
 // Read NvGlobal regkey
 NV_STATUS osGetNvGlobalRegistryDword(OBJGPU *, const char *pRegParmStr, NvU32 *pData);
-
-NV_STATUS osGetIbmnpuGenregInfo(OS_GPU_INFO *pArg1,
-                                NvU64 *pArg2,
-                                NvU64 *pArg3);
-
-NV_STATUS osGetIbmnpuRelaxedOrderingMode(OS_GPU_INFO *pArg1,
-                                         NvBool *pArg2);
-
-void osWaitForIbmnpuRsync(OS_GPU_INFO *pArg1);
 
 NV_STATUS osGetAcpiRsdpFromUefi(NvU32 *pRsdpAddr);
 
@@ -1168,6 +1099,9 @@ NvBool osIsNvswitchPresent(void);
 
 void osQueueMMUFaultHandler(OBJGPU *);
 
+NV_STATUS osQueueDrainP2PHandler(NvU8 *);
+void osQueueResumeP2PHandler(NvU8 *);
+
 NvBool osIsGpuAccessible(OBJGPU *pGpu);
 NvBool osIsGpuShutdown(OBJGPU *pGpu);
 
@@ -1235,9 +1169,8 @@ NV_STATUS osSanityTestIsr(OBJGPU *pGpu);
 
 void osAllocatedRmClient(void* pOSInfo);
 
-NvBool osTegraSocIsSimNetlistNet07(OS_GPU_INFO *pArg1);
-
 NV_STATUS osConfigurePcieReqAtomics(OS_GPU_INFO *pOsGpuInfo, NvU32 *pMask);
+NV_STATUS osGetPcieCplAtomicsCaps(OS_GPU_INFO *pOsGpuInfo, NvU32 *pMask);
 
 NvBool osDmabufIsSupported(void);
 
@@ -1279,14 +1212,27 @@ void osNumaRemoveGpuMemory(OS_GPU_INFO *pOsGpuInfo, NvU64 offset,
 
 NV_STATUS osOfflinePageAtAddress(NvU64 address);
 
+NvBool osGpuSupportsAts(OBJGPU *pGpu);
+
+//
 // Os 1Hz timer callback functions
+//
+// 1 second is the median and mean time between two callback runs, but the worst
+// case can be anywhere between 0 (back-to-back) or (1s+RMTIMEOUT).
+// N callbacks are at least (N-2) seconds apart.
+//
+// Callbacks can run at either DISPATCH_LEVEL or PASSIVE_LEVEL
+//
 NV_STATUS osInit1HzCallbacks(OBJTMR *pTmr);
 NV_STATUS osDestroy1HzCallbacks(OBJTMR *pTmr);
 NV_STATUS osSchedule1HzCallback(OBJGPU *pGpu, OS1HZPROC callback, void *pData, NvU32 flags);
 void      osRemove1HzCallback(OBJGPU *pGpu, OS1HZPROC callback, void *pData);
 NvBool    osRun1HzCallbacksNow(OBJGPU *pGpu);
+void      osRunQueued1HzCallbacksUnderLock(OBJGPU *pGpu);
 
 NV_STATUS osDoFunctionLevelReset(OBJGPU *pGpu);
+
+void      osDisableConsoleManagement(OBJGPU *pGpu);
 
 void vgpuDevWriteReg032(
         OBJGPU  *pGpu,
@@ -1317,7 +1263,6 @@ OSHandleGpuLost                  osHandleGpuLost;
 OSHandleGpuSurpriseRemoval       osHandleGpuSurpriseRemoval;
 OSInitScalabilityOptions         osInitScalabilityOptions;
 OSQueueDpc                       osQueueDpc;
-OSRmInitRm                       osRmInitRm;
 OSSetEvent                       osSetEvent;
 OSEventNotification              osEventNotification;
 OSEventNotificationWithInfo      osEventNotificationWithInfo;
@@ -1335,9 +1280,6 @@ OSGetVersionDump                 osGetVersionDump;
 
 OSGetMaxUserVa                   osGetMaxUserVa;
 OSGetCpuVaAddrShift              osGetCpuVaAddrShift;
-OSMemAddFilter                   osMemAddFilter;
-OSMemRemoveFilter                osMemRemoveFilter;
-OSMemGetFilter                   osMemGetFilter;
 
 OSAllocPagesInternal             osAllocPagesInternal;
 OSFreePagesInternal              osFreePagesInternal;
@@ -1372,6 +1314,7 @@ NV_STATUS osDestroyRegistry(void);
 nv_reg_entry_t* osGetRegistryList(void);
 NV_STATUS osSetRegistryList(nv_reg_entry_t *pRegList);
 OSMapPciMemoryUser               osMapPciMemoryUser;
+OSMapPciMemoryAreaUser           osMapPciMemoryAreaUser;
 OSUnmapPciMemoryUser             osUnmapPciMemoryUser;
 OSMapPciMemoryKernelOld          osMapPciMemoryKernelOld;
 OSMapPciMemoryKernel64           osMapPciMemoryKernel64;
@@ -1403,29 +1346,25 @@ OSIsRaisedIRQL                   osIsRaisedIRQL;
 OSIsISR                          osIsISR;
 OSGetDriverBlock                 osGetDriverBlock;
 
-OSInitGpuMgr                     osInitGpuMgr;
-
 OSSyncWithRmDestroy              osSyncWithRmDestroy;
 OSSyncWithGpuDestroy             osSyncWithGpuDestroy;
 
 OSModifyGpuSwStatePersistence    osModifyGpuSwStatePersistence;
 
-OSPexRecoveryCallback            osPexRecoveryCallback;
 OSHandleDeferredRecovery         osHandleDeferredRecovery;
 OSIsSwPreInitOnly                osIsSwPreInitOnly;
 OSGetCarveoutInfo                osGetCarveoutInfo;
 OSGetVPRInfo                     osGetVPRInfo;
 OSAllocInVPR                     osAllocInVPR;
 OSGetGenCarveout                 osGetGenCarveout;
-OsGetSystemCpuLogicalCoreCounts  osGetSystemCpuLogicalCoreCounts;
-OsGetSystemCpuC0AndAPerfCounters osGetSystemCpuC0AndAPerfCounters;
-OsEnableCpuPerformanceCounters   osEnableCpuPerformanceCounters;
-OsCpuDpcObjInit                  osCpuDpcObjInit;
-OsCpuDpcObjQueue                 osCpuDpcObjQueue;
-OsCpuDpcObjFree                  osCpuDpcObjFree;
-OsSystemGetBatteryDrain          osSystemGetBatteryDrain;
+OSGetSysmemInfo                  osGetSysmemInfo;
 OSGC6PowerControl                osGC6PowerControl;
 OSReadPFPciConfigInVF            osReadPFPciConfigInVF;
+
+OSAcquireRmSema                  osAcquireRmSema;
+OSAcquireRmSema                  osAcquireRmSemaForced;
+OSCondAcquireRmSema              osCondAcquireRmSema;
+OSReleaseRmSema                  osReleaseRmSema;
 
 //
 // When the new basic lock model is enabled then the following legacy RM
@@ -1439,19 +1378,8 @@ OSReadPFPciConfigInVF            osReadPFPciConfigInVF;
 #define osAcquireRmSemaForced(s) osAcquireRmSema(s)
 #define osGpuLockSetOwner(s,t)   (NV_OK)
 
-//
-// This version of osAcquireRmSema asserts that the GPUs lock is held when the
-// basic lock model is enabled.  This should help catch newly introduced
-// dependencies on the legacy RM system semaphore that do not have
-// corresponding corresponding basic lock model support.
-//
-OSAcquireRmSema                  osAcquireRmSema;
-OSAcquireRmSema                  osAcquireRmSemaForced;
-
 OSApiLockAcquireConfigureFlags   osApiLockAcquireConfigureFlags;
 OSGpuLocksQueueRelease           osGpuLocksQueueRelease;
-OSCondAcquireRmSema              osCondAcquireRmSema;
-OSReleaseRmSema                  osReleaseRmSema;
 
 OSFlushLog                       osFlushLog;
 OSSetSurfaceName                 osSetSurfaceName;
@@ -1511,6 +1439,7 @@ extern OSGetTimeoutParams   osGetTimeoutParams;
 // OS-agnostic code. Cross-OS code shouldn't pull in per-OS headers or
 // per-OS definitions.
 //
+#pragma once
 #include "os_custom.h"
 
 #define NV_SEMA_RELEASE_SUCCEED         0   // lock released, no waiting thread to notify

@@ -1,13 +1,22 @@
+
 #ifndef _G_FABRIC_NVOC_H_
 #define _G_FABRIC_NVOC_H_
+
+// Version of generated metadata structures
+#ifdef NVOC_METADATA_VERSION
+#undef NVOC_METADATA_VERSION
+#endif
+#define NVOC_METADATA_VERSION 2
+
 #include "nvoc/runtime.h"
+#include "nvoc/rtti.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2019-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2019-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -36,6 +45,7 @@ extern "C" {
  *
  *****************************************************************************/
 
+#pragma once
 #include "g_fabric_nvoc.h"
 
 #ifndef _FABRIC_H_
@@ -99,11 +109,28 @@ void fabricMulticastWaitOnTeamCleanupCallback(void *pCbData);
 #define PRIVATE_FIELD(x) NVOC_PRIVATE_FIELD(x)
 #endif
 
+
+// Metadata with per-class RTTI with ancestor(s)
+struct NVOC_METADATA__Fabric;
+struct NVOC_METADATA__Object;
+
+
 struct Fabric {
-    const struct NVOC_RTTI *__nvoc_rtti;
+
+    // Metadata starts with RTTI structure.
+    union {
+         const struct NVOC_METADATA__Fabric *__nvoc_metadata_ptr;
+         const struct NVOC_RTTI *__nvoc_rtti;
+    };
+
+    // Parent (i.e. superclass or base class) objects
     struct Object __nvoc_base_Object;
-    struct Object *__nvoc_pbase_Object;
-    struct Fabric *__nvoc_pbase_Fabric;
+
+    // Ancestor object pointers for `staticCast` feature
+    struct Object *__nvoc_pbase_Object;    // obj super
+    struct Fabric *__nvoc_pbase_Fabric;    // fabric
+
+    // Data members
     PORT_RWLOCK *pFabricImportModuleLock;
     PORT_RWLOCK *pMulticastFabricModuleLock;
     NvU32 PRIVATE_FIELD(flags);
@@ -116,8 +143,16 @@ struct Fabric {
     NvP64 PRIVATE_FIELD(pOsImexEvent);
     NvU16 PRIVATE_FIELD(nodeId);
     volatile NvU64 PRIVATE_FIELD(eventId);
+    NvBool PRIVATE_FIELD(bAllowFabricMemAlloc);
     FabricCache PRIVATE_FIELD(fabricMulticastCache);
     PORT_RWLOCK *PRIVATE_FIELD(pMulticastFabriCacheLock);
+};
+
+
+// Metadata with per-class RTTI with ancestor(s)
+struct NVOC_METADATA__Fabric {
+    const struct NVOC_RTTI rtti;
+    const struct NVOC_METADATA__Object metadata__Object;
 };
 
 #ifndef __NVOC_CLASS_Fabric_TYPEDEF__
@@ -129,18 +164,18 @@ typedef struct Fabric Fabric;
 #define __nvoc_class_id_Fabric 0x0ac791
 #endif /* __nvoc_class_id_Fabric */
 
+// Casting support
 extern const struct NVOC_CLASS_DEF __nvoc_class_def_Fabric;
 
 #define __staticCast_Fabric(pThis) \
     ((pThis)->__nvoc_pbase_Fabric)
 
 #ifdef __nvoc_fabric_h_disabled
-#define __dynamicCast_Fabric(pThis) ((Fabric*)NULL)
+#define __dynamicCast_Fabric(pThis) ((Fabric*) NULL)
 #else //__nvoc_fabric_h_disabled
 #define __dynamicCast_Fabric(pThis) \
-    ((Fabric*)__nvoc_dynamicCast(staticCast((pThis), Dynamic), classInfo(Fabric)))
+    ((Fabric*) __nvoc_dynamicCast(staticCast((pThis), Dynamic), classInfo(Fabric)))
 #endif //__nvoc_fabric_h_disabled
-
 
 NV_STATUS __nvoc_objCreateDynamic_Fabric(Fabric**, Dynamic*, NvU32, va_list);
 
@@ -148,6 +183,10 @@ NV_STATUS __nvoc_objCreate_Fabric(Fabric**, Dynamic*, NvU32);
 #define __objCreate_Fabric(ppNewObj, pParent, createFlags) \
     __nvoc_objCreate_Fabric((ppNewObj), staticCast((pParent), Dynamic), (createFlags))
 
+
+// Wrapper macros
+
+// Dispatch functions
 NV_STATUS fabricConstruct_IMPL(struct Fabric *arg_pFabric);
 
 #define __nvoc_fabricConstruct(arg_pFabric) fabricConstruct_IMPL(arg_pFabric)
@@ -173,6 +212,37 @@ static inline NvU32 fabricGetFmSessionFlags(struct Fabric *pFabric) {
 }
 #else //__nvoc_fabric_h_disabled
 #define fabricGetFmSessionFlags(pFabric) fabricGetFmSessionFlags_IMPL(pFabric)
+#endif //__nvoc_fabric_h_disabled
+
+NvBool fabricIsMemAllocDisabled_IMPL(struct Fabric *pFabric);
+
+#ifdef __nvoc_fabric_h_disabled
+static inline NvBool fabricIsMemAllocDisabled(struct Fabric *pFabric) {
+    NV_ASSERT_FAILED_PRECOMP("Fabric was disabled!");
+    return NV_FALSE;
+}
+#else //__nvoc_fabric_h_disabled
+#define fabricIsMemAllocDisabled(pFabric) fabricIsMemAllocDisabled_IMPL(pFabric)
+#endif //__nvoc_fabric_h_disabled
+
+void fabricDisableMemAlloc_IMPL(struct Fabric *pFabric);
+
+#ifdef __nvoc_fabric_h_disabled
+static inline void fabricDisableMemAlloc(struct Fabric *pFabric) {
+    NV_ASSERT_FAILED_PRECOMP("Fabric was disabled!");
+}
+#else //__nvoc_fabric_h_disabled
+#define fabricDisableMemAlloc(pFabric) fabricDisableMemAlloc_IMPL(pFabric)
+#endif //__nvoc_fabric_h_disabled
+
+void fabricEnableMemAlloc_IMPL(struct Fabric *pFabric);
+
+#ifdef __nvoc_fabric_h_disabled
+static inline void fabricEnableMemAlloc(struct Fabric *pFabric) {
+    NV_ASSERT_FAILED_PRECOMP("Fabric was disabled!");
+}
+#else //__nvoc_fabric_h_disabled
+#define fabricEnableMemAlloc(pFabric) fabricEnableMemAlloc_IMPL(pFabric)
 #endif //__nvoc_fabric_h_disabled
 
 NV_STATUS fabricSetImexEvent_IMPL(struct Fabric *pFabric, NvP64 pOsEvent);

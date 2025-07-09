@@ -1,5 +1,5 @@
 /*******************************************************************************
-    Copyright (c) 2016-2023 NVIDIA Corporation
+    Copyright (c) 2016-2025 NVIDIA Corporation
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"), to
@@ -38,7 +38,7 @@ typedef struct {
 
 NvU32 uvm_hal_volta_fault_buffer_read_put(uvm_parent_gpu_t *parent_gpu)
 {
-    NvU32 put = UVM_GPU_READ_ONCE(*parent_gpu->fault_buffer_info.rm_info.replayable.pFaultBufferPut);
+    NvU32 put = UVM_GPU_READ_ONCE(*parent_gpu->fault_buffer.rm_info.replayable.pFaultBufferPut);
     NvU32 index = READ_HWVALUE(put, _PFB_PRI_MMU, FAULT_BUFFER_PUT, PTR);
     UVM_ASSERT(READ_HWVALUE(put, _PFB_PRI_MMU, FAULT_BUFFER_PUT, GETPTR_CORRUPTED) ==
                NV_PFB_PRI_MMU_FAULT_BUFFER_PUT_GETPTR_CORRUPTED_NO);
@@ -48,8 +48,8 @@ NvU32 uvm_hal_volta_fault_buffer_read_put(uvm_parent_gpu_t *parent_gpu)
 
 NvU32 uvm_hal_volta_fault_buffer_read_get(uvm_parent_gpu_t *parent_gpu)
 {
-    NvU32 get = UVM_GPU_READ_ONCE(*parent_gpu->fault_buffer_info.rm_info.replayable.pFaultBufferGet);
-    UVM_ASSERT(get < parent_gpu->fault_buffer_info.replayable.max_faults);
+    NvU32 get = UVM_GPU_READ_ONCE(*parent_gpu->fault_buffer.rm_info.replayable.pFaultBufferGet);
+    UVM_ASSERT(get < parent_gpu->fault_buffer.replayable.max_faults);
 
     return READ_HWVALUE(get, _PFB_PRI_MMU, FAULT_BUFFER_GET, PTR);
 }
@@ -58,7 +58,7 @@ void uvm_hal_volta_fault_buffer_write_get(uvm_parent_gpu_t *parent_gpu, NvU32 in
 {
     NvU32 get = HWVALUE(_PFB_PRI_MMU, FAULT_BUFFER_GET, PTR, index);
 
-    UVM_ASSERT(index < parent_gpu->fault_buffer_info.replayable.max_faults);
+    UVM_ASSERT(index < parent_gpu->fault_buffer.replayable.max_faults);
 
     // If HW has detected an overflow condition (PUT == GET - 1 and a fault has
     // arrived, which is dropped due to no more space in the fault buffer), it
@@ -70,7 +70,7 @@ void uvm_hal_volta_fault_buffer_write_get(uvm_parent_gpu_t *parent_gpu, NvU32 in
     // resulting in the overflow condition being instantly reasserted. However,
     // if the index is updated first and then the OVERFLOW bit is cleared such
     // a collision will not cause a reassertion of the overflow condition.
-    UVM_GPU_WRITE_ONCE(*parent_gpu->fault_buffer_info.rm_info.replayable.pFaultBufferGet, get);
+    UVM_GPU_WRITE_ONCE(*parent_gpu->fault_buffer.rm_info.replayable.pFaultBufferGet, get);
 
     // Clearing GETPTR_CORRUPTED and OVERFLOW is not needed when GSP-RM owns
     // the HW replayable fault buffer, because UVM does not write to the actual
@@ -82,7 +82,7 @@ void uvm_hal_volta_fault_buffer_write_get(uvm_parent_gpu_t *parent_gpu, NvU32 in
     // Clear the GETPTR_CORRUPTED and OVERFLOW bits.
     get |= HWCONST(_PFB_PRI_MMU, FAULT_BUFFER_GET, GETPTR_CORRUPTED, CLEAR) |
            HWCONST(_PFB_PRI_MMU, FAULT_BUFFER_GET, OVERFLOW, CLEAR);
-    UVM_GPU_WRITE_ONCE(*parent_gpu->fault_buffer_info.rm_info.replayable.pFaultBufferGet, get);
+    UVM_GPU_WRITE_ONCE(*parent_gpu->fault_buffer.rm_info.replayable.pFaultBufferGet, get);
 }
 
 // TODO: Bug  1835884: [uvm] Query the maximum number of subcontexts from RM
@@ -106,8 +106,7 @@ static uvm_fault_access_type_t get_fault_access_type(const NvU32 *fault_entry)
 {
     NvU32 hw_access_type_value = READ_HWVALUE_MW(fault_entry, C369, BUF_ENTRY, ACCESS_TYPE);
 
-    switch (hw_access_type_value)
-    {
+    switch (hw_access_type_value) {
         case NV_PFAULT_ACCESS_TYPE_PHYS_READ:
         case NV_PFAULT_ACCESS_TYPE_VIRT_READ:
             return UVM_FAULT_ACCESS_TYPE_READ;
@@ -133,8 +132,7 @@ static bool is_fault_address_virtual(const NvU32 *fault_entry)
 {
     NvU32 hw_access_type_value = READ_HWVALUE_MW(fault_entry, C369, BUF_ENTRY, ACCESS_TYPE);
 
-    switch (hw_access_type_value)
-    {
+    switch (hw_access_type_value) {
         case NV_PFAULT_ACCESS_TYPE_PHYS_READ:
         case NV_PFAULT_ACCESS_TYPE_PHYS_WRITE:
         case NV_PFAULT_ACCESS_TYPE_PHYS_ATOMIC:
@@ -157,8 +155,7 @@ uvm_fault_type_t uvm_hal_volta_fault_buffer_get_fault_type(const NvU32 *fault_en
 {
     NvU32 hw_fault_type_value = READ_HWVALUE_MW(fault_entry, C369, BUF_ENTRY, FAULT_TYPE);
 
-    switch (hw_fault_type_value)
-    {
+    switch (hw_fault_type_value) {
         case NV_PFAULT_FAULT_TYPE_PDE:
             return UVM_FAULT_TYPE_INVALID_PDE;
         case NV_PFAULT_FAULT_TYPE_PTE:
@@ -203,8 +200,7 @@ static uvm_fault_client_type_t get_fault_client_type(const NvU32 *fault_entry)
 {
     NvU32 hw_client_type_value = READ_HWVALUE_MW(fault_entry, C369, BUF_ENTRY, MMU_CLIENT_TYPE);
 
-    switch (hw_client_type_value)
-    {
+    switch (hw_client_type_value) {
         case NV_PFAULT_MMU_CLIENT_TYPE_GPC:
             return UVM_FAULT_CLIENT_TYPE_GPC;
         case NV_PFAULT_MMU_CLIENT_TYPE_HUB:
@@ -220,8 +216,7 @@ static uvm_aperture_t get_fault_inst_aperture(const NvU32 *fault_entry)
 {
     NvU32 hw_aperture_value = READ_HWVALUE_MW(fault_entry, C369, BUF_ENTRY, INST_APERTURE);
 
-    switch (hw_aperture_value)
-    {
+    switch (hw_aperture_value) {
         case NVC369_BUF_ENTRY_INST_APERTURE_VID_MEM:
             return UVM_APERTURE_VID;
         case NVC369_BUF_ENTRY_INST_APERTURE_SYS_MEM_COHERENT:
@@ -239,9 +234,9 @@ static NvU32 *get_fault_buffer_entry(uvm_parent_gpu_t *parent_gpu, NvU32 index)
     fault_buffer_entry_c369_t *buffer_start;
     NvU32 *fault_entry;
 
-    UVM_ASSERT(index < parent_gpu->fault_buffer_info.replayable.max_faults);
+    UVM_ASSERT(index < parent_gpu->fault_buffer.replayable.max_faults);
 
-    buffer_start = (fault_buffer_entry_c369_t *)parent_gpu->fault_buffer_info.rm_info.replayable.bufferAddress;
+    buffer_start = (fault_buffer_entry_c369_t *)parent_gpu->fault_buffer.rm_info.replayable.bufferAddress;
     fault_entry = (NvU32 *)&buffer_start[index];
 
     return fault_entry;
@@ -252,13 +247,66 @@ static UvmFaultMetadataPacket *get_fault_buffer_entry_metadata(uvm_parent_gpu_t 
 {
     UvmFaultMetadataPacket *fault_entry_metadata;
 
-    UVM_ASSERT(index < parent_gpu->fault_buffer_info.replayable.max_faults);
+    UVM_ASSERT(index < parent_gpu->fault_buffer.replayable.max_faults);
     UVM_ASSERT(g_uvm_global.conf_computing_enabled);
 
-    fault_entry_metadata = parent_gpu->fault_buffer_info.rm_info.replayable.bufferMetadata;
+    fault_entry_metadata = parent_gpu->fault_buffer.rm_info.replayable.bufferMetadata;
     UVM_ASSERT(fault_entry_metadata != NULL);
 
     return fault_entry_metadata + index;
+}
+
+static bool client_id_ce(NvU16 client_id)
+{
+    if (client_id >= NV_PFAULT_CLIENT_HUB_HSCE0 && client_id <= NV_PFAULT_CLIENT_HUB_HSCE9)
+        return true;
+
+    switch (client_id) {
+        case NV_PFAULT_CLIENT_HUB_CE0:
+        case NV_PFAULT_CLIENT_HUB_CE1:
+        case NV_PFAULT_CLIENT_HUB_CE2:
+            return true;
+    }
+
+    return false;
+}
+
+static bool client_id_host(NvU16 client_id)
+{
+    switch (client_id) {
+        case NV_PFAULT_CLIENT_HUB_HOST:
+        case NV_PFAULT_CLIENT_HUB_HOST_CPU:
+            return true;
+    }
+
+    return false;
+}
+
+uvm_mmu_engine_type_t uvm_hal_volta_fault_buffer_get_mmu_engine_type(NvU16 mmu_engine_id,
+                                                                     uvm_fault_client_type_t client_type,
+                                                                     NvU16 client_id)
+{
+    // Servicing CE and Host (HUB clients) faults.
+    if (client_type == UVM_FAULT_CLIENT_TYPE_HUB) {
+        if (client_id_ce(client_id)) {
+            UVM_ASSERT(mmu_engine_id >= NV_PFAULT_MMU_ENG_ID_CE0 && mmu_engine_id <= NV_PFAULT_MMU_ENG_ID_CE8);
+
+            return UVM_MMU_ENGINE_TYPE_CE;
+        }
+
+        if (client_id_host(client_id)) {
+            UVM_ASSERT(mmu_engine_id >= NV_PFAULT_MMU_ENG_ID_HOST0 && mmu_engine_id <= NV_PFAULT_MMU_ENG_ID_HOST13);
+
+            return UVM_MMU_ENGINE_TYPE_HOST;
+        }
+    }
+
+    // We shouldn't be servicing faults from any other engines oither than GR.
+    UVM_ASSERT_MSG(client_id <= NV_PFAULT_CLIENT_GPC_T1_39, "Unexpected client ID: 0x%x\n", client_id);
+    UVM_ASSERT_MSG(mmu_engine_id >= NV_PFAULT_MMU_ENG_ID_GRAPHICS, "Unexpected engine ID: 0x%x\n", mmu_engine_id);
+    UVM_ASSERT(client_type == UVM_FAULT_CLIENT_TYPE_GPC);
+
+    return UVM_MMU_ENGINE_TYPE_GRAPHICS;
 }
 
 static void parse_fault_entry_common(uvm_parent_gpu_t *parent_gpu,
@@ -272,6 +320,7 @@ static void parse_fault_entry_common(uvm_parent_gpu_t *parent_gpu,
     addr_hi = READ_HWVALUE_MW(fault_entry, C369, BUF_ENTRY, INST_HI);
     addr_lo = READ_HWVALUE_MW(fault_entry, C369, BUF_ENTRY, INST_LO);
     buffer_entry->instance_ptr.address = addr_lo + (addr_hi << HWSIZE_MW(C369, BUF_ENTRY, INST_LO));
+
     // HW value contains the 4K page number. Shift to build the full address
     buffer_entry->instance_ptr.address <<= 12;
 
@@ -279,6 +328,7 @@ static void parse_fault_entry_common(uvm_parent_gpu_t *parent_gpu,
 
     addr_hi = READ_HWVALUE_MW(fault_entry, C369, BUF_ENTRY, ADDR_HI);
     addr_lo = READ_HWVALUE_MW(fault_entry, C369, BUF_ENTRY, ADDR_LO);
+
     // HW value contains the 4K page number. Shift to build the full address
     buffer_entry->fault_address = (addr_lo + (addr_hi << HWSIZE_MW(C369, BUF_ENTRY, ADDR_LO))) << 12;
     buffer_entry->fault_address = uvm_parent_gpu_canonical_address(parent_gpu, buffer_entry->fault_address);
@@ -309,7 +359,7 @@ static void parse_fault_entry_common(uvm_parent_gpu_t *parent_gpu,
         UVM_ASSERT(gpc_utlb_id < parent_gpu->utlb_per_gpc_count);
 
         utlb_id = buffer_entry->fault_source.gpc_id * parent_gpu->utlb_per_gpc_count + gpc_utlb_id;
-        UVM_ASSERT(utlb_id < parent_gpu->fault_buffer_info.replayable.utlb_count);
+        UVM_ASSERT(utlb_id < parent_gpu->fault_buffer.replayable.utlb_count);
 
         buffer_entry->fault_source.utlb_id = utlb_id;
     }
@@ -321,7 +371,9 @@ static void parse_fault_entry_common(uvm_parent_gpu_t *parent_gpu,
     BUILD_BUG_ON(sizeof(buffer_entry->fault_source.mmu_engine_id) * 8 < DRF_SIZE_MW(NVC369_BUF_ENTRY_ENGINE_ID));
 
     buffer_entry->fault_source.mmu_engine_type =
-        parent_gpu->arch_hal->mmu_engine_id_to_type(buffer_entry->fault_source.mmu_engine_id);
+        parent_gpu->fault_buffer_hal->get_mmu_engine_type(buffer_entry->fault_source.mmu_engine_id,
+                                                          buffer_entry->fault_source.client_type,
+                                                          buffer_entry->fault_source.client_id);
 
     buffer_entry->fault_source.ve_id =
         parent_gpu->fault_buffer_hal->get_ve_id(buffer_entry->fault_source.mmu_engine_id,

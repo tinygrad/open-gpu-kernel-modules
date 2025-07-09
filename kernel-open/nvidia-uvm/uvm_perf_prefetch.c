@@ -1,5 +1,5 @@
 /*******************************************************************************
-    Copyright (c) 2016-2023 NVIDIA Corporation
+    Copyright (c) 2016-2024 NVIDIA Corporation
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"), to
@@ -162,7 +162,7 @@ static void grow_fault_granularity_if_no_thrashing(uvm_perf_prefetch_bitmap_tree
 }
 
 static void grow_fault_granularity(uvm_perf_prefetch_bitmap_tree_t *bitmap_tree,
-                                   NvU32 big_page_size,
+                                   NvU64 big_page_size,
                                    uvm_va_block_region_t big_pages_region,
                                    uvm_va_block_region_t max_prefetch_region,
                                    const uvm_page_mask_t *faulted_pages,
@@ -245,7 +245,7 @@ static void update_bitmap_tree_from_va_block(uvm_perf_prefetch_bitmap_tree_t *bi
                                              uvm_va_block_region_t max_prefetch_region)
 
 {
-    NvU32 big_page_size;
+    NvU64 big_page_size;
     uvm_va_block_region_t big_pages_region;
     uvm_va_space_t *va_space;
     const uvm_page_mask_t *thrashing_pages;
@@ -260,7 +260,7 @@ static void update_bitmap_tree_from_va_block(uvm_perf_prefetch_bitmap_tree_t *bi
     // registered in the current process for this GPU.
     if (UVM_ID_IS_GPU(new_residency) &&
         uvm_processor_mask_test(&va_space->registered_gpu_va_spaces, new_residency)) {
-        uvm_gpu_t *gpu = uvm_va_space_get_gpu(va_space, new_residency);
+        uvm_gpu_t *gpu = uvm_gpu_get(new_residency);
 
         big_page_size = uvm_va_block_gpu_big_page_size(va_block, gpu);
     }
@@ -512,8 +512,9 @@ NV_STATUS uvm_perf_prefetch_init(void)
         g_uvm_perf_prefetch_threshold = uvm_perf_prefetch_threshold;
     }
     else {
-        pr_info("Invalid value %u for uvm_perf_prefetch_threshold. Using %u instead\n",
-                uvm_perf_prefetch_threshold, UVM_PREFETCH_THRESHOLD_DEFAULT);
+        UVM_INFO_PRINT("Invalid value %u for uvm_perf_prefetch_threshold. Using %u instead\n",
+                       uvm_perf_prefetch_threshold,
+                       UVM_PREFETCH_THRESHOLD_DEFAULT);
 
         g_uvm_perf_prefetch_threshold = UVM_PREFETCH_THRESHOLD_DEFAULT;
     }
@@ -523,8 +524,9 @@ NV_STATUS uvm_perf_prefetch_init(void)
         g_uvm_perf_prefetch_min_faults = uvm_perf_prefetch_min_faults;
     }
     else {
-        pr_info("Invalid value %u for uvm_perf_prefetch_min_faults. Using %u instead\n",
-                uvm_perf_prefetch_min_faults, UVM_PREFETCH_MIN_FAULTS_DEFAULT);
+        UVM_INFO_PRINT("Invalid value %u for uvm_perf_prefetch_min_faults. Using %u instead\n",
+                       uvm_perf_prefetch_min_faults,
+                       UVM_PREFETCH_MIN_FAULTS_DEFAULT);
 
         g_uvm_perf_prefetch_min_faults = UVM_PREFETCH_MIN_FAULTS_DEFAULT;
     }

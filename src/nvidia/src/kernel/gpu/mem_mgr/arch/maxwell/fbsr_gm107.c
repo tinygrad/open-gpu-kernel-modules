@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2009-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2009-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -28,6 +28,7 @@
 #include "gpu/mem_mgr/fbsr.h"
 #include "gpu/bus/kern_bus.h"
 #include "gpu/mem_mgr/mem_desc.h"
+#include "gpu/gsp/kernel_gsp.h"
 #include "published/maxwell/gm107/dev_ram.h"
 #include "core/thread_state.h"
 #include "nvrm_registry.h"
@@ -106,20 +107,22 @@ static NV_STATUS _fbsrInitGsp
     OBJFBSR *pFbsr
 )
 {
-    MemoryManager *pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
-    NvHandle       hSysMem        = NV01_NULL_OBJECT;
-    RM_API        *pRmApi         = GPU_GET_PHYSICAL_RMAPI(pGpu);
+    MemoryManager     *pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
+    KernelGsp         *pKernelGsp     = GPU_GET_KERNEL_GSP(pGpu);
+    NvHandle           hSysMem        = NV01_NULL_OBJECT;
+    RM_API            *pRmApi         = GPU_GET_PHYSICAL_RMAPI(pGpu);
+    MEMORY_DESCRIPTOR *pGspSysMemDesc = pMemoryManager->fbsrReservedRanges[FBSR_RESERVED_INST_MEMORY_GSP_HEAP];
     NV2080_CTRL_INTERNAL_FBSR_INIT_PARAMS params;
 
-    // Register sysmem memdesc with GSP. This creates memlist object
-    NV_ASSERT_OK_OR_RETURN(memdescSendMemDescToGSP(pGpu, pFbsr->pSysMemDesc, &hSysMem));
+    NV_ASSERT_OR_RETURN(pGspSysMemDesc != NULL, NV_ERR_INVALID_STATE);
 
-    params.fbsrType   = pFbsr->type;
-    params.numRegions = pFbsr->numRegions;
+    // Register sysmem memdesc with GSP. This creates memlist object
+    NV_ASSERT_OK_OR_RETURN(memdescSendMemDescToGSP(pGpu, pGspSysMemDesc, &hSysMem));
+
     params.hClient    = pMemoryManager->hClient;
     params.hSysMem    = hSysMem;
-    params.gspFbAllocsSysOffset = pFbsr->gspFbAllocsSysOffset;
     params.bEnteringGcoffState  = pGpu->getProperty(pGpu, PDB_PROP_GPU_GCOFF_STATE_ENTERING);
+    params.sysmemAddrOfSuspendResumeData = memdescGetPhysAddr(pKernelGsp->pSRMetaDescriptor, AT_GPU, 0);
 
     // Send S/R init information to GSP
     NV_ASSERT_OK_OR_RETURN(pRmApi->Control(pRmApi,
@@ -131,54 +134,6 @@ static NV_STATUS _fbsrInitGsp
 
     // Free memlist object
     pRmApi->Free(pRmApi, pMemoryManager->hClient, hSysMem);
-
-    //
-    // Clear numRegions for next S/R sequence
-    // Needed only to tell GSP how many regions
-    //
-    pFbsr->numRegions = 0;
-
-    return NV_OK;
-}
-
-static NV_STATUS _fbsrMemoryCopy
-(
-    OBJGPU            *pGpu,
-    OBJFBSR           *pFbsr,
-    MEMORY_DESCRIPTOR *pDstMemDesc,
-    NvU64              dstOffset,
-    MEMORY_DESCRIPTOR *pSrcMemDesc,
-    NvU64              srcOffset,
-    NvU64              size
-)
-{
-    MemoryManager *pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
-    NvHandle       hVidMem        = NV01_NULL_OBJECT;
-    RM_API        *pRmApi         = GPU_GET_PHYSICAL_RMAPI(pGpu);
-    NV2080_CTRL_INTERNAL_FBSR_SEND_REGION_INFO_PARAMS params;
-
-    // Register vidmem memdesc with GSP. This creates memlist object
-    NV_ASSERT_OK_OR_RETURN(memdescSendMemDescToGSP(pGpu, pSrcMemDesc, &hVidMem));
-
-    portMemSet(&params, 0, sizeof(params));
-
-    params.fbsrType  = pFbsr->type;
-    params.hClient   = pMemoryManager->hClient;
-    params.hVidMem   = hVidMem;
-    params.vidOffset = srcOffset;
-    params.sysOffset = dstOffset;
-    params.size      = size;
-
-    // Send region information to GSP
-    NV_ASSERT_OK_OR_RETURN(pRmApi->Control(pRmApi,
-                                           pGpu->hInternalClient,
-                                           pGpu->hInternalSubdevice,
-                                           NV2080_CTRL_CMD_INTERNAL_FBSR_SEND_REGION_INFO,
-                                           &params,
-                                           sizeof(params)));
-
-    // Free memlist object
-    pRmApi->Free(pRmApi, pMemoryManager->hClient, hVidMem);
 
     return NV_OK;
 }
@@ -343,38 +298,19 @@ NV_STATUS
 fbsrBegin_GM107(OBJGPU *pGpu, OBJFBSR *pFbsr, FBSR_OP_TYPE op)
 {
     NV_STATUS status = NV_OK;
+    NvBool bVirtualMode;
     MemoryManager *pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
 
     pFbsr->op = op;
     pFbsr->bOperationFailed = NV_FALSE;
+
     if (op != FBSR_OP_SIZE_BUF && op != FBSR_OP_DESTROY)
     {
         if (IS_GSP_CLIENT(pGpu) || IS_VIRTUAL(pGpu))
         {
             pFbsr->pCe = NULL;
-        }
-
-        //
-        // On guest, force re-initialize CeUtils with inst-in-sys.
-        // See bug 4414361 for details.
-        //
-        if (IS_VIRTUAL(pGpu))
-        {
-            NvU32 instLocOverrides = pGpu->instLocOverrides;
-            NvU32 instLocOverrides4 = pGpu->instLocOverrides4;
-
-            if (pMemoryManager->pCeUtils != NULL)
-            {
-                memmgrDestroyCeUtils(pMemoryManager, NV_FALSE);
-            }
-
-            pGpu->instLocOverrides = FLD_SET_DRF(_REG_STR, _RM_INST_LOC, _USERD, _NCOH, pGpu->instLocOverrides);
-            pGpu->instLocOverrides4 = FLD_SET_DRF(_REG_STR_RM, _INST_LOC_4, _CHANNEL_PUSHBUFFER, _NCOH, pGpu->instLocOverrides4);
-
-            NV_ASSERT_OK_OR_RETURN(memmgrInitCeUtils(pMemoryManager, NV_FALSE));
-
-            pGpu->instLocOverrides = instLocOverrides;
-            pGpu->instLocOverrides4 = instLocOverrides4;
+            bVirtualMode = pMemoryManager->bUseVirtualCopyOnSuspend;
+            NV_ASSERT_OK_OR_RETURN(memmgrInitCeUtils(pMemoryManager, NV_FALSE, bVirtualMode));
         }
 
         NV_PRINTF(LEVEL_INFO, "%s %lld bytes of data\n",
@@ -690,9 +626,9 @@ fbsrEnd_GM107(OBJGPU *pGpu, OBJFBSR *pFbsr)
     if (pFbsr->op != FBSR_OP_SIZE_BUF && pFbsr->op != FBSR_OP_DESTROY)
     {
 
-        if (IS_VIRTUAL(pGpu) && pMemoryManager->pCeUtils != NULL)
+        if ((IS_VIRTUAL(pGpu) || IS_GSP_CLIENT(pGpu)) && (pMemoryManager->pCeUtils != NULL))
         {
-            memmgrDestroyCeUtils(pMemoryManager, NV_FALSE);
+            memmgrDestroyCeUtils(pMemoryManager);
         }
     }
 
@@ -855,8 +791,6 @@ fbsrCopyMemoryMemDesc_GM107(OBJGPU *pGpu, OBJFBSR *pFbsr, MEMORY_DESCRIPTOR *pVi
 
     if (pFbsr->op == FBSR_OP_SIZE_BUF)
     {
-        pFbsr->numRegions++;
-
         switch (pFbsr->type)
         {
             case FBSR_TYPE_CPU:
@@ -951,17 +885,8 @@ fbsrCopyMemoryMemDesc_GM107(OBJGPU *pGpu, OBJFBSR *pFbsr, MEMORY_DESCRIPTOR *pVi
                     }
                     else
                     {
-                        if (IS_GSP_CLIENT(pGpu))
-                        {
-                            _fbsrMemoryCopy(pGpu, pFbsr, pFbsr->pSysMemDesc,
-                                pFbsr->sysOffset, pVidMemDesc, 0,
-                                pVidMemDesc->Size);
-                        }
-                        else
-                        {
-                            NV_ASSERT_OK(memmgrMemCopy(pMemoryManager, &sysSurface, &vidSurface, pVidMemDesc->Size,
+                        NV_ASSERT_OK(memmgrMemCopy(pMemoryManager, &sysSurface, &vidSurface, pVidMemDesc->Size,
                                                    TRANSFER_FLAGS_PREFER_CE | TRANSFER_FLAGS_CE_PRI_DEFER_FLUSH));
-                        }
                     }
                     break;
                 }

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2005-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2005-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -86,6 +86,8 @@
  *       NV0073_CTRL_DFP_FLAGS_FORMAT_YCBCR444_CAPABLE
  *         This specifies whether the displayId is capable of sending
  *         YCBCR444 color format out from the board.
+ *       NV0073_CTRL_DFP_FLAGS_TYPE_C_TO_DP_CONNECTOR
+ *         This specifies whether the displayId is a DP connector routed to an USB-TYPE-C port.
  *       NV0073_CTRL_DFP_FLAGS_DP_LINK_BANDWIDTH
  *         This specifies max link rate supported by the displayId, if the DFP is
  *         display port.
@@ -106,7 +108,7 @@
  *       NV0073_CTRL_DFP_FLAGS_DSI_DEVICE_ID
  *         This indicates whether this SOR uses DSI-A, DSI-B or both (ganged mode).
  *       NV0073_CTRL_DFP_FLAGS_DYNAMIC_MUX_CAPABLE
- *         This indicates whether this DFP supports Dynamic MUX
+ *         This indicates whether this DFP supports DDS (NV dynamic display mux).
  *   UHBRSupportedByDfp
  *     Bitmask to specify the UHBR link rates supported by this dfp.
  *
@@ -161,6 +163,9 @@ typedef struct NV0073_CTRL_DFP_GET_INFO_PARAMS {
 #define NV0073_CTRL_DFP_FLAGS_FORMAT_YCBCR444_CAPABLE                    12:12
 #define NV0073_CTRL_DFP_FLAGS_FORMAT_YCBCR444_CAPABLE_FALSE     (0x00000000U)
 #define NV0073_CTRL_DFP_FLAGS_FORMAT_YCBCR444_CAPABLE_TRUE      (0x00000001U)
+#define NV0073_CTRL_DFP_FLAGS_TYPE_C_TO_DP_CONNECTOR                     13:13
+#define NV0073_CTRL_DFP_FLAGS_TYPE_C_TO_DP_CONNECTOR_FALSE      (0x00000000U)
+#define NV0073_CTRL_DFP_FLAGS_TYPE_C_TO_DP_CONNECTOR_TRUE       (0x00000001U)
 #define NV0073_CTRL_DFP_FLAGS_HDMI_ALLOWED                               14:14
 #define NV0073_CTRL_DFP_FLAGS_HDMI_ALLOWED_FALSE                (0x00000000U)
 #define NV0073_CTRL_DFP_FLAGS_HDMI_ALLOWED_TRUE                 (0x00000001U)
@@ -194,6 +199,16 @@ typedef struct NV0073_CTRL_DFP_GET_INFO_PARAMS {
 #define NV0073_CTRL_DFP_FLAGS_DYNAMIC_MUX_CAPABLE                        30:30
 #define NV0073_CTRL_DFP_FLAGS_DYNAMIC_MUX_CAPABLE_FALSE         (0x00000000U)
 #define NV0073_CTRL_DFP_FLAGS_DYNAMIC_MUX_CAPABLE_TRUE          (0x00000001U)
+
+#define NV0073_CTRL_DFP_FLAGS2_DP_UHBR_SUPPORTED_10_0GBPS                  0:0
+#define NV0073_CTRL_DFP_FLAGS2_DP_UHBR_SUPPORTED_10_0GBPS_FALSE (0x00000000U)
+#define NV0073_CTRL_DFP_FLAGS2_DP_UHBR_SUPPORTED_10_0GBPS_TRUE  (0x00000001U)
+#define NV0073_CTRL_DFP_FLAGS2_DP_UHBR_SUPPORTED_13_5GBPS                  1:1
+#define NV0073_CTRL_DFP_FLAGS2_DP_UHBR_SUPPORTED_13_5GBPS_FALSE (0x00000000U)
+#define NV0073_CTRL_DFP_FLAGS2_DP_UHBR_SUPPORTED_13_5GBPS_TRUE  (0x00000001U)
+#define NV0073_CTRL_DFP_FLAGS2_DP_UHBR_SUPPORTED_20_0GBPS                  2:2
+#define NV0073_CTRL_DFP_FLAGS2_DP_UHBR_SUPPORTED_20_0GBPS_FALSE (0x00000000U)
+#define NV0073_CTRL_DFP_FLAGS2_DP_UHBR_SUPPORTED_20_0GBPS_TRUE  (0x00000001U)
 
 
 
@@ -464,7 +479,6 @@ typedef struct NV0073_CTRL_DFP_SET_AUDIO_ENABLE_PARAMS {
     NvU32  displayId;
     NvBool enable;
 } NV0073_CTRL_DFP_SET_AUDIO_ENABLE_PARAMS;
-
 
 
 /*
@@ -1288,6 +1302,140 @@ typedef struct NV0073_CTRL_DFP_GET_FIXED_MODE_TIMING_PARAMS {
 
 
 /*
+ * NV0073_CTRL_DFP_ENTER_DISPLAY_POWER_GATING_DIAGNOSTIC_DATA
+ *
+ * This structure describes diagnostic information about display power
+ * gating entry sequence
+ *
+ *   totalRmEntryLatencyUs
+ *     Duration in microseconds that RM took to service 'Enter
+ *     Display Power Gating' command. This includes time for all
+ *     steps that RM performs as part of display power gating entry
+ *     sequence including the below parameters.
+ *   hwOkToGateLatencyUs
+ *     Duration in microseconds that HW took to assert ok_to_gate.
+ *     Only valid when displayId is not equal to 0xFFFFFFFF
+ *   carApiLatencyUs
+ *     Duration in microseconds that CAR (Clock and Reset) block took to
+ *     service 'Enter Display Power Gating' command
+ *
+ */
+
+typedef struct NV0073_CTRL_DFP_ENTER_DISPLAY_POWER_GATING_DIAGNOSTIC_DATA {
+    NvU32 totalRmEntryLatencyUs;
+    NvU32 hwOkToGateLatencyUs;
+    NvU32 carEntryApiLatencyUs;
+} NV0073_CTRL_DFP_ENTER_DISPLAY_POWER_GATING_DIAGNOSTIC_DATA;
+
+/*
+ *  NV0073_CTRL_CMD_DFP_ENTER_DISPLAY_POWER_GATING
+ *
+ * This command can be used to enter display power gating with an option to
+ * save-restore settings for the specified displayId.
+ *
+ *   subDeviceInstance
+ *     This parameter specifies the subdevice instance within the
+ *     NV04_DISPLAY_COMMON parent device to which the operation should be
+ *     directed. This parameter must specify a value between zero and the
+ *     total number of subdevices within the parent device. This parameter
+ *     should be set to zero for default behavior.
+ *   displayId
+ *     This parameter specifies the ID of the display for which the state
+ *     needs to be saved-restored during exit of Display Power Gating.
+ *     The display ID must be a dfp display as determined with the
+ *     NV0073_CTRL_CMD_SPECIFIC_GET_TYPE command. If more than one
+ *     displayId bit is set or the displayId is not a dfp, this call will
+ *     return NV_ERR_INVALID_ARGUMENT. For the case where no save-restore
+ *     is needed, displayId should be set to 0xFFFFFFFF.
+ *   flags
+ *     This parameter specifies special request from client for RM(for future use)
+ *   diagnosticData
+ *     This parameter provides diagnostic information about display power
+ *     gating entry sequence
+ *
+ * Possible status values returned are:
+ *   NV_OK - If Display Power Gating Entry was successful
+ *   NV_ERR_GENERIC - If Display Power Gating Entry failed
+ *   NV_ERR_INVALID_ARGUMENT - If incorrect parameters are sent
+ */
+#define NV0073_CTRL_CMD_DFP_ENTER_DISPLAY_POWER_GATING (0x731174U) /* finn: Evaluated from "(FINN_NV04_DISPLAY_COMMON_DFP_INTERFACE_ID << 8) | NV0073_CTRL_CMD_DFP_ENTER_DISPLAY_POWER_GATING_PARAMS_MESSAGE_ID" */
+
+#define NV0073_CTRL_CMD_DFP_ENTER_DISPLAY_POWER_GATING_PARAMS_MESSAGE_ID (0x74U)
+
+typedef struct NV0073_CTRL_CMD_DFP_ENTER_DISPLAY_POWER_GATING_PARAMS {
+    NvU32                                                      subDeviceInstance;
+    NvU32                                                      displayId;
+    NvU32                                                      flag;
+    NV0073_CTRL_DFP_ENTER_DISPLAY_POWER_GATING_DIAGNOSTIC_DATA diagnosticData;
+} NV0073_CTRL_CMD_DFP_ENTER_DISPLAY_POWER_GATING_PARAMS;
+
+#define NV0073_CTRL_DFP_ENTER_DISPLAY_POWER_GATING_FLAGS_RESERVED       31:0
+#define NV0073_CTRL_DFP_ENTER_DISPLAY_POWER_GATING_FLAGS_RESERVED_INIT (0x00000000U)
+
+/*
+ * NV0073_CTRL_DFP_EXIT_DISPLAY_POWER_GATING_DIAGNOSTIC_DATA
+ *
+ * This structure describes diagnostic information about display power
+ * gating exit sequence
+ *
+ *   totalRmExitLatencyUs
+ *     Duration in microseconds that RM took to service 'Exit
+ *     Display Power Gating' command. This includes time for all
+ *     steps that RM performs as part of display power gating exit
+ *     sequence including the below parameters.
+ *   riscvBootupLatencyUs
+ *     Duration in microseconds that LTM RISCV took to bootup.
+ *   carExitApiLatencyUs
+ *     Duration in microseconds that CAR (Clock and Reset) block took
+ *     to service 'Exit Display Power Gating' command
+ *
+ */
+typedef struct NV0073_CTRL_DFP_EXIT_DISPLAY_POWER_GATING_DIAGNOSTIC_DATA {
+    NvU32 totalRmExitLatencyUs;
+    NvU32 riscvBootupLatencyUs;
+    NvU32 carExitApiLatencyUs;
+} NV0073_CTRL_DFP_EXIT_DISPLAY_POWER_GATING_DIAGNOSTIC_DATA;
+
+/*
+ * NV0073_CTRL_CMD_DFP_EXIT_DISPLAY_POWER_GATING
+ *
+ * This command can be used to exit display power gating. If preceding
+ * NV0073_CTRL_CMD_DFP_ENTER_DISPLAY_POWER_GATING command requested for
+ * save-restore of settings for a particular displayId then this command
+ * will restore settings for that displayId.
+ *
+ *   subDeviceInstance
+ *     This parameter specifies the subdevice instance within the
+ *     NV04_DISPLAY_COMMON parent device to which the operation should be
+ *     directed. This parameter must specify a value between zero and the
+ *     total number of subdevices within the parent device. This parameter
+ *     should be set to zero for default behavior.
+ *   flags
+ *     This parameter specifies special request from client for RM(for future use)
+ *   diagnosticData
+ *     This parameter provides diagnostic information about display power
+ *     gating exit sequence
+ *
+ * Possible status values returned are:
+ *   NV_OK - When Display Power Gating Exit was successful
+ *   NV_ERR_GENERIC - When Display Power Gating Exit failed
+ *   NV_ERR_INVALID_ARGUMENT - When incorrect parameters are sent
+ */
+
+#define NV0073_CTRL_CMD_DFP_EXIT_DISPLAY_POWER_GATING (0x731175U) /* finn: Evaluated from "(FINN_NV04_DISPLAY_COMMON_DFP_INTERFACE_ID << 8) | NV0073_CTRL_CMD_DFP_EXIT_DISPLAY_POWER_GATING_PARAMS_MESSAGE_ID" */
+
+#define NV0073_CTRL_CMD_DFP_EXIT_DISPLAY_POWER_GATING_PARAMS_MESSAGE_ID (0x75U)
+
+typedef struct NV0073_CTRL_CMD_DFP_EXIT_DISPLAY_POWER_GATING_PARAMS {
+    NvU32                                                     subDeviceInstance;
+    NvU32                                                     flag;
+    NV0073_CTRL_DFP_EXIT_DISPLAY_POWER_GATING_DIAGNOSTIC_DATA diagnosticData;
+} NV0073_CTRL_CMD_DFP_EXIT_DISPLAY_POWER_GATING_PARAMS;
+
+#define NV0073_CTRL_DFP_EXIT_DISPLAY_POWER_GATING_FLAGS_RESERVED       31:0
+#define NV0073_CTRL_DFP_EXIT_DISPLAY_POWER_GATING_FLAGS_RESERVED_INIT (0x00000000U)
+
+/*
  * NV0073_CTRL_CMD_DFP_EDP_DRIVER_UNLOAD
  *
  * This command is called when we want to inform RM of driver
@@ -1307,13 +1455,50 @@ typedef struct NV0073_CTRL_DFP_GET_FIXED_MODE_TIMING_PARAMS {
  *    NV_ERR_INVALID_ARGUMENT
  *    NV_ERR_NOT_SUPPORTED
  */
-#define NV0073_CTRL_CMD_DFP_EDP_DRIVER_UNLOAD (0x731174U) /* finn: Evaluated from "(FINN_NV04_DISPLAY_COMMON_DFP_INTERFACE_ID << 8) | NV0073_CTRL_DFP_EDP_DRIVER_UNLOAD_PARAMS_MESSAGE_ID" */
+#define NV0073_CTRL_CMD_DFP_EDP_DRIVER_UNLOAD                         (0x731176U) /* finn: Evaluated from "(FINN_NV04_DISPLAY_COMMON_DFP_INTERFACE_ID << 8) | NV0073_CTRL_DFP_EDP_DRIVER_UNLOAD_PARAMS_MESSAGE_ID" */
 
-#define NV0073_CTRL_DFP_EDP_DRIVER_UNLOAD_PARAMS_MESSAGE_ID (0x74U)
+#define NV0073_CTRL_DFP_EDP_DRIVER_UNLOAD_PARAMS_MESSAGE_ID (0x76U)
 
 typedef struct NV0073_CTRL_DFP_EDP_DRIVER_UNLOAD_PARAMS {
     NvU32 subDeviceInstance;
     NvU32 displayId;
 } NV0073_CTRL_DFP_EDP_DRIVER_UNLOAD_PARAMS;
+
+
+
+/*
+ * NV0073_CTRL_CMD_DFP_SET_FORCE_BLACK_PIXELS
+ *
+ * This command is used to force black pixels from postcomp.
+ *
+ *   subDeviceInstance
+ *     This parameter specifies the subdevice instance within the
+ *     NV04_DISPLAY_COMMON parent device to which the operation should be
+ *     directed. This parameter must specify a value between zero and the
+ *     total number of subdevices within the parent device.  This parameter
+ *     should be set to zero for default behavior.
+ *
+ *   displayId
+ *     DisplayId of the connected display.
+ *
+ *   bForceBlackPixels
+ *     To enable or disable black pixel generation.
+ *
+ * Possible status values returned are:
+ *      NV_OK
+ *      NV_ERR_INVALID_ARGUMENT
+ *      NV_ERR_NOT_SUPPORTED
+ *
+ */
+#define NV0073_CTRL_CMD_DFP_SET_FORCE_BLACK_PIXELS (0x731179U) /* finn: Evaluated from "(FINN_NV04_DISPLAY_COMMON_DFP_INTERFACE_ID << 8) | NV0073_CTRL_DFP_SET_FORCE_BLACK_PIXELS_PARAMS_MESSAGE_ID" */
+
+#define NV0073_CTRL_DFP_SET_FORCE_BLACK_PIXELS_PARAMS_MESSAGE_ID (0x79U)
+
+typedef struct NV0073_CTRL_DFP_SET_FORCE_BLACK_PIXELS_PARAMS {
+    NvU32  subDeviceInstance;
+    NvU32  displayId;
+    NvU32  head;
+    NvBool bForceBlack;
+} NV0073_CTRL_DFP_SET_FORCE_BLACK_PIXELS_PARAMS;
 
 /* _ctrl0073dfp_h_ */

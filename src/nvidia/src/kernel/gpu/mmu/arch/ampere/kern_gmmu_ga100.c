@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2018-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2018-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -31,6 +31,7 @@
 #include "nverror.h"
 
 #include "published/ampere/ga100/dev_fault.h"
+#include "published/ampere/ga100/dev_top.h"
 #include "published/ampere/ga100/dev_vm.h"
 
 
@@ -128,8 +129,8 @@ kgmmuValidateFabricBaseAddress_GA100
     return NV_OK;
 }
 
-NV_STATUS
-kgmmuSetupWarForBug2720120_GA100
+static NV_STATUS
+kgmmuSetupWarForBug2720120FmtFamily_GA100
 (
     KernelGmmu      *pKernelGmmu,
     GMMU_FMT_FAMILY *pFam
@@ -138,22 +139,15 @@ kgmmuSetupWarForBug2720120_GA100
     NV_STATUS            status      = NV_OK;
     OBJGPU              *pGpu        = ENG_GET_GPU(pKernelGmmu);
     KernelBus           *pKernelBus  = GPU_GET_KERNEL_BUS(pGpu);
+    MemoryManager       *pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
     const GMMU_FMT      *pFmt        = kgmmuFmtGet(pKernelGmmu, GMMU_FMT_VERSION_DEFAULT, 0);
     const MMU_FMT_LEVEL *pPageDir1   = mmuFmtFindLevelWithPageShift(pFmt->pRoot, 29);
     const MMU_FMT_LEVEL *pPageDir0   = mmuFmtFindLevelWithPageShift(pFmt->pRoot, 21);
     const MMU_FMT_LEVEL *pSmallPT    = mmuFmtFindLevelWithPageShift(pFmt->pRoot, 12);
     const GMMU_FMT_PDE  *pPde0Fmt    = gmmuFmtGetPde(pFmt, pPageDir0, 1);
     const GMMU_FMT_PDE  *pPde1Fmt    = gmmuFmtGetPde(pFmt, pPageDir1, 0);
-    NvU8                *pMap        = NULL;
-    void                *pPriv       = NULL;
-    NvU32                sizeOfDWord = sizeof(NvU32);
-    RmPhysAddr           physAddr;
-    RmPhysAddr           physAddrOrig;
-    NvU64                sizeInDWord;
-    NvU32                bar0Addr;
     NvU32                entryIndex;
     NvU32                entryIndexHi;
-    NvU32                entryOffset;
 
     //
     // BAR2 is not yet initialized. Thus use either the BAR0 window or
@@ -176,32 +170,9 @@ kgmmuSetupWarForBug2720120_GA100
                     pKernelGmmu->pWarSmallPageTable);
     NV_ASSERT_OK_OR_GOTO(status, status, failed);
 
-    switch (memdescGetAddressSpace(pKernelGmmu->pWarSmallPageTable))
-    {
-        case ADDR_FBMEM:
-            memUtilsMemSetNoBAR2(pGpu, pKernelGmmu->pWarSmallPageTable, 0);
-            break;
-
-        case ADDR_SYSMEM:
-            // Plain old memmap.
-            NV_ASSERT_OK_OR_GOTO(status, memdescMapOld(pKernelGmmu->pWarSmallPageTable, 0,
-                                                       pKernelGmmu->pWarSmallPageTable->Size,
-                                                       NV_TRUE, // kernel,
-                                                       NV_PROTECT_READ_WRITE,
-                                                       (void **)&pMap,
-                                                       &pPriv), failed);
-
-            portMemSet(pMap, 0, pKernelGmmu->pWarSmallPageTable->Size);
-
-            memdescUnmapOld(pKernelGmmu->pWarSmallPageTable, 1, 0, pMap, pPriv);
-            break;
-
-        default:
-            // Should not happen.
-            status = NV_ERR_INVALID_ARGUMENT;
-            NV_ASSERT_OR_GOTO(status == NV_OK, failed);
-            break;
-    }
+    NV_ASSERT_OK_OR_GOTO(status,
+        memmgrMemDescMemSet(pMemoryManager, pKernelGmmu->pWarSmallPageTable, 0, TRANSFER_FLAGS_NONE),
+        failed);
 
     // The WAR PDE0 points to the small page table allocated above
     {
@@ -235,80 +206,14 @@ kgmmuSetupWarForBug2720120_GA100
     NV_ASSERT_OK_OR_GOTO(status, status, failed);
 
     entryIndexHi = mmuFmtLevelEntryCount(pPageDir0) - 1;
-    switch (memdescGetAddressSpace(pKernelGmmu->pWarPageDirectory0))
+    for (entryIndex = 0; entryIndex <= entryIndexHi; entryIndex++)
     {
-        case ADDR_FBMEM:
-            //
-            // Set the BAR0 window to encompass the given surface while
-            // saving off the location to where the BAR0 window was
-            // previously pointing.
-            //
-            physAddr = memdescGetPhysAddr(pKernelGmmu->pWarPageDirectory0, AT_GPU, 0);
-            NV_ASSERT_OR_GOTO(NV_IS_ALIGNED64(physAddr, sizeOfDWord), failed);
+        TRANSFER_SURFACE pageDirEntry =
+            { .pMemDesc = pKernelGmmu->pWarPageDirectory0, .offset = entryIndex * pPageDir0->entrySize };
 
-            physAddrOrig = kbusGetBAR0WindowVidOffset_HAL(pGpu, pKernelBus);
-            NV_ASSERT_OK_OR_GOTO(status,
-                                 kbusSetBAR0WindowVidOffset_HAL(pGpu,
-                                                                pKernelBus,
-                                                                physAddr & ~0xffffULL),
-                                 failed);
-
-            bar0Addr = NvU64_LO32(kbusGetBAR0WindowAddress_HAL(pKernelBus) +
-                          (physAddr - kbusGetBAR0WindowVidOffset_HAL(pGpu, pKernelBus)));
-
-            //
-            // Iterate and initialize the given surface with BAR0
-            // writes.
-            //
-            sizeInDWord = (NvU32)NV_DIV_AND_CEIL(pPageDir0->entrySize, sizeOfDWord);
-            for (entryIndex = 0; entryIndex <= entryIndexHi; entryIndex++)
-            {
-                entryOffset = entryIndex * pPageDir0->entrySize;
-                NvU32 i;
-                for (i = 0; i < sizeInDWord; i++)
-                {
-                    GPU_REG_WR32(pGpu,
-                                 bar0Addr + entryOffset + (sizeOfDWord * i),
-                                 pFam->bug2720120WarPde0.v32[i]);
-                }
-            }
-
-            // Restore where the BAR0 window was previously pointing to
-            NV_ASSERT_OK_OR_GOTO(status,
-                                 kbusSetBAR0WindowVidOffset_HAL(pGpu, pKernelBus,
-                                                                physAddrOrig),
-                                 failed);
-
-            break;
-
-        case ADDR_SYSMEM:
-            // Plain old memmap.
-            NV_ASSERT_OK_OR_GOTO(status, memdescMapOld(pKernelGmmu->pWarPageDirectory0, 0,
-                                                       pKernelGmmu->pWarPageDirectory0->Size,
-                                                       NV_TRUE, // kernel,
-                                                       NV_PROTECT_READ_WRITE,
-                                                       (void **)&pMap,
-                                                       &pPriv), failed);
-
-            for (entryIndex = 0; entryIndex <= entryIndexHi; entryIndex++)
-            {
-                entryOffset = entryIndex * pPageDir0->entrySize;
-
-                // Memory-mapped write.
-                portMemCopy(pMap + entryOffset,
-                            pPageDir0->entrySize,
-                            pFam->bug2720120WarPde0.v8,
-                            pPageDir0->entrySize);
-            }
-
-            memdescUnmapOld(pKernelGmmu->pWarPageDirectory0, 1, 0, pMap, pPriv);
-            break;
-
-        default:
-            // Should not happen.
-            status = NV_ERR_INVALID_ARGUMENT;
-            NV_ASSERT_OR_GOTO(status == NV_OK, failed);
-            break;
+        NV_ASSERT_OK_OR_GOTO(status, memmgrMemWrite(pMemoryManager, &pageDirEntry, pFam->bug2720120WarPde0.v8,
+                                                    pPageDir0->entrySize, TRANSFER_FLAGS_NONE),
+            failed);
     }
 
     // The WAR PDE1 points to the PD0 instance allocated above
@@ -347,23 +252,77 @@ failed:
     return status;
 }
 
-/*!
- * @brief Get the engine ID associated with the max CE
- *
- * @param[in] pGpu         GPU object
- * @param[in] pKernelGmmu  KernelGmmu object
- *
- * return engine ID of the max CE
- */
-NvU32
-kgmmuGetMaxCeEngineId_GA100
+
+NV_STATUS
+kgmmuInitCeMmuFaultIdRange_GA100
 (
     OBJGPU     *pGpu,
     KernelGmmu *pKernelGmmu
 )
 {
-    return NV_PFAULT_MMU_ENG_ID_CE9;
+    NvU32 i;
+    NvU32 minMmuFaultId = (NvU32)-1;
+    NvU32 maxMmuFaultId = 0;
+
+    // Init the value in case the function fails
+    pKernelGmmu->minCeMmuFaultId = 0;
+    pKernelGmmu->maxCeMmuFaultId = 0;
+
+    NV_ASSERT_OK_OR_RETURN(gpuConstructDeviceInfoTable_HAL(pGpu));
+
+    for (i = 0; i < pGpu->numDeviceInfoEntries; i++)
+    {
+        if (pGpu->pDeviceInfoTable[i].typeEnum == NV_PTOP_DEVICE_INFO2_DEV_TYPE_ENUM_LCE)
+        {
+            minMmuFaultId = NV_MIN(minMmuFaultId, pGpu->pDeviceInfoTable[i].faultId);
+            maxMmuFaultId = NV_MAX(maxMmuFaultId, pGpu->pDeviceInfoTable[i].faultId);
+        }
+    }
+
+    if ((minMmuFaultId == (NvU32)-1 || maxMmuFaultId == 0))
+    {
+        NV_PRINTF(LEVEL_ERROR, "Failed to find any MMU Fault ID\n");
+        NV_ASSERT(0);
+        return NV_ERR_OBJECT_NOT_FOUND;
+    }
+
+    pKernelGmmu->minCeMmuFaultId = minMmuFaultId;
+    pKernelGmmu->maxCeMmuFaultId = maxMmuFaultId;
+
+    NV_PRINTF(LEVEL_INFO, "CE MMU Fault ID range [0x%x - 0x%x]\n",
+                           pKernelGmmu->minCeMmuFaultId, pKernelGmmu->maxCeMmuFaultId);
+
+    return NV_OK;
 }
+
+
+NV_STATUS
+kgmmuSetupWarForBug2720120_GA100
+(
+    KernelGmmu      *pKernelGmmu
+)
+{
+    NvU32 v;
+    GMMU_FMT_FAMILY *pFam;
+
+    if (pKernelGmmu->pWarPageDirectory0 != NULL)
+        return NV_OK;
+
+    for (v = 0; v < GMMU_FMT_MAX_VERSION_COUNT; ++v)
+    {
+        pFam = pKernelGmmu->pFmtFamilies[v];
+        if (NULL != pFam)
+        {
+            if (kgmmuIsBug2720120WarEnabled(pKernelGmmu))
+            {
+                NV_ASSERT_OK_OR_RETURN(kgmmuSetupWarForBug2720120FmtFamily_GA100(pKernelGmmu, pFam));
+            }
+        }
+    }
+
+    return NV_OK;
+}
+
 
 /**
  * @brief   Determine if the fault is P2P unbound Instance Fault
@@ -386,7 +345,7 @@ kgmmuIsP2PUnboundInstFault_GA100
 )
 {
     if ((faultType ==  NV_PFAULT_FAULT_TYPE_UNBOUND_INST_BLOCK) &&
-       ((faultClientId >= NV_PFAULT_CLIENT_HUB_PTP_X0 && faultClientId <= NV_PFAULT_CLIENT_HUB_PTP_X5)))
+       ((faultClientId >= NV_PFAULT_CLIENT_HUB_PTP_X0 && faultClientId <= NV_PFAULT_CLIENT_HUB_PTP_X7)))
     {
         return NV_TRUE;
     }
@@ -411,7 +370,7 @@ kgmmuIsP2PUnboundInstFault_GA100
 NV_STATUS
 kgmmuServiceMmuFault_GA100
 (
-    POBJGPU                  pGpu,
+    OBJGPU                  *pGpu,
     KernelGmmu              *pKernelGmmu,
     NvP64                    pParsedFaultInfo,
     FIFO_MMU_EXCEPTION_DATA *pMmuExceptionData

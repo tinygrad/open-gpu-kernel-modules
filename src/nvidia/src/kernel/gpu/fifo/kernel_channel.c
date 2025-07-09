@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2020-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2020-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -43,10 +43,11 @@
 #include "kernel/rmapi/event.h"
 #include "kernel/rmapi/rmapi.h"
 #include "kernel/rmapi/rs_utils.h"
+#include "kernel/rmapi/mapping_list.h"
 #include "kernel/virtualization/hypervisor/hypervisor.h"
 #include "gpu/bus/kern_bus.h"
 #include "gpu/mem_mgr/virt_mem_allocator.h"
-#include "objtmr.h"
+#include "gpu/timer/objtmr.h"
 #include "platform/sli/sli.h"
 
 #include "class/cl0090.h"   // KERNEL_GRAPHICS_CONTEXT
@@ -70,9 +71,19 @@
 #include "class/clc86f.h"   // HOPPER_CHANNEL_GPFIFO_A
 #include "class/clc86fsw.h" // HOPPER_CHANNEL_GPFIFO_A
 
+#include "class/clc96f.h"   // BLACKWELL_CHANNEL_GPFIFO_A
+#include "class/clc96fsw.h" // BLACKWELL_CHANNEL_GPFIFO_A
+
+#include "class/clca6f.h"   // BLACKWELL_CHANNEL_GPFIFO_B
+#include "class/clca6fsw.h" // BLACKWELL_CHANNEL_GPFIFO_B
+
 #include "ctrl/ctrl906f.h"
 #include "ctrl/ctrlc46f.h"
 #include "ctrl/ctrlc86f.h"
+
+#include "ctrl/ctrlc96f.h"
+
+#include "ctrl/ctrlca6f.h"
 
 #include "Nvcm.h"
 #include "libraries/resserv/resserv.h"
@@ -100,9 +111,6 @@ static NV_STATUS _kchannelSendChannelAllocRpc(
     KernelChannelGroup *pKernelChannelGroup,
     NvBool bFullSriov);
 
-static NV_STATUS _kchannelSetupNotifyActions(KernelChannel *pKernelChannel,
-                                             NvU32 classNum);
-static void _kchannelCleanupNotifyActions(KernelChannel *pKernelChannel);
 static NV_STATUS _kchannelNotifyOfChid(OBJGPU *pGpu, KernelChannel *pKernelChannel, RsClient *pRsClient);
 static NV_STATUS _kchannelGetUserMemDesc(OBJGPU *pGpu, KernelChannel *pKernelChannel, PMEMORY_DESCRIPTOR *ppMemDesc);
 static void _kchannelUpdateFifoMapping(KernelChannel    *pKernelChannel,
@@ -114,6 +122,8 @@ static void _kchannelUpdateFifoMapping(KernelChannel    *pKernelChannel,
                                        NvU32             flags,
                                        NvHandle          hSubdevice,
                                        RsCpuMapping     *pMapping);
+static NvNotification*
+_kchannelGetKeyRotationNotifier(KernelChannel *pKernelChannel);
 
 /*!
  * @brief Construct a new KernelChannel, which also creates a Channel.
@@ -141,7 +151,7 @@ kchannelConstruct_IMPL
     RsResourceRef          *pResourceRef     = pCallContext->pResourceRef;
     RsResourceRef          *pKernelCtxShareRef = NULL;
     NV_STATUS               status;
-    RM_API                 *pRmApi           = rmapiGetInterface(RMAPI_API_LOCK_INTERNAL);
+    RM_API                 *pRmApi           = NULL;
     NvHandle                hClient          = pRsClient->hClient;
     NvHandle                hParent          = pResourceRef->pParentRef->hResource;
     NV_CHANNEL_ALLOC_PARAMS *pChannelGpfifoParams = pParams->pAllocParams;
@@ -161,7 +171,6 @@ kchannelConstruct_IMPL
     NvU32                   verifFlags2      = 0;
     NvBool                  bChidAllocated   = NV_FALSE;
     NvBool                  bLockAcquired    = NV_FALSE;
-    NvBool                  bNotifyActionsSetup = NV_FALSE;
     CTX_BUF_POOL_INFO      *pChannelBufPool  = NULL;
     CTX_BUF_INFO            bufInfo          = {0};
     NvBool                  bRpcAllocated    = NV_FALSE;
@@ -169,6 +178,21 @@ kchannelConstruct_IMPL
     NvBool                  bAddedToGroup    = NV_FALSE;
     NvU32                   callingContextGfid;
     Device                 *pDevice;
+    NvBool                  bUvmOwnedFlag;
+
+    if (rmapiLockIsOwner())
+    {
+        pRmApi = rmapiGetInterface(RMAPI_API_LOCK_INTERNAL);
+    }
+    else if (rmapiInRtd3PmPath())
+    {
+        pRmApi = rmapiGetInterface(RMAPI_GPU_LOCK_INTERNAL);
+    }
+    else
+    {
+        NV_PRINTF(LEVEL_ERROR, "Caller missing proper locks\n");
+        return NV_ERR_INVALID_LOCK_STATE;
+    }
 
     // We only support physical channels.
     NV_ASSERT_OR_RETURN(FLD_TEST_DRF(OS04, _FLAGS, _CHANNEL_TYPE, _PHYSICAL, flags),
@@ -178,16 +202,20 @@ kchannelConstruct_IMPL
     pKernelChannel->bIsContextBound = NV_FALSE;
     pKernelChannel->nextObjectClassID = 0;
     pKernelChannel->subctxId = 0;
+    pKernelChannel->vaSpaceId = 0;
     pKernelChannel->bSkipCtxBufferAlloc = FLD_TEST_DRF(OS04, _FLAGS,
                                                        _SKIP_CTXBUFFER_ALLOC, _TRUE, flags);
-    pKernelChannel->cid = portAtomicIncrementU32(&pSys->currentCid);
+    pKernelChannel->cid = portAtomicIncrementU32(&pSys->currentChannelUniqueId);
     pKernelChannel->runqueue = DRF_VAL(OS04, _FLAGS, _GROUP_CHANNEL_RUNQUEUE, flags);
     pKernelChannel->engineType = RM_ENGINE_TYPE_NULL;
     pChannelGpfifoParams->cid = pKernelChannel->cid;
-    NV_ASSERT_OK_OR_GOTO(status, refFindAncestorOfType(pResourceRef, classId(Device), &pDeviceRef), cleanup);
+    NV_ASSERT_OK_OR_RETURN(refFindAncestorOfType(pResourceRef, classId(Device), &pDeviceRef));
     NV_ASSERT_OK_OR_RETURN(vgpuGetCallingContextGfid(pGpu, &callingContextGfid));
 
     pDevice = dynamicCast(pDeviceRef->pResource, Device);
+
+    // Save the UVM owned flag.
+    bUvmOwnedFlag = FLD_TEST_DRF(_KERNELCHANNEL, _ALLOC_INTERNALFLAGS, _UVM_OWNED, _YES, pChannelGpfifoParams->internalFlags);
 
     // Internal fields must be cleared when RMAPI call is from client
     if (!hypervisorIsVgxHyper() || IS_GSP_CLIENT(pGpu))
@@ -209,6 +237,10 @@ kchannelConstruct_IMPL
         return NV_ERR_OBJECT_NOT_FOUND;
     }
     pKernelChannel->pUserInfo = pRmClient->pUserInfo;
+
+    pKernelChannel->bGspOwned =
+        FLD_TEST_DRF(_KERNELCHANNEL, _ALLOC_INTERNALFLAGS, _GSP_OWNED, _YES, pChannelGpfifoParams->internalFlags);
+    NV_ASSERT_OR_RETURN(!pKernelChannel->bGspOwned || RMCFG_FEATURE_PLATFORM_GSP, NV_ERR_INVALID_ARGUMENT);
 
     //
     // GSP-RM needs privilegeLevel passed in as an alloc param because it cannot
@@ -263,6 +295,15 @@ kchannelConstruct_IMPL
 
         pKernelChannel->ProcessID = pRmClient->ProcID;
         pKernelChannel->SubProcessID = pRmClient->SubProcessID;
+    }
+
+    //
+    // Mark the channel as UVM owned only if the channel is kernel privileged
+    // and flagged as UVM owned.
+    //
+    if (pKernelChannel->privilegeLevel == NV_KERNELCHANNEL_ALLOC_INTERNALFLAGS_PRIVILEGE_KERNEL)
+    {
+        pKernelChannel->bUvmOwned = bUvmOwnedFlag;
     }
 
     // Context share and vaspace handles can't be active at the same time.
@@ -340,25 +381,26 @@ kchannelConstruct_IMPL
         // in mirroring this allocation in the host, as the channel is
         // already mirrored.
         //
-        status = pRmApi->AllocWithSecInfo(pRmApi,
-            hClient,
-            hParent,
-            &pChannelGpfifoParams->hPhysChannelGroup,
-            KEPLER_CHANNEL_GROUP_A,
-            NV_PTR_TO_NvP64(&tsgParams),
-            sizeof(tsgParams),
-            RMAPI_ALLOC_FLAGS_SKIP_RPC,
-            NvP64_NULL,
-            &pRmApi->defaultSecInfo);
-
-        NV_ASSERT_OR_GOTO(status == NV_OK, cleanup);
+        NV_ASSERT_OK_OR_GOTO(status,
+            pRmApi->AllocWithSecInfo(pRmApi,
+                                     hClient,
+                                     hParent,
+                                     &pChannelGpfifoParams->hPhysChannelGroup,
+                                     KEPLER_CHANNEL_GROUP_A,
+                                     NV_PTR_TO_NvP64(&tsgParams),
+                                     sizeof(tsgParams),
+                                     RMAPI_ALLOC_FLAGS_SKIP_RPC,
+                                     NvP64_NULL,
+                                     &pRmApi->defaultSecInfo),
+                          cleanup);
         bTsgAllocated = NV_TRUE;
         hChanGrp = pChannelGpfifoParams->hPhysChannelGroup;
 
-        status = clientGetResourceRefByType(pRsClient, hChanGrp,
-                                            classId(KernelChannelGroupApi),
-                                            &pChanGrpRef);
-        NV_ASSERT_OR_GOTO(status == NV_OK, cleanup);
+        NV_ASSERT_OK_OR_GOTO(status,
+            clientGetResourceRefByType(pRsClient, hChanGrp,
+                                       classId(KernelChannelGroupApi),
+                                       &pChanGrpRef),
+                             cleanup);
 
         pKernelChannelGroupApi = dynamicCast(pChanGrpRef->pResource,
                                              KernelChannelGroupApi);
@@ -451,7 +493,7 @@ kchannelConstruct_IMPL
     //--------------------------------------------------------------------------
 
     NV_ASSERT_OK_OR_GOTO(status,
-        rmGpuLocksAcquire(GPUS_LOCK_FLAGS_NONE, RM_LOCK_MODULES_FIFO),
+        rmDeviceGpuLocksAcquire(pGpu, GPUS_LOCK_FLAGS_NONE, RM_LOCK_MODULES_FIFO),
         cleanup);
     bLockAcquired = NV_TRUE;
 
@@ -482,7 +524,7 @@ kchannelConstruct_IMPL
     {
         pKernelChannel->errorContextType = ERROR_NOTIFIER_TYPE_NONE;
     }
-    else if (!RMCFG_FEATURE_PLATFORM_GSP)
+    else if (!(RMCFG_FEATURE_PLATFORM_GSP && !pKernelChannel->bGspOwned))
     {
         NV_ASSERT_OK(kchannelGetNotifierInfo(pGpu, pDevice,
             pKernelChannel->hErrorContext,
@@ -496,7 +538,7 @@ kchannelConstruct_IMPL
     {
         pKernelChannel->eccErrorContextType = ERROR_NOTIFIER_TYPE_NONE;
     }
-    else if (!RMCFG_FEATURE_PLATFORM_GSP)
+    else if (!(RMCFG_FEATURE_PLATFORM_GSP && !pKernelChannel->bGspOwned))
     {
         NV_ASSERT_OK(kchannelGetNotifierInfo(pGpu, pDevice,
             pKernelChannel->hEccErrorContext,
@@ -511,6 +553,10 @@ kchannelConstruct_IMPL
     {
         if (pKernelChannel->hErrorContext != NV01_NULL_OBJECT)
         {
+            NV_ASSERT_TRUE_OR_GOTO(status,
+                pKernelChannel->pErrContextMemDesc,
+                NV_ERR_INVALID_STATE,
+                cleanup);
             pChannelGpfifoParams->errorNotifierMem.base = (
                 memdescGetPhysAddr(pKernelChannel->pErrContextMemDesc,
                                    AT_GPU, 0) +
@@ -526,6 +572,10 @@ kchannelConstruct_IMPL
         }
         if (pKernelChannel->hEccErrorContext != NV01_NULL_OBJECT)
         {
+            NV_ASSERT_TRUE_OR_GOTO(status,
+                pKernelChannel->pEccErrContextMemDesc,
+                NV_ERR_INVALID_STATE,
+                cleanup);
             pChannelGpfifoParams->eccErrorNotifierMem.base = (
                 memdescGetPhysAddr(pKernelChannel->pEccErrContextMemDesc,
                                    AT_GPU, 0) +
@@ -703,19 +753,36 @@ kchannelConstruct_IMPL
     pKernelChannel->runlistId = kfifoGetDefaultRunlist_HAL(pGpu, pKernelFifo, pKernelChannel->engineType);
 
     pKernelChannel->bCCSecureChannel = FLD_TEST_DRF(OS04, _FLAGS, _CC_SECURE, _TRUE, flags);
+    pKernelChannel->bUseScrubKey = FLD_TEST_DRF(OS04, _FLAGS, _CHANNEL_SKIP_SCRUBBER, _TRUE, pChannelGpfifoParams->flags);
     if (pKernelChannel->bCCSecureChannel)
     {
         ConfidentialCompute* pConfCompute = GPU_GET_CONF_COMPUTE(pGpu);
 
         // return early if gpu is not ready to accept work
-        if (pConfCompute && kchannelCheckIsUserMode(pKernelChannel)
+        if ((pConfCompute != NULL) && kchannelCheckIsUserMode(pKernelChannel)
             && !confComputeAcceptClientRequest(pGpu, pConfCompute))
         {
             return NV_ERR_NOT_READY;
         }
 
-        status = kchannelRetrieveKmb_HAL(pGpu, pKernelChannel, ROTATE_IV_ALL_VALID,
-                                         NV_TRUE, &pKernelChannel->clientKmb);
+        if ((pConfCompute != NULL) && pConfCompute->getProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_KEY_ROTATION_SUPPORTED))
+        {
+            KEY_ROTATION_STATUS state;
+            NvU32 h2dKey;
+            NV_ASSERT_OK_OR_GOTO(status,
+                                 confComputeGetKeyPairByChannel(pGpu, pConfCompute, pKernelChannel, &h2dKey, NULL),
+                                 cleanup);
+            NV_ASSERT_OK_OR_GOTO(status,
+                                 confComputeGetKeyRotationStatus(pConfCompute, h2dKey, &state),
+                                 cleanup);
+            if (state != KEY_ROTATION_STATUS_IDLE)
+            {
+                status = NV_ERR_KEY_ROTATION_IN_PROGRESS;
+                goto cleanup;
+            }
+        }
+        status = kchannelDeriveAndRetrieveKmb_HAL(pGpu, pKernelChannel, ROTATE_IV_ALL_VALID,
+                                                  NV_TRUE, &pKernelChannel->clientKmb);
         NV_ASSERT_OR_GOTO(status == NV_OK, cleanup);
 
         portMemCopy(pChannelGpfifoParams->encryptIv,
@@ -829,10 +896,6 @@ kchannelConstruct_IMPL
     NV_ASSERT_OK_OR_GOTO(status,
         kchannelAllocChannel_HAL(pKernelChannel, pChannelGpfifoParams),
         cleanup);
-
-    // Set up pNotifyActions
-    _kchannelSetupNotifyActions(pKernelChannel, pResourceRef->externalClassId);
-    bNotifyActionsSetup = NV_TRUE;
 
     // Initialize the userd length
     if (!pKernelChannel->bClientAllocatedUserD)
@@ -957,9 +1020,22 @@ kchannelConstruct_IMPL
     // Cache the hVASpace for this channel in the KernelChannel object
     pKernelChannel->hVASpace = pKernelChannel->pKernelCtxShareApi->hVASpace;
 
+    ConfidentialCompute *pConfCompute = GPU_GET_CONF_COMPUTE(pGpu);
+    if ((pConfCompute != NULL) &&
+        (pConfCompute->getProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_CC_FEATURE_ENABLED)) &&
+        (pConfCompute->getProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_KEY_ROTATION_SUPPORTED)) &&
+        (pKernelChannel->bCCSecureChannel))
+    {
+        // Create persistent mapping to key rotation notifier
+        NV_ASSERT_OK_OR_GOTO(
+            status,
+            kchannelSetKeyRotationNotifier_HAL(pGpu, pKernelChannel, NV_TRUE),
+            cleanup);
+    }
+
 cleanup:
     if (bLockAcquired)
-        rmGpuLocksRelease(GPUS_LOCK_FLAGS_NONE, NULL);
+        rmDeviceGpuLocksRelease(pGpu, GPUS_LOCK_FLAGS_NONE, NULL);
 
     // These fields are only needed internally; clear them here
     pChannelGpfifoParams->hPhysChannelGroup = 0;
@@ -977,11 +1053,6 @@ cleanup:
     // Free the allocated resources if there was an error
     if (status != NV_OK)
     {
-        if (bNotifyActionsSetup)
-        {
-            _kchannelCleanupNotifyActions(pKernelChannel);
-        }
-
         // Remove any dependencies we may have added; we don't want our destructor called when freeing anything below
         if (pKernelGraphicsContext != NULL)
         {
@@ -1005,7 +1076,7 @@ cleanup:
             kchangrpRemoveChannel(pGpu, pKernelChannelGroup, pKernelChannel);
         }
 
-        if (RMCFG_FEATURE_PLATFORM_GSP)
+        if (RMCFG_FEATURE_PLATFORM_GSP && !pKernelChannel->bGspOwned)
         {
             // Free memdescs created during construct on GSP path.
             memdescFree(pKernelChannel->pErrContextMemDesc);
@@ -1051,15 +1122,58 @@ kchannelDestruct_IMPL
     CALL_CONTEXT                *pCallContext;
     RS_RES_FREE_PARAMS_INTERNAL *pParams;
     NvHandle                     hClient;
-    RM_API                      *pRmApi = rmapiGetInterface(RMAPI_API_LOCK_INTERNAL);
+    RM_API                      *pRmApi = NULL;
     OBJGPU                      *pGpu   = GPU_RES_GET_GPU(pKernelChannel);
     NV_STATUS                    status = NV_OK;
     KernelChannelGroup          *pKernelChannelGroup = NULL;
 
+    NV_ASSERT(pKernelChannel->pKernelChannelGroupApi != NULL);
+    pKernelChannelGroup = pKernelChannel->pKernelChannelGroupApi->pKernelChannelGroup;
+    NV_ASSERT(pKernelChannelGroup != NULL);
+
     resGetFreeParams(staticCast(pKernelChannel, RsResource), &pCallContext, &pParams);
     hClient = pCallContext->pClient->hClient;
 
-    if (RMCFG_FEATURE_PLATFORM_GSP)
+    if (rmapiLockIsOwner())
+    {
+        pRmApi = rmapiGetInterface(RMAPI_API_LOCK_INTERNAL);
+    }
+    else if (rmapiInRtd3PmPath())
+    {
+        pRmApi = rmapiGetInterface(RMAPI_GPU_LOCK_INTERNAL);
+    }
+    else
+    {
+        NV_PRINTF(LEVEL_ERROR, "Caller missing proper locks\n");
+        return;
+    }
+
+    ConfidentialCompute *pConfCompute = GPU_GET_CONF_COMPUTE(pGpu);
+    NvBool bCheckKeyRotation = NV_FALSE;
+    NvU32 h2dKey, d2hKey;
+    if ((pConfCompute != NULL) &&
+        (pConfCompute->getProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_CC_FEATURE_ENABLED)) &&
+        (pConfCompute->getProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_KEY_ROTATION_SUPPORTED)) &&
+        (pKernelChannel->bCCSecureChannel))
+    {
+        NV_ASSERT_OK(confComputeUpdateFreedChannelStats(pGpu, pConfCompute, pKernelChannel));
+
+        // check if we need to trigger key rotation after freeing this channel
+        KEY_ROTATION_STATUS state;
+        NV_ASSERT_OK(confComputeGetKeyPairByChannel(pGpu, pConfCompute, pKernelChannel, &h2dKey, &d2hKey));
+        NV_ASSERT_OK(confComputeGetKeyRotationStatus(pConfCompute, h2dKey, &state));
+        if ((state == KEY_ROTATION_STATUS_PENDING) ||
+            (state == KEY_ROTATION_STATUS_PENDING_TIMER_SUSPENDED))
+        {
+            bCheckKeyRotation = NV_TRUE;
+        }
+
+        NV_ASSERT_OK(kchannelSetEncryptionStatsBuffer_HAL(pGpu, pKernelChannel, NULL, NV_FALSE));
+        pRmApi->Free(pRmApi, hClient, pKernelChannel->hEncryptStatsBuf);
+        NV_ASSERT_OK(kchannelSetKeyRotationNotifier_HAL(pGpu, pKernelChannel, NV_FALSE));
+    }
+
+    if (RMCFG_FEATURE_PLATFORM_GSP && !pKernelChannel->bGspOwned)
     {
         // Free memdescs created during construct on GSP path.
         memdescFree(pKernelChannel->pErrContextMemDesc);
@@ -1101,8 +1215,6 @@ kchannelDestruct_IMPL
         }
     }
 
-    _kchannelCleanupNotifyActions(pKernelChannel);
-
     _kchannelFreeHalData(pGpu, pKernelChannel);
 
     NV_ASSERT(pKernelChannel->pKernelChannelGroupApi != NULL);
@@ -1133,6 +1245,16 @@ kchannelDestruct_IMPL
     kchannelFreeMmuExceptionInfo(pKernelChannel);
 
     NV_ASSERT(pKernelChannel->refCount == 1);
+
+    if (bCheckKeyRotation)
+    {
+        //
+        // If key rotation is pending on this key because the channel being freed hasn't reported idle yet then,
+        // we wait until this channel's SW state is cleared out before triggerring key rotation
+        // so that the key rotation code doesn't try to notify this channel or check its idle state.
+        //
+        NV_ASSERT_OK(confComputeCheckAndPerformKeyRotation(pGpu, pConfCompute, h2dKey, d2hKey));
+    }
 }
 
 NV_STATUS
@@ -1401,9 +1523,6 @@ CliGetChannelClassInfo
         case GF100_CHANNEL_GPFIFO:
         {
             pClassInfo->notifiersMaxCount  = NV906F_NOTIFIERS_MAXCOUNT;
-            pClassInfo->eventActionDisable = NV906F_CTRL_EVENT_SET_NOTIFICATION_ACTION_DISABLE;
-            pClassInfo->eventActionSingle  = NV906F_CTRL_EVENT_SET_NOTIFICATION_ACTION_SINGLE;
-            pClassInfo->eventActionRepeat  = NV906F_CTRL_EVENT_SET_NOTIFICATION_ACTION_REPEAT;
             pClassInfo->rcNotifierIndex    = NV906F_NOTIFIERS_RC;
             pClassInfo->classType          = CHANNEL_CLASS_TYPE_GPFIFO;
             break;
@@ -1411,9 +1530,6 @@ CliGetChannelClassInfo
         case KEPLER_CHANNEL_GPFIFO_A:
         {
             pClassInfo->notifiersMaxCount  = NVA06F_NOTIFIERS_MAXCOUNT;
-            pClassInfo->eventActionDisable = NVA06F_CTRL_EVENT_SET_NOTIFICATION_ACTION_DISABLE;
-            pClassInfo->eventActionSingle  = NVA06F_CTRL_EVENT_SET_NOTIFICATION_ACTION_SINGLE;
-            pClassInfo->eventActionRepeat  = NVA06F_CTRL_EVENT_SET_NOTIFICATION_ACTION_REPEAT;
             pClassInfo->rcNotifierIndex    = NVA06F_NOTIFIERS_RC;
             pClassInfo->classType          = CHANNEL_CLASS_TYPE_GPFIFO;
             break;
@@ -1421,9 +1537,6 @@ CliGetChannelClassInfo
         case KEPLER_CHANNEL_GPFIFO_B:
         {
             pClassInfo->notifiersMaxCount  = NVA16F_NOTIFIERS_MAXCOUNT;
-            pClassInfo->eventActionDisable = NVA16F_CTRL_EVENT_SET_NOTIFICATION_ACTION_DISABLE;
-            pClassInfo->eventActionSingle  = NVA16F_CTRL_EVENT_SET_NOTIFICATION_ACTION_SINGLE;
-            pClassInfo->eventActionRepeat  = NVA16F_CTRL_EVENT_SET_NOTIFICATION_ACTION_REPEAT;
             pClassInfo->rcNotifierIndex    = NVA16F_NOTIFIERS_RC;
             pClassInfo->classType          = CHANNEL_CLASS_TYPE_GPFIFO;
             break;
@@ -1431,9 +1544,6 @@ CliGetChannelClassInfo
         case MAXWELL_CHANNEL_GPFIFO_A:
         {
             pClassInfo->notifiersMaxCount  = NVB06F_NOTIFIERS_MAXCOUNT;
-            pClassInfo->eventActionDisable = NVB06F_CTRL_EVENT_SET_NOTIFICATION_ACTION_DISABLE;
-            pClassInfo->eventActionSingle  = NVB06F_CTRL_EVENT_SET_NOTIFICATION_ACTION_SINGLE;
-            pClassInfo->eventActionRepeat  = NVB06F_CTRL_EVENT_SET_NOTIFICATION_ACTION_REPEAT;
             pClassInfo->rcNotifierIndex    = NVB06F_NOTIFIERS_RC;
             pClassInfo->classType          = CHANNEL_CLASS_TYPE_GPFIFO;
             break;
@@ -1441,9 +1551,6 @@ CliGetChannelClassInfo
         case PASCAL_CHANNEL_GPFIFO_A:
         {
             pClassInfo->notifiersMaxCount  = NVC06F_NOTIFIERS_MAXCOUNT;
-            pClassInfo->eventActionDisable = NVC06F_CTRL_EVENT_SET_NOTIFICATION_ACTION_DISABLE;
-            pClassInfo->eventActionSingle  = NVC06F_CTRL_EVENT_SET_NOTIFICATION_ACTION_SINGLE;
-            pClassInfo->eventActionRepeat  = NVC06F_CTRL_EVENT_SET_NOTIFICATION_ACTION_REPEAT;
             pClassInfo->rcNotifierIndex    = NVC06F_NOTIFIERS_RC;
             pClassInfo->classType          = CHANNEL_CLASS_TYPE_GPFIFO;
             break;
@@ -1451,9 +1558,6 @@ CliGetChannelClassInfo
         case VOLTA_CHANNEL_GPFIFO_A:
         {
             pClassInfo->notifiersMaxCount  = NVC36F_NOTIFIERS_MAXCOUNT;
-            pClassInfo->eventActionDisable = NVC36F_CTRL_EVENT_SET_NOTIFICATION_ACTION_DISABLE;
-            pClassInfo->eventActionSingle  = NVC36F_CTRL_EVENT_SET_NOTIFICATION_ACTION_SINGLE;
-            pClassInfo->eventActionRepeat  = NVC36F_CTRL_EVENT_SET_NOTIFICATION_ACTION_REPEAT;
             pClassInfo->rcNotifierIndex    = NVC36F_NOTIFIERS_RC;
             pClassInfo->classType          = CHANNEL_CLASS_TYPE_GPFIFO;
             break;
@@ -1461,9 +1565,6 @@ CliGetChannelClassInfo
         case TURING_CHANNEL_GPFIFO_A:
         {
             pClassInfo->notifiersMaxCount  = NVC46F_NOTIFIERS_MAXCOUNT;
-            pClassInfo->eventActionDisable = NVC46F_CTRL_EVENT_SET_NOTIFICATION_ACTION_DISABLE;
-            pClassInfo->eventActionSingle  = NVC46F_CTRL_EVENT_SET_NOTIFICATION_ACTION_SINGLE;
-            pClassInfo->eventActionRepeat  = NVC46F_CTRL_EVENT_SET_NOTIFICATION_ACTION_REPEAT;
             pClassInfo->rcNotifierIndex    = NVC46F_NOTIFIERS_RC;
             pClassInfo->classType          = CHANNEL_CLASS_TYPE_GPFIFO;
             break;
@@ -1471,9 +1572,6 @@ CliGetChannelClassInfo
         case AMPERE_CHANNEL_GPFIFO_A:
         {
             pClassInfo->notifiersMaxCount  = NVC56F_NOTIFIERS_MAXCOUNT;
-            pClassInfo->eventActionDisable = NVC56F_CTRL_EVENT_SET_NOTIFICATION_ACTION_DISABLE;
-            pClassInfo->eventActionSingle  = NVC56F_CTRL_EVENT_SET_NOTIFICATION_ACTION_SINGLE;
-            pClassInfo->eventActionRepeat  = NVC56F_CTRL_EVENT_SET_NOTIFICATION_ACTION_REPEAT;
             pClassInfo->rcNotifierIndex    = NVC56F_NOTIFIERS_RC;
             pClassInfo->classType          = CHANNEL_CLASS_TYPE_GPFIFO;
             break;
@@ -1481,10 +1579,23 @@ CliGetChannelClassInfo
         case HOPPER_CHANNEL_GPFIFO_A:
         {
             pClassInfo->notifiersMaxCount  = NVC86F_NOTIFIERS_MAXCOUNT;
-            pClassInfo->eventActionDisable = NVC86F_CTRL_EVENT_SET_NOTIFICATION_ACTION_DISABLE;
-            pClassInfo->eventActionSingle  = NVC86F_CTRL_EVENT_SET_NOTIFICATION_ACTION_SINGLE;
-            pClassInfo->eventActionRepeat  = NVC86F_CTRL_EVENT_SET_NOTIFICATION_ACTION_REPEAT;
             pClassInfo->rcNotifierIndex    = NVC86F_NOTIFIERS_RC;
+            pClassInfo->classType          = CHANNEL_CLASS_TYPE_GPFIFO;
+            break;
+        }
+
+        case BLACKWELL_CHANNEL_GPFIFO_A:
+        {
+            pClassInfo->notifiersMaxCount  = NVC96F_NOTIFIERS_MAXCOUNT;
+            pClassInfo->rcNotifierIndex    = NVC96F_NOTIFIERS_RC;
+            pClassInfo->classType          = CHANNEL_CLASS_TYPE_GPFIFO;
+            break;
+        }
+
+        case BLACKWELL_CHANNEL_GPFIFO_B:
+        {
+            pClassInfo->notifiersMaxCount  = NVCA6F_NOTIFIERS_MAXCOUNT;
+            pClassInfo->rcNotifierIndex    = NVCA6F_NOTIFIERS_RC;
             pClassInfo->classType          = CHANNEL_CLASS_TYPE_GPFIFO;
             break;
         }
@@ -1500,9 +1611,6 @@ CliGetChannelClassInfo
         default:
         {
             pClassInfo->notifiersMaxCount  = 0;
-            pClassInfo->eventActionDisable = 0;
-            pClassInfo->eventActionSingle  = 0;
-            pClassInfo->eventActionRepeat  = 0;
             pClassInfo->rcNotifierIndex    = 0;
             pClassInfo->classType          = CHANNEL_CLASS_TYPE_DMA;
             break;
@@ -1665,23 +1773,24 @@ kchannelNotifyRc_IMPL
 }
 
 /**
- * @brief Writes notifier specified by index
+ * @brief Sends event corresponding to index to notify clients
  *
  * @param[in] pKernelChannel
  * @param[in] notifyIndex
  * @param[in] pNotifyParams
  * @parms[in] notifyParamsSize
  */
-void kchannelNotifyGeneric_IMPL
+void kchannelNotifyEvent_IMPL
 (
     KernelChannel *pKernelChannel,
     NvU32          notifyIndex,
+    NvU32          info32,
+    NvU16          info16,
     void          *pNotifyParams,
     NvU32          notifyParamsSize
 )
 {
     OBJGPU                 *pGpu = GPU_RES_GET_GPU(pKernelChannel);
-    ContextDma             *pContextDma;
     EVENTNOTIFICATION      *pEventNotification;
     CLI_CHANNEL_CLASS_INFO  classInfo;
 
@@ -1690,39 +1799,119 @@ void kchannelNotifyGeneric_IMPL
     // validate notifyIndex
     NV_CHECK_OR_RETURN_VOID(LEVEL_INFO, notifyIndex < classInfo.notifiersMaxCount);
 
-    // handle notification if client wants it
-    if (pKernelChannel->pNotifyActions[notifyIndex] != classInfo.eventActionDisable)
-    {
-        // get notifier context dma for the channel
-        if (ctxdmaGetByHandle(RES_GET_CLIENT(pKernelChannel),
-                              pKernelChannel->hErrorContext,
-                              &pContextDma) == NV_OK)
-        {
-            // make sure it's big enough
-            if (pContextDma->Limit >=
-                ((classInfo.notifiersMaxCount * sizeof (NvNotification)) - 1))
-            {
-                // finally, write out the notifier
-                notifyFillNotifierArray(pGpu, pContextDma,
-                                        0x0, 0x0, 0x0,
-                                        notifyIndex);
-            }
-        }
-    }
-
     // handle event if client wants it
     pEventNotification = inotifyGetNotificationList(staticCast(pKernelChannel, INotifier));
     if (pEventNotification != NULL)
     {
+        NV_PRINTF(LEVEL_INFO, "Posting event on channel = 0x%x with info16 = 0x%x\n",
+           kchannelGetDebugTag(pKernelChannel), (NvU32)info16);
         // ping any events on the list of type notifyIndex
-        osEventNotification(pGpu, pEventNotification, notifyIndex, pNotifyParams, notifyParamsSize);
+        osEventNotificationWithInfo(pGpu, pEventNotification, notifyIndex, info32, info16,
+                                    pNotifyParams, notifyParamsSize);
+    }
+    else
+    {
+        NV_PRINTF(LEVEL_INFO, "No event on channel = 0x%x\n", kchannelGetDebugTag(pKernelChannel));
     }
 
-    // reset if single shot notify action
-    if (pKernelChannel->pNotifyActions[notifyIndex] == classInfo.eventActionSingle)
-        pKernelChannel->pNotifyActions[notifyIndex] = classInfo.eventActionDisable;
-
     return;
+}
+
+/**
+ * @brief Writes notifier memory at given index with given info
+ *
+ * @param[in] pKernelChannel
+ * @param[in] notifyIndex
+ * @param[in] info32
+ * @param[in] info16
+ * @parms[in] notifierStatus
+ */
+NV_STATUS kchannelUpdateNotifierMem_IMPL
+(
+    KernelChannel *pKernelChannel,
+    NvU32 notifyIndex,
+    NvU32 info32,
+    NvU16 info16,
+    NvU32 notifierStatus
+)
+{
+    OBJGPU *pGpu = GPU_RES_GET_GPU(pKernelChannel);
+    MEMORY_DESCRIPTOR *pNotifierMemDesc = pKernelChannel->pErrContextMemDesc;
+    NV_ADDRESS_SPACE addressSpace;
+    OBJTMR *pTmr = GPU_GET_TIMER(pGpu);
+    NvU64 time;
+    MemoryManager *pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
+    KernelBus *pKernelBus = GPU_GET_KERNEL_BUS(pGpu);
+    TRANSFER_SURFACE surf = {0};
+    NvNotification *pNotifier = NULL;
+    NvBool bMemEndTransfer = NV_FALSE;
+
+    if (pNotifierMemDesc == NULL)
+        return NV_OK;
+
+    addressSpace = memdescGetAddressSpace(pNotifierMemDesc);
+    if (RMCFG_FEATURE_PLATFORM_GSP)
+        NV_ASSERT_OR_RETURN(addressSpace == ADDR_FBMEM, NV_ERR_INVALID_STATE);
+
+    //
+    // If clients did not allocate enough memory for the doorbell
+    // notifier, return NV_OK so as not to regress older clients
+    //
+    NV_CHECK_OR_RETURN(LEVEL_INFO, memdescGetSize(pNotifierMemDesc) >= (notifyIndex + 1) * sizeof(NvNotification), NV_OK);
+
+    //
+    // we rely on persistent mapping for key rotation notifier
+    // since this may be called in top half and mappings are not allowed
+    // in contexts that can't sleep on KVM or similar HCC systems.
+    //
+    ConfidentialCompute *pConfCompute = GPU_GET_CONF_COMPUTE(pGpu);
+    if ((pConfCompute != NULL) &&
+        (pConfCompute->getProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_KEY_ROTATION_SUPPORTED)) &&
+        (notifyIndex == NV_CHANNELGPFIFO_NOTIFICATION_TYPE_KEY_ROTATION_STATUS))
+    {
+        pNotifier = _kchannelGetKeyRotationNotifier(pKernelChannel);
+        NV_ASSERT_OR_RETURN(pNotifier != NULL, NV_ERR_INVALID_STATE);
+        bMemEndTransfer = NV_FALSE;
+    }
+    else
+    {
+        pNotifier = (NvNotification *)memdescGetKernelMapping(pNotifierMemDesc);
+        if (pNotifier == NULL)
+        {
+            surf.pMemDesc = pNotifierMemDesc;
+            surf.offset = notifyIndex * sizeof(NvNotification);
+
+            pNotifier =
+                (NvNotification *) memmgrMemBeginTransfer(pMemoryManager, &surf,
+                                                          sizeof(NvNotification),
+                                                          TRANSFER_FLAGS_SHADOW_ALLOC);
+            NV_ASSERT_OR_RETURN(pNotifier != NULL, NV_ERR_INVALID_STATE);
+            bMemEndTransfer = NV_TRUE;
+        }
+        else
+        {
+            //
+            // If a CPU pointer has been passed by caller ensure that the notifier
+            // is in sysmem or in case it in vidmem, BAR access to the same is not
+            // blocked (for HCC)
+            //
+            NV_ASSERT_OR_RETURN(
+                memdescGetAddressSpace(pNotifierMemDesc) == ADDR_SYSMEM ||
+                !kbusIsBarAccessBlocked(pKernelBus), NV_ERR_INVALID_ARGUMENT);
+            pNotifier = &pNotifier[notifyIndex];
+        }
+    }
+
+    tmrGetCurrentTime(pTmr, &time);
+
+    notifyFillNvNotification(pGpu, pNotifier, info32, info16,
+                             notifierStatus, NV_TRUE, time);
+
+    if (bMemEndTransfer)
+    {
+        memmgrMemEndTransfer(pMemoryManager, &surf, sizeof(NvNotification), 0);
+    }
+    return NV_OK;
 }
 
 /*!
@@ -1784,7 +1973,6 @@ kchannelGetNotifierInfo
 )
 {
     RsClient   *pRsClient   = RES_GET_CLIENT(pDevice);
-    NvHandle    hDevice     = RES_GET_HANDLE(pDevice);
     ContextDma *pContextDma = NULL;
     Memory     *pMemory     = NULL;
 
@@ -1801,7 +1989,8 @@ kchannelGetNotifierInfo
         return NV_OK;
     }
 
-    if (memGetByHandleAndDevice(pRsClient, hErrorContext, hDevice, &pMemory) ==
+    // Checking by device is not required because the device may be duplicated for uGPU steering
+    if (memGetByHandle(pRsClient, hErrorContext, &pMemory) ==
         NV_OK)
     {
         if (memdescGetAddressSpace(pMemory->pMemDesc) == ADDR_VIRTUAL)
@@ -2084,7 +2273,7 @@ _kchannelAllocOrDescribeInstMem
     // However it is still client allocated userd from GSP RM or host RM on full SRIOV setup
     // perspective so set the flag accordingly.
     //
-    if (!RMCFG_FEATURE_PLATFORM_GSP &&
+    if (!(RMCFG_FEATURE_PLATFORM_GSP && !pKernelChannel->bGspOwned) &&
         !(IS_GFID_VF(gfid) && !gpuIsWarBug200577889SriovHeavyEnabled(pGpu)))
     {
         pKernelChannel->bClientAllocatedUserD = NV_FALSE;
@@ -2107,7 +2296,7 @@ _kchannelAllocOrDescribeInstMem
                 _kchannelDescribeMemDescsHeavySriov(pGpu, pKernelChannel),
                 failed);
     }
-    else if (RMCFG_FEATURE_PLATFORM_GSP ||
+    else if ((RMCFG_FEATURE_PLATFORM_GSP && !pKernelChannel->bGspOwned) ||
         (IS_GFID_VF(gfid) && !gpuIsWarBug200577889SriovHeavyEnabled(pGpu)))
     {
         // On GSPFW or non-heavy SRIOV, describe memdescs from params
@@ -2127,7 +2316,7 @@ _kchannelAllocOrDescribeInstMem
     }
 
     // Setup USERD
-    if (IS_VIRTUAL(pGpu))
+    if (IS_VIRTUAL(pGpu) || IS_GSP_CLIENT(pGpu))
     {
         PMEMORY_DESCRIPTOR pUserdSubDeviceMemDesc =
                 pKernelChannel->pUserdSubDeviceMemDesc[gpumgrGetSubDeviceInstanceFromGpu(pGpu)];
@@ -2176,7 +2365,7 @@ _kchannelDescribeMemDescsFromParams
     NV_ASSERT_OR_RETURN((pKernelChannelGroupApi != NULL), NV_ERR_INVALID_STATE);
     gfid = pKernelChannelGroupApi->pKernelChannelGroup->gfid;
 
-    NV_ASSERT_OR_RETURN(RMCFG_FEATURE_PLATFORM_GSP ||
+    NV_ASSERT_OR_RETURN((RMCFG_FEATURE_PLATFORM_GSP && !pKernelChannel->bGspOwned) ||
                         (IS_GFID_VF(gfid) && !gpuIsWarBug200577889SriovHeavyEnabled(pGpu)),
                         NV_ERR_INVALID_STATE);
 
@@ -2592,6 +2781,12 @@ _kchannelSendChannelAllocRpc
             pRpcParams->internalFlags =
                 FLD_SET_DRF_NUM(_KERNELCHANNEL, _ALLOC_INTERNALFLAGS, _PRIVILEGE,
                     pKernelChannel->privilegeLevel, pRpcParams->internalFlags);
+            if (pKernelChannel->bUvmOwned)
+            {
+                pRpcParams->internalFlags =
+                    FLD_SET_DRF(_KERNELCHANNEL, _ALLOC_INTERNALFLAGS, _UVM_OWNED,
+                        _YES, pRpcParams->internalFlags);
+            }
             pRpcParams->ProcessID = pKernelChannel->ProcessID;
             pRpcParams->SubProcessID= pKernelChannel->SubProcessID;
         }
@@ -2633,11 +2828,13 @@ NV_STATUS kchannelBindToRunlist_IMPL
     ENGDESCRIPTOR  engineDesc
 )
 {
-    OBJGPU    *pGpu;
-    NV_STATUS  status = NV_OK;
+    OBJGPU *pGpu;
+    KernelFifo *pKernelFifo;
+    NV_STATUS status = NV_OK;
 
     NV_ASSERT_OR_RETURN(pKernelChannel != NULL, NV_ERR_INVALID_ARGUMENT);
     pGpu = GPU_RES_GET_GPU(pKernelChannel);
+    pKernelFifo = GPU_GET_KERNEL_FIFO(pGpu);
 
     // copied from setRunlistIdByEngineType
     if ((engineDesc == ENG_SW) || (engineDesc == ENG_BUS))
@@ -2645,14 +2842,10 @@ NV_STATUS kchannelBindToRunlist_IMPL
         return NV_OK;
     }
 
-    //
-    // vGPU:
-    //
-    // Since vGPU does all real hardware management in the
-    // host, if we are in guest OS (where IS_VIRTUAL(pGpu) is true),
-    // do an RPC to the host to do the hardware update.
-    //
-    if (IS_VIRTUAL(pGpu) || IS_GSP_CLIENT(pGpu))
+    if (IS_GSP_CLIENT(pGpu) ||
+        (IS_VIRTUAL(pGpu) &&
+         !(IS_VIRTUAL_WITH_FULL_SRIOV(pGpu) &&
+           kfifoIsPerRunlistChramEnabled(pKernelFifo))))
     {
         NVA06F_CTRL_BIND_PARAMS params;
 
@@ -2666,13 +2859,12 @@ NV_STATUS kchannelBindToRunlist_IMPL
                           sizeof(params),
                           status);
 
-        NV_ASSERT_OR_RETURN(status == NV_OK, status);
+        NV_ASSERT_OK_OR_RETURN(status);
     }
 
     SLI_LOOP_START(SLI_LOOP_FLAGS_BC_ONLY)
 
-    status = kfifoRunlistSetIdByEngine_HAL(pGpu, GPU_GET_KERNEL_FIFO(pGpu),
-                                           pKernelChannel, engineDesc);
+    status = kfifoRunlistSetIdByEngine_HAL(pGpu, pKernelFifo, pKernelChannel, engineDesc);
 
     if (status != NV_OK)
     {
@@ -2687,68 +2879,18 @@ NV_STATUS kchannelBindToRunlist_IMPL
     return status;
 }
 
-//
-// channelCtrlCmdEventSetNotification
-//
-// This command handles set notification operations for all tesla,
-// fermi, kepler, and maxwell based gpfifo classes:
-//
-//    NV50_DISPLAY             (Class: NV5070)
-//    GF100_CHANNEL_GPFIFO     (Class: NV906F)
-//    KEPLER_CHANNEL_GPFIFO_A  (Class: NVA06F)
-//    KEPLER_CHANNEL_GPFIFO_B  (Class: NVA16F)
-//    KEPLER_CHANNEL_GPFIFO_C  (Class: NVA26F)
-//    MAXWELL_CHANNEL_GPFIFO_A (Class: NVB06F)
-//    PASCAL_CHANNEL_GPFIFO_A  (Class: NVC06F)
-//
+/*!
+ * @brief Returns the context ID of a channel
+ *
+ */
 NV_STATUS
-kchannelCtrlCmdEventSetNotification_IMPL
+kchannelCtrlCmdGetContextId_IMPL
 (
     KernelChannel *pKernelChannel,
-    NV906F_CTRL_EVENT_SET_NOTIFICATION_PARAMS *pSetEventParams
+    NVA06F_CTRL_GET_CONTEXT_ID_PARAMS *pParams
 )
 {
-    CLI_CHANNEL_CLASS_INFO classInfo;
-    CALL_CONTEXT *pCallContext = resservGetTlsCallContext();
-    RmCtrlParams *pRmCtrlParams = pCallContext->pControlParams;
-
-    // NV01_EVENT must have been plugged into this subdevice
-    if (inotifyGetNotificationList(staticCast(pKernelChannel, INotifier)) == NULL)
-    {
-        NV_PRINTF(LEVEL_INFO, "cmd 0x%x: no event list\n", pRmCtrlParams->cmd);
-        return NV_ERR_INVALID_STATE;
-    }
-
-    // get channel class-specific properties
-    CliGetChannelClassInfo(REF_VAL(NVXXXX_CTRL_CMD_CLASS, pRmCtrlParams->cmd),
-                           &classInfo);
-
-    if (pSetEventParams->event >= classInfo.notifiersMaxCount)
-    {
-        NV_PRINTF(LEVEL_INFO, "bad event 0x%x\n", pSetEventParams->event);
-        return NV_ERR_INVALID_ARGUMENT;
-    }
-
-    if ((pSetEventParams->action == classInfo.eventActionSingle) ||
-        (pSetEventParams->action == classInfo.eventActionRepeat))
-    {
-        // must be in disabled state to transition to an active state
-        if (pKernelChannel->pNotifyActions[pSetEventParams->event] != classInfo.eventActionDisable)
-        {
-            return NV_ERR_INVALID_STATE;
-        }
-
-        pKernelChannel->pNotifyActions[pSetEventParams->event] = pSetEventParams->action;
-    }
-    else if (pSetEventParams->action == classInfo.eventActionDisable)
-    {
-        pKernelChannel->pNotifyActions[pSetEventParams->event] = pSetEventParams->action;
-    }
-    else
-    {
-        return NV_ERR_INVALID_ARGUMENT;
-    }
-
+    pParams->contextId = kchannelGetCid(pKernelChannel);
     return NV_OK;
 }
 
@@ -2909,31 +3051,8 @@ kchannelCtrlCmdResetChannel_IMPL
     //
     return kchannelFwdToInternalCtrl_HAL(pGpu,
                                          pKernelChannel,
-                                         NVA06F_CTRL_CMD_INTERNAL_RESET_CHANNEL,
+                                         NV906F_CTRL_CMD_RESET_CHANNEL,
                                          pRmCtrlParams);
-}
-
-//
-// channelCtrlCmdEventSetTrigger
-//
-// This command handles set trigger operations for all kepler and maxwell based
-// gpfifo classes:
-//
-//    KEPLER_CHANNEL_GPFIFO_A  (Class: NVA06F)
-//    KEPLER_CHANNEL_GPFIFO_B  (Class: NVA16F)
-//    KEPLER_CHANNEL_GPFIFO_C  (Class: NVA26F)
-//    MAXWELL_CHANNEL_GPFIFO_A (Class: NVB06F)
-//    PASCAL_CHANNEL_GPFIFO_A  (Class: NVC06F)
-//
-NV_STATUS
-kchannelCtrlCmdEventSetTrigger_IMPL
-(
-    KernelChannel *pKernelChannel
-)
-{
-    kchannelNotifyGeneric(pKernelChannel, NVA06F_NOTIFIERS_SW, NULL, 0);
-
-    return NV_OK;
 }
 
 NV_STATUS
@@ -2992,16 +3111,6 @@ kchannelCtrlCmdGpFifoSchedule_IMPL
                                          pKernelChannel,
                                          NVA06F_CTRL_CMD_INTERNAL_GPFIFO_SCHEDULE,
                                          pRmCtrlParams);
-}
-
-NV_STATUS
-kchannelCtrlCmdGetEngineCtxSize_IMPL
-(
-    KernelChannel *pKernelChannel,
-    NVB06F_CTRL_GET_ENGINE_CTX_SIZE_PARAMS *pCtxSizeParams
-)
-{
-    return NV_ERR_NOT_SUPPORTED;
 }
 
 NV_STATUS
@@ -3148,7 +3257,6 @@ kchannelCtrlCmdGpfifoGetWorkSubmitToken_IMPL
     NVC36F_CTRL_CMD_GPFIFO_GET_WORK_SUBMIT_TOKEN_PARAMS *pTokenParams
 )
 {
-    NV_STATUS     rmStatus      = NV_OK;
     OBJGPU       *pGpu          = GPU_RES_GET_GPU(pKernelChannel);
     KernelFifo   *pKernelFifo   = GPU_GET_KERNEL_FIFO(pGpu);
     CALL_CONTEXT *pCallContext  = resservGetTlsCallContext();
@@ -3161,12 +3269,17 @@ kchannelCtrlCmdGpfifoGetWorkSubmitToken_IMPL
                                   !(IS_VIRTUAL_WITH_SRIOV(pGpu) && !bIsMIGEnabled &&
                                     kfifoIsPerRunlistChramEnabled(pKernelFifo)))) &&
                                     (!pKernelFifo->bGuestGenenratesWorkSubmitToken);
+
+    NvBool bGenerateWorkSubmitToken = !bIsModsVgpu || pKernelFifo->bGuestGenenratesWorkSubmitToken;
+
     //
     // vGPU:
     // If required call into the host to get the worksubmit token.
     //
     if (bIsVgpuRpcNeeded)
     {
+        NV_STATUS rmStatus = NV_OK;
+
         NV_RM_RPC_CONTROL(pGpu,
                           pRmCtrlParams->hClient,
                           RES_GET_HANDLE(pKernelChannel),
@@ -3190,18 +3303,20 @@ kchannelCtrlCmdGpfifoGetWorkSubmitToken_IMPL
         }
     }
 
-    if (!bIsModsVgpu || pKernelFifo->bGuestGenenratesWorkSubmitToken)
+    if (bGenerateWorkSubmitToken)
     {
         NV_ASSERT_OR_RETURN(pKernelChannel->pKernelChannelGroupApi != NULL, NV_ERR_INVALID_STATE);
-        NV_ASSERT_OR_RETURN(pKernelChannel->pKernelChannelGroupApi->pKernelChannelGroup != NULL, NV_ERR_INVALID_STATE);
-        rmStatus = kfifoGenerateWorkSubmitToken_HAL(pGpu, pKernelFifo, pKernelChannel,
-                                                    &pTokenParams->workSubmitToken,
-                                                    pKernelChannel->pKernelChannelGroupApi->pKernelChannelGroup->bIsCallingContextVgpuPlugin);
-        NV_CHECK_OR_RETURN(LEVEL_INFO, rmStatus == NV_OK, rmStatus);
+
+        KernelChannelGroup *pKernelChannelGroup = pKernelChannel->pKernelChannelGroupApi->pKernelChannelGroup;
+        NV_ASSERT_OR_RETURN(pKernelChannelGroup != NULL, NV_ERR_INVALID_STATE);
+
+        NV_CHECK_OK_OR_RETURN(LEVEL_INFO,
+            kfifoGenerateWorkSubmitToken(pGpu, pKernelFifo, pKernelChannel,
+                                         &pTokenParams->workSubmitToken,
+                                         pKernelChannelGroup->bIsCallingContextVgpuPlugin));
     }
 
-    rmStatus = kchannelNotifyWorkSubmitToken(pGpu, pKernelChannel, pTokenParams->workSubmitToken);
-    return rmStatus;
+    return kchannelNotifyWorkSubmitToken(pGpu, pKernelChannel, pTokenParams->workSubmitToken);
 }
 
 NV_STATUS
@@ -3229,7 +3344,8 @@ kchannelCtrlCmdGpfifoSetWorkSubmitTokenNotifIndex_IMPL
     NvBool bIsMIGEnabled    = IS_MIG_ENABLED(pGpu);
     NvBool bIsVgpuRpcNeeded = IS_VIRTUAL(pGpu) &&
                               !(IS_VIRTUAL_WITH_SRIOV(pGpu) && !bIsMIGEnabled &&
-                                kfifoIsPerRunlistChramEnabled(pKernelFifo));
+                                kfifoIsPerRunlistChramEnabled(pKernelFifo)) &&
+                              (!pKernelFifo->bGuestGenenratesWorkSubmitToken);
     if (bIsVgpuRpcNeeded)
     {
         CALL_CONTEXT *pCallContext = resservGetTlsCallContext();
@@ -3842,6 +3958,15 @@ kchannelUpdateWorkSubmitTokenNotifIndex_IMPL
     NV_CHECK_OR_RETURN(LEVEL_INFO, index != NV_CHANNELGPFIFO_NOTIFICATION_TYPE_ERROR,
                      NV_ERR_INVALID_ARGUMENT);
 
+    // If key rotation is enabled then clobbering key rotation notifier is disallowed
+    ConfidentialCompute *pConfCompute = GPU_GET_CONF_COMPUTE(pGpu);
+    if ((pConfCompute != NULL) &&
+        (pConfCompute->getProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_KEY_ROTATION_SUPPORTED)))
+    {
+        NV_CHECK_OR_RETURN(LEVEL_ERROR, index != NV_CHANNELGPFIFO_NOTIFICATION_TYPE_KEY_ROTATION_STATUS,
+                           NV_ERR_INVALID_ARGUMENT);
+    }
+
     // Check for integer overflows
     if (((index + 1) < index) ||
         !portSafeMulU64(index + 1, sizeof(NvNotification), &notificationBufferSize))
@@ -3922,125 +4047,16 @@ kchannelNotifyWorkSubmitToken_IMPL
     NvU32 token
 )
 {
-    MEMORY_DESCRIPTOR *pNotifierMemDesc = pKernelChannel->pErrContextMemDesc;
-    NV_ADDRESS_SPACE addressSpace;
     NvU16 notifyStatus = 0x0;
-    NvU32 index;
-    OBJTMR *pTmr = GPU_GET_TIMER(pGpu);
-    NvU64 time;
-    MemoryManager *pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
-    KernelBus *pKernelBus = GPU_GET_KERNEL_BUS(pGpu);
-    TRANSFER_SURFACE surf = {0};
-    NvNotification *pNotifier = NULL;
-    NvBool bMemEndTransfer = NV_FALSE;
-
-    if (pNotifierMemDesc == NULL)
-        return NV_OK;
-
-    index = pKernelChannel->notifyIndex[NV_CHANNELGPFIFO_NOTIFICATION_TYPE_WORK_SUBMIT_TOKEN];
+    NvU32 index = pKernelChannel->notifyIndex[NV_CHANNELGPFIFO_NOTIFICATION_TYPE_WORK_SUBMIT_TOKEN];
 
     notifyStatus =
         FLD_SET_DRF(_CHANNELGPFIFO, _NOTIFICATION_STATUS, _IN_PROGRESS, _TRUE, notifyStatus);
     notifyStatus =
         FLD_SET_DRF_NUM(_CHANNELGPFIFO, _NOTIFICATION_STATUS, _VALUE, 0xFFFF, notifyStatus);
 
-    addressSpace = memdescGetAddressSpace(pNotifierMemDesc);
-    if (RMCFG_FEATURE_PLATFORM_GSP)
-        NV_ASSERT_OR_RETURN(addressSpace == ADDR_FBMEM, NV_ERR_INVALID_STATE);
-
-    //
-    // If clients did not allocate enough memory for the doorbell
-    // notifier, return NV_OK so as not to regress older clients
-    //
-    NV_CHECK_OR_RETURN(LEVEL_INFO, memdescGetSize(pNotifierMemDesc) >= (index + 1) * sizeof(NvNotification), NV_OK);
-
-    pNotifier = (NvNotification *)memdescGetKernelMapping(pNotifierMemDesc);
-    if (pNotifier == NULL)
-    {
-        surf.pMemDesc = pNotifierMemDesc;
-        surf.offset = index * sizeof(NvNotification);
-
-        pNotifier =
-            (NvNotification *) memmgrMemBeginTransfer(pMemoryManager, &surf,
-                                                      sizeof(NvNotification),
-                                                      TRANSFER_FLAGS_SHADOW_ALLOC);
-        NV_ASSERT_OR_RETURN(pNotifier != NULL, NV_ERR_INVALID_STATE);
-        bMemEndTransfer = NV_TRUE;
-    }
-    else
-    {
-        //
-        // If a CPU pointer has been passed by caller ensure that the notifier
-        // is in sysmem or in case it in vidmem, BAR access to the same is not
-        // blocked (for HCC)
-        //
-        NV_ASSERT_OR_RETURN(
-            memdescGetAddressSpace(pNotifierMemDesc) == ADDR_SYSMEM ||
-            !kbusIsBarAccessBlocked(pKernelBus), NV_ERR_INVALID_ARGUMENT);
-        pNotifier = &pNotifier[index];
-    }
-
-    tmrGetCurrentTime(pTmr, &time);
-
-    notifyFillNvNotification(pGpu, pNotifier, token, 0,
-                             notifyStatus, NV_TRUE, time);
-
-    if (bMemEndTransfer)
-    {
-        memmgrMemEndTransfer(pMemoryManager, &surf, sizeof(NvNotification), 0);
-    }
-
-    return NV_OK;
+    return kchannelUpdateNotifierMem(pKernelChannel, index, token, 0, notifyStatus);
 }
-
-/**
- * @brief Alloc and set up pNotifyActions
- *
- * @param[in]  pKernelChannel
- * @param[in]  classNuml           Channel class
- *
- * @return  NV_OK or error code
- */
-static NV_STATUS
-_kchannelSetupNotifyActions
-(
-    KernelChannel *pKernelChannel,
-    NvU32          classNum
-)
-{
-    CLI_CHANNEL_CLASS_INFO classInfo;
-
-    // Allocate notifier action table for the maximum supported by this class
-    CliGetChannelClassInfo(classNum, &classInfo);
-    if (classInfo.notifiersMaxCount > 0)
-    {
-        pKernelChannel->pNotifyActions = portMemAllocNonPaged(
-                                   classInfo.notifiersMaxCount * sizeof(*pKernelChannel->pNotifyActions));
-        if (pKernelChannel->pNotifyActions == NULL)
-            return NV_ERR_NO_MEMORY;
-
-        portMemSet(pKernelChannel->pNotifyActions, 0,
-                 classInfo.notifiersMaxCount * sizeof(*pKernelChannel->pNotifyActions));
-    }
-
-    return NV_OK;
-} // end of _kchannelSetupNotifyActions()
-
-/**
- * @brief Cleans up pNotifyActions
- *
- * @param[in] pKernelChannel
- */
-static void
-_kchannelCleanupNotifyActions
-(
-    KernelChannel *pKernelChannel
-)
-{
-    // free memory associated with notify actions table
-    portMemFree(pKernelChannel->pNotifyActions);
-    pKernelChannel->pNotifyActions = NULL;
-} // end of _kchannelCleanupNotifyActions()
 
 static NV_STATUS
 _kchannelNotifyOfChid
@@ -4148,17 +4164,15 @@ kchannelGetChannelPhysicalState_KERNEL
 {
     CALL_CONTEXT *pCallContext  = resservGetTlsCallContext();
     RmCtrlParams *pRmCtrlParams = pCallContext->pControlParams->pLegacyParams;
-    NV_STATUS status = NV_OK;
+    RM_API *pRmApi = GPU_GET_PHYSICAL_RMAPI(pGpu);
 
     // Get the physical state from GSP
-    NV_RM_RPC_CONTROL(pGpu,
-                      pRmCtrlParams->hClient,
-                      pRmCtrlParams->hObject,
-                      pRmCtrlParams->cmd,
-                      pRmCtrlParams->pParams,
-                      pRmCtrlParams->paramsSize,
-                      status);
-    NV_ASSERT_OK_OR_RETURN(status);
+    NV_ASSERT_OK_OR_RETURN(pRmApi->Control(pRmApi,
+                                           pRmCtrlParams->hClient,
+                                           pRmCtrlParams->hObject,
+                                           NV208F_CTRL_CMD_FIFO_GET_CHANNEL_STATE,
+                                           pChannelStateParams,
+                                           sizeof(*pChannelStateParams)));
 
     return NV_OK;
 }
@@ -4418,12 +4432,12 @@ _kchannelUpdateFifoMapping
     pMapping->pContext            = (void*)(NvUPtr)pKernelChannel->ChID;
 }
 
-NV_STATUS kchannelRetrieveKmb_KERNEL
+NV_STATUS kchannelDeriveAndRetrieveKmb_KERNEL
 (
     OBJGPU *pGpu,
     KernelChannel *pKernelChannel,
     ROTATE_IV_TYPE rotateOperation,
-    NvBool includeSecrets,
+    NvBool bIncludeIvOrNonce,
     CC_KMB *keyMaterialBundle
 )
 {
@@ -4431,8 +4445,11 @@ NV_STATUS kchannelRetrieveKmb_KERNEL
 
     NV_ASSERT(pCC != NULL);
 
+    NV_ASSERT_OK_OR_RETURN(confComputeKeyStoreDeriveViaChannel_HAL(pCC, pKernelChannel, rotateOperation,
+                                                                   bIncludeIvOrNonce, keyMaterialBundle));
+
     return (confComputeKeyStoreRetrieveViaChannel_HAL(pCC, pKernelChannel, rotateOperation,
-                                                      includeSecrets, keyMaterialBundle));
+                                                      bIncludeIvOrNonce, keyMaterialBundle));
 }
 
 /*!
@@ -4448,45 +4465,88 @@ kchannelCtrlCmdGetKmb_KERNEL
     NVC56F_CTRL_CMD_GET_KMB_PARAMS *pGetKmbParams
 )
 {
+    NV_STATUS status = NV_OK;
     if (!pKernelChannel->bCCSecureChannel)
     {
         return NV_ERR_NOT_SUPPORTED;
     }
 
+    OBJGPU *pGpu = GPU_RES_GET_GPU(pKernelChannel);
+    ConfidentialCompute *pConfCompute = GPU_GET_CONF_COMPUTE(pGpu);
+    if ((pConfCompute != NULL) && pConfCompute->getProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_KEY_ROTATION_SUPPORTED))
+    {
+        KEY_ROTATION_STATUS state;
+        NvU32 h2dKey;
+        NV_ASSERT_OK_OR_RETURN(confComputeGetKeyPairByChannel(pGpu, pConfCompute, pKernelChannel, &h2dKey, NULL));
+        NV_ASSERT_OK_OR_RETURN(confComputeGetKeyRotationStatus(pConfCompute, h2dKey, &state));
+        if ((state != KEY_ROTATION_STATUS_IDLE) ||
+            (kchannelIsDisabledForKeyRotation(pGpu, pKernelChannel)))
+        {
+            return NV_ERR_KEY_ROTATION_IN_PROGRESS;
+        }
+    }
+
     portMemCopy((void*)(&pGetKmbParams->kmb), sizeof(CC_KMB),
                 (const void*)(&pKernelChannel->clientKmb), sizeof(CC_KMB));
+    confComputeGetKeyRotationThreshold(pConfCompute,
+                                       &pGetKmbParams->keyRotationLowerThreshold,
+                                       &pGetKmbParams->keyRotationUpperThreshold);
 
-    if (pKernelChannel->pEncStatsBufMemDesc == NULL)
+    if ((pConfCompute != NULL) && pConfCompute->getProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_KEY_ROTATION_SUPPORTED))
     {
+        RM_API            *pRmApi         = rmapiGetInterface(RMAPI_GPU_LOCK_INTERNAL);
         RsClient          *pRsClient      = NULL;
         RsResourceRef     *pResourceRef   = NULL;
-        Memory            *pMemory        = NULL;
-        MEMORY_DESCRIPTOR *pMemDesc       = NULL;
-        OBJGPU            *pGpu           = GPU_RES_GET_GPU(pKernelChannel);
         NvHandle           hClient        = RES_GET_CLIENT_HANDLE(pKernelChannel);
+        NvHandle           hDevice        = RES_GET_HANDLE(GPU_RES_GET_DEVICE(pKernelChannel));
 
         NV_ASSERT_OK_OR_RETURN(serverGetClientUnderLock(&g_resServ, hClient, &pRsClient));
-        if (clientGetResourceRef(pRsClient, pGetKmbParams->hMemory, &pResourceRef) != NV_OK)
+        // check if a valid memory handle was passed to us
+        if (clientGetResourceRef(pRsClient, pGetKmbParams->hMemory, &pResourceRef) == NV_OK)
         {
-            // TODO: Make this fatal once all cients move to using hMemory
-            return NV_OK;
-        } 
-        pMemory = dynamicCast(pResourceRef->pResource, Memory);
-        pMemDesc = pMemory->pMemDesc;
-        NV_ASSERT_OR_RETURN(pMemDesc != NULL, NV_ERR_INVALID_ARGUMENT);
-        pKernelChannel->pEncStatsBufMemDesc = pMemDesc;
+            //
+            // If a buffer already exists then remove it as we
+            // will replace it with a new buffer.
+            //
+            if (pKernelChannel->pEncStatsBuf != NULL)
+            {
+                NV_ASSERT_OK_OR_RETURN(kchannelSetEncryptionStatsBuffer_HAL(pGpu, pKernelChannel, NULL, NV_FALSE));
+                pRmApi->Free(pRmApi, hClient, pKernelChannel->hEncryptStatsBuf);
+            }
 
-        // Reset statistics to init the buffer
-        MemoryManager *pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
-        TRANSFER_SURFACE surf = {0};
-        surf.pMemDesc = pMemory->pMemDesc;
-        surf.offset = 0;
-        CC_CRYPTOBUNDLE_STATS *pEncStats = (CC_CRYPTOBUNDLE_STATS*)memmgrMemBeginTransfer(pMemoryManager, &surf,
-                                                                       sizeof(CC_CRYPTOBUNDLE_STATS), TRANSFER_FLAGS_SHADOW_ALLOC);
-        portMemSet(pEncStats, 0, sizeof(CC_CRYPTOBUNDLE_STATS));
-        memmgrMemEndTransfer(pMemoryManager, &surf, sizeof(CC_CRYPTOBUNDLE_STATS), 0);
+            // dup the memory handle under the same client
+            NV_ASSERT_OK_OR_RETURN(pRmApi->DupObject(pRmApi, hClient, hDevice,
+                                                     &pKernelChannel->hEncryptStatsBuf,
+                                                     hClient, pGetKmbParams->hMemory, 0));
+            NV_ASSERT_OK_OR_GOTO(status, 
+                clientGetResourceRef(pRsClient, pKernelChannel->hEncryptStatsBuf, &pResourceRef),
+                cleanup);
+            Memory *pMemory = dynamicCast(pResourceRef->pResource, Memory);
+            NV_ASSERT_OR_ELSE((pMemory != NULL) && (pMemory->pMemDesc != NULL),
+                status = NV_ERR_INVALID_ARGUMENT;
+                goto cleanup);
+            NV_ASSERT_OK_OR_GOTO(status, 
+                kchannelSetEncryptionStatsBuffer_HAL(pGpu, pKernelChannel, pMemory->pMemDesc, NV_TRUE),
+                cleanup);
+        }
+
+        //
+        // Reset statistics every time GET_KMB is called irrespective of whether
+        // a new encrypt stats buffer was created or not.
+        //
+        if (pKernelChannel->pEncStatsBuf != NULL)
+        {
+            portMemSet(pKernelChannel->pEncStatsBuf, 0, sizeof(CC_CRYPTOBUNDLE_STATS));
+        }
+
+cleanup:
+        if (status != NV_OK)
+        {
+            pRmApi->Free(pRmApi, hClient, pKernelChannel->hEncryptStatsBuf);
+        }
     }
-    return NV_OK;
+
+    return status;
     return NV_ERR_NOT_SUPPORTED;
 }
 
@@ -4508,6 +4568,7 @@ kchannelCtrlRotateSecureChannelIv_KERNEL
 {
     NV_STATUS            status            = NV_OK;
     OBJGPU              *pGpu              = GPU_RES_GET_GPU(pKernelChannel);
+    RM_API              *pRmApi            = GPU_GET_PHYSICAL_RMAPI(pGpu);
     ConfidentialCompute *pCC               = GPU_GET_CONF_COMPUTE(pGpu);
     ROTATE_IV_TYPE       rotateIvOperation = pRotateIvParams->rotateIvType;
 
@@ -4540,13 +4601,12 @@ kchannelCtrlRotateSecureChannelIv_KERNEL
 
     pRotateIvParams->rotateIvType = rotateIvOperation;
 
-    NV_RM_RPC_CONTROL(pGpu,
-                      RES_GET_CLIENT_HANDLE(pKernelChannel),
-                      RES_GET_HANDLE(pKernelChannel),
-                      NVC56F_CTRL_ROTATE_SECURE_CHANNEL_IV,
-                      pRotateIvParams,
-                      sizeof(*pRotateIvParams),
-                      status);
+    status = pRmApi->Control(pRmApi,
+                             RES_GET_CLIENT_HANDLE(pKernelChannel),
+                             RES_GET_HANDLE(pKernelChannel),
+                             NVC56F_CTRL_ROTATE_SECURE_CHANNEL_IV,
+                             pRotateIvParams,
+                             sizeof(*pRotateIvParams));
 
     if (status != NV_OK)
     {
@@ -4581,7 +4641,7 @@ kchannelCtrlRotateSecureChannelIv_PHYSICAL
 )
 {
     NV_STATUS status;
-    
+
     NV_PRINTF(LEVEL_INFO, "Rotating IV in GSP-RM.\n");
 
     // CPU-side encrypt IV corresponds to GPU-side decrypt IV.
@@ -4716,4 +4776,143 @@ void kchannelEnableAfterKeyRotation
         pKernelChannel->swState[gpumgrGetSubDeviceInstanceFromGpu(pGpu)] &=
         ~KERNEL_CHANNEL_SW_STATE_ENABLE_AFTER_KEY_ROTATION;
     }
+}
+
+/*!
+ * Creates/destroys persistent mappings for key rotation notifier
+ */
+NV_STATUS
+kchannelSetKeyRotationNotifier_KERNEL
+(
+    OBJGPU *pGpu,
+    KernelChannel *pKernelChannel,
+    NvBool bSet
+)
+{
+    NV_STATUS status = NV_OK;
+    MEMORY_DESCRIPTOR *pNotifierMemDesc = pKernelChannel->pErrContextMemDesc;
+    MemoryManager *pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
+    NV_ASSERT_OR_RETURN(pNotifierMemDesc != NULL, NV_ERR_INVALID_STATE);
+    NV_ADDRESS_SPACE addressSpace = memdescGetAddressSpace(pNotifierMemDesc);
+    NvU32 notifyIndex = NV_CHANNELGPFIFO_NOTIFICATION_TYPE_KEY_ROTATION_STATUS;
+    if (bSet)
+    {
+        NV_ASSERT_OR_RETURN(memdescGetSize(pNotifierMemDesc) >= ((notifyIndex + 1) * sizeof(NvNotification)),
+                            NV_ERR_INVALID_ARGUMENT);
+
+        NV_ASSERT_OR_RETURN(addressSpace == ADDR_SYSMEM, NV_ERR_NOT_SUPPORTED);
+        if (pKernelChannel->pKeyRotationNotifierMemDesc == NULL)
+        {
+            NV_ASSERT_OK_OR_RETURN(memdescCreateSubMem(&pKernelChannel->pKeyRotationNotifierMemDesc,
+                                                       pNotifierMemDesc, pGpu, notifyIndex * sizeof(NvNotification),
+                                                       sizeof(NvNotification)));
+
+            pKernelChannel->pKeyRotationNotifier =
+                (NvNotification *) memmgrMemDescBeginTransfer(pMemoryManager,
+                                                              pKernelChannel->pKeyRotationNotifierMemDesc,
+                                                              TRANSFER_FLAGS_SHADOW_ALLOC);
+            NV_ASSERT_OR_ELSE(pKernelChannel->pKeyRotationNotifier != NULL, status = NV_ERR_INVALID_STATE; goto done;);
+
+            portMemSet((void*)pKernelChannel->pKeyRotationNotifier, 0, sizeof(NvNotification));
+        }
+    }
+    else
+    {
+        if (pKernelChannel->pKeyRotationNotifierMemDesc != NULL)
+        {
+            if (pKernelChannel->pKeyRotationNotifier != NULL)
+            {
+                memmgrMemDescEndTransfer(pMemoryManager,
+                                         pKernelChannel->pKeyRotationNotifierMemDesc,
+                                         TRANSFER_FLAGS_SHADOW_ALLOC);
+                pKernelChannel->pKeyRotationNotifier = NULL;
+            }
+            memdescDestroy(pKernelChannel->pKeyRotationNotifierMemDesc);
+            pKernelChannel->pKeyRotationNotifierMemDesc = NULL;
+        }
+    }
+
+done:
+    if (status != NV_OK)
+    {
+        if (pKernelChannel->pKeyRotationNotifierMemDesc != NULL)
+        {
+            memdescDestroy(pKernelChannel->pKeyRotationNotifierMemDesc);
+            pKernelChannel->pKeyRotationNotifierMemDesc = NULL;
+        }
+    }
+    return status;
+}
+
+/*!
+ * Creates/destroys persistent mappings for encryption stats buffer
+ */
+NV_STATUS
+kchannelSetEncryptionStatsBuffer_KERNEL
+(
+    OBJGPU *pGpu,
+    KernelChannel *pKernelChannel,
+    MEMORY_DESCRIPTOR *pMemDesc,
+    NvBool bSet
+)
+{
+    MemoryManager *pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
+    if (bSet)
+    {
+        NV_ASSERT_OR_RETURN(pMemDesc != NULL, NV_ERR_INVALID_ARGUMENT);
+        NV_ASSERT_OR_RETURN(pKernelChannel->pEncStatsBuf == NULL, NV_ERR_INVALID_STATE);
+
+        if (kchannelCheckIsKernel(pKernelChannel))
+        {
+            //
+            // kernel channels use ccslContextInitViaChannel and don't supply a mem handle to be duped.
+            // so we need to refcount in this case.
+            //
+            NV_ASSERT_OK_OR_RETURN(memdescCreateSubMem(&pKernelChannel->pEncStatsBufMemDesc, pMemDesc, pGpu,
+                                                       0, memdescGetSize(pMemDesc)));
+        }
+        else
+        {
+            pKernelChannel->pEncStatsBufMemDesc = pMemDesc;
+        }
+        //
+        // we rely on persistent mapping for encryption statistics buffer
+        // since these will be used in top half and mappings are not allowed
+        // in contexts that can't sleep on KVM or similar HCC systems.
+        //
+        pKernelChannel->pEncStatsBuf =
+            (CC_CRYPTOBUNDLE_STATS*)memmgrMemDescBeginTransfer(pMemoryManager, pKernelChannel->pEncStatsBufMemDesc,
+                                                               TRANSFER_FLAGS_SHADOW_ALLOC);
+        if (pKernelChannel->pEncStatsBuf == NULL)
+        {
+            if (kchannelCheckIsKernel(pKernelChannel))
+            {
+                memdescDestroy(pKernelChannel->pEncStatsBufMemDesc);
+            }
+            pKernelChannel->pEncStatsBufMemDesc = NULL;
+            return NV_ERR_INVALID_STATE;
+        }
+        portMemSet(pKernelChannel->pEncStatsBuf, 0, sizeof(CC_CRYPTOBUNDLE_STATS));
+    }
+    else
+    {
+        // Free persistent mappings for encryption stats buffer
+        NV_ASSERT_OR_RETURN(pKernelChannel->pEncStatsBufMemDesc != NULL, NV_ERR_INVALID_STATE);
+        memmgrMemDescEndTransfer(pMemoryManager, pKernelChannel->pEncStatsBufMemDesc,
+                                 TRANSFER_FLAGS_SHADOW_ALLOC);
+        pKernelChannel->pEncStatsBuf = NULL;
+        if (kchannelCheckIsKernel(pKernelChannel))
+        {
+            NV_ASSERT(memdescIsSubMemoryMemDesc(pKernelChannel->pEncStatsBufMemDesc));
+            memdescDestroy(pKernelChannel->pEncStatsBufMemDesc);
+        }
+        pKernelChannel->pEncStatsBufMemDesc = NULL;
+    }
+    return NV_OK;
+}
+
+static NvNotification*
+_kchannelGetKeyRotationNotifier(KernelChannel *pKernelChannel)
+{
+    return pKernelChannel->pKeyRotationNotifier;
 }

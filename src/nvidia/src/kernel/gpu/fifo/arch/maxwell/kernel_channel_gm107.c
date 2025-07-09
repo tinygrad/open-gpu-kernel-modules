@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -29,6 +29,7 @@
 #include "gpu/mem_mgr/mem_mgr.h"
 #include "gpu/mem_mgr/mem_desc.h"
 #include "platform/sli/sli.h"
+#include "containers/eheap_old.h"
 
 #include "class/cl906f.h"
 
@@ -203,7 +204,8 @@ NV_STATUS kchannelAllocMem_GM107
     }
 
     ///  Alloc Instance block
-    if (IsSLIEnabled(pGpu) || IS_GSP_CLIENT(pGpu))
+    if ((IsSLIEnabled(pGpu) || IS_GSP_CLIENT(pGpu)) &&
+        !pGpu->getProperty(pGpu, PDB_PROP_GPU_ZERO_FB))
     {
         pInstAllocList = ADDRLIST_FBMEM_ONLY;
         CpuCacheAttrib = NV_MEMORY_UNCACHED;
@@ -619,12 +621,7 @@ kchannelGetUserdBar1MapOffset_GM107
 
     NV_ASSERT_OR_RETURN(pKernelChannel != NULL, NV_ERR_INVALID_ARGUMENT);
 
-    //
-    // only supported when bUsePerRunlistChannelRam is disabled.
-    // We don't pre-allocate userd for all channels across all runlists; we expect
-    // clients to have moved to client allocated userd.
-    //
-    NV_ASSERT_OR_RETURN(!kfifoIsPerRunlistChramEnabled(pKernelFifo),
+    NV_ASSERT_OR_RETURN(kfifoIsPreAllocatedUserDEnabled(pKernelFifo),
                         NV_ERR_NOT_SUPPORTED);
 
     if (pUserdInfo->userdBar1MapSize == 0)

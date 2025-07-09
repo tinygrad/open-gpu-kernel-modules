@@ -40,9 +40,6 @@ NV_KERNEL_MODULE_TARGETS += $(NVIDIA_MODESET_KO)
 NVIDIA_MODESET_BINARY_OBJECT := $(src)/nvidia-modeset/nv-modeset-kernel.o_binary
 NVIDIA_MODESET_BINARY_OBJECT_O := nvidia-modeset/nv-modeset-kernel.o
 
-quiet_cmd_symlink = SYMLINK $@
-cmd_symlink = ln -sf $< $@
-
 targets += $(NVIDIA_MODESET_BINARY_OBJECT_O)
 
 $(obj)/$(NVIDIA_MODESET_BINARY_OBJECT_O): $(NVIDIA_MODESET_BINARY_OBJECT) FORCE
@@ -55,7 +52,7 @@ nvidia-modeset-y += $(NVIDIA_MODESET_BINARY_OBJECT_O)
 # Define nvidia-modeset.ko-specific CFLAGS.
 #
 
-NVIDIA_MODESET_CFLAGS += -I$(src)/nvidia-modeset
+NVIDIA_MODESET_CFLAGS += -I$(src)/nvidia-modeset -I$(src)/common/inc
 NVIDIA_MODESET_CFLAGS += -UDEBUG -U_DEBUG -DNDEBUG -DNV_BUILD_MODULE_INSTANCES=0
 
 # Some Android kernels prohibit driver use of filesystem functions like
@@ -105,3 +102,6 @@ NV_CONFTEST_FUNCTION_COMPILE_TESTS += list_is_first
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += ktime_get_real_ts64
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += ktime_get_raw_ts64
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += acpi_video_backlight_use_native
+NV_CONFTEST_FUNCTION_COMPILE_TESTS += acpi_video_register_backlight
+NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_present_timer_delete_sync
+NV_CONFTEST_FUNCTION_COMPILE_TESTS += kernel_read_has_pointer_pos_arg

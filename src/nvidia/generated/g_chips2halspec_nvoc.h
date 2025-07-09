@@ -1,11 +1,21 @@
+
 #ifndef _G_CHIPS2HALSPEC_NVOC_H_
 #define _G_CHIPS2HALSPEC_NVOC_H_
+
+// Version of generated metadata structures
+#ifdef NVOC_METADATA_VERSION
+#undef NVOC_METADATA_VERSION
+#endif
+#define NVOC_METADATA_VERSION 2
+
 #include "nvoc/runtime.h"
+#include "nvoc/rtti.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+#pragma once
 #include "g_chips2halspec_nvoc.h"
 
 #ifndef _CHIPS_2_HALSPEC_H_
@@ -16,8 +26,8 @@ extern "C" {
 
 // Several WARs that only visible by NVOC compiler
 
-#define GPUHAL_ARCH(x)      NV_PMC_BOOT_0_ARCHITECTURE_##x
-#define GPUHAL_IMPL(x)      NV_PMC_BOOT_0_IMPLEMENTATION_##x
+#define GPUHAL_ARCH(x)      NV_PMC_BOOT_42_ARCHITECTURE_##x
+#define GPUHAL_IMPL(x)      NV_PMC_BOOT_42_IMPLEMENTATION_##x
 
 // Create alias 'group' to provide a concise syntax
 #define group variant_group
@@ -37,7 +47,7 @@ void __nvoc_init_halspec_ChipHal(ChipHal*, NvU32, NvU32, NvU32);
  * For Legacy iGPUs, we have two type Tegra chips in Chips.pm
  *   TEGRA_DGPU : The iGPU Core inside the Tegra Soc Chip with PCIE interface.
  *                The behavior is more like a dGPU.  Such chip is generally
- *                added to dGPU (CLASSIC-GPUS) chip family.  E.g. GA10B
+ *                added to dGPU (CLASSIC_GPUS) chip family.  E.g. GA10B
  *                This is generally the test chip used in MODS Arch validation
  *                that shares the test infrastructure with dGPU.
  *
@@ -133,6 +143,12 @@ void __nvoc_init_halspec_DispIpHal(DispIpHal*, NvU32);
 // delete ~DISPv0401 & (GA102 | GA103 | GA104 | GA106 | GA107);
 // delete DISPv0404 & ~(AD102 | AD103 | AD104 | AD106 | AD107);
 // delete ~DISPv0404 & (AD102 | AD103 | AD104 | AD106 | AD107);
+// delete DISPv0501 & ~GB10B;
+// delete ~DISPv0501 & GB10B;
+// delete DISPv0502 & ~(GB202 | GB203 | GB205 | GB206 | GB207);
+// delete ~DISPv0502 & (GB202 | GB203 | GB205 | GB206 | GB207);
+// delete DISPv0503 & ~GB20B;
+// delete ~DISPv0503 & GB20B;
 
 
 /* DPU IP versions */

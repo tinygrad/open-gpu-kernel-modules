@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -162,39 +162,18 @@ workItemLocksAcquire(NvU32 gpuInstance, NvU32 flags, NvU32 *pReleaseLocks, NvU32
         *pReleaseLocks |= releaseFlags;
     }
 
-    if ((flags & OS_QUEUE_WORKITEM_FLAGS_LOCK_GPUS_RW) ||
-        (flags & OS_QUEUE_WORKITEM_FLAGS_LOCK_GPUS_RO) ||
-        (flags & OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_DEVICE_RW) ||
-        (flags & OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_DEVICE_RO) ||
-        (flags & OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_SUBDEVICE_RW) ||
-        (flags & OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_SUBDEVICE_RO))
+    if ((flags & OS_QUEUE_WORKITEM_FLAGS_LOCK_GPUS) ||
+        (flags & OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_DEVICE) ||
+        (flags & OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_SUBDEVICE))
     {
         NvU32 gpuLockFlags = GPUS_LOCK_FLAGS_NONE;
-        NvU32 releaseFlags = OS_QUEUE_WORKITEM_FLAGS_LOCK_GPUS_RW;
 
-        if (((flags & OS_QUEUE_WORKITEM_FLAGS_LOCK_GPUS_RO) ||
-             (flags & OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_DEVICE_RO) ||
-             (flags & OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_SUBDEVICE_RO)) &&
-            (pSys->gpuLockModuleMask & RM_LOCK_MODULE_GRP(RM_LOCK_MODULES_WORKITEM)))
-        {
-            gpuLockFlags = GPU_LOCK_FLAGS_READ;
-            releaseFlags = OS_QUEUE_WORKITEM_FLAGS_LOCK_GPUS_RO;
-        }
-
-        if (flags & OS_QUEUE_WORKITEM_FLAGS_LOCK_GPUS_RW)
+        if (flags & OS_QUEUE_WORKITEM_FLAGS_LOCK_GPUS)
             grp = GPU_LOCK_GRP_ALL;
-        else if (flags & OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_DEVICE_RW)
+        else if (flags & OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_DEVICE)
             grp = GPU_LOCK_GRP_DEVICE;
-        else // (flags & OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_SUBDEVICE_RW)
+        else // (flags & OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_SUBDEVICE)
             grp = GPU_LOCK_GRP_SUBDEVICE;
-
-        status = rmGpuGroupLockAcquire(gpuInstance, grp, gpuLockFlags,
-                                       RM_LOCK_MODULES_WORKITEM, pGpuMask);
-        if (status != NV_OK)
-            goto done;
-
-        // All of these call into the same function, just share the flag
-        *pReleaseLocks |= releaseFlags;
 
         pGpu = gpumgrGetGpu(gpuInstance);
         if (pGpu == NULL)
@@ -202,6 +181,14 @@ workItemLocksAcquire(NvU32 gpuInstance, NvU32 flags, NvU32 *pReleaseLocks, NvU32
             status = NV_ERR_INVALID_ARGUMENT;
             goto done;
         }
+
+        status = rmGpuGroupLockAcquire(gpuInstance, grp, gpuLockFlags,
+                                       RM_LOCK_MODULES_WORKITEM, pGpuMask);
+        if (status != NV_OK)
+            goto done;
+
+        // All of these call into the same function, just share the flag
+        *pReleaseLocks |= OS_QUEUE_WORKITEM_FLAGS_LOCK_GPUS;
 
         if (flags & OS_QUEUE_WORKITEM_FLAGS_FULL_GPU_SANITY)
         {
@@ -243,14 +230,9 @@ workItemLocksRelease(NvU32 releaseLocks, NvU32 gpuMask)
 {
     OBJSYS *pSys = SYS_GET_INSTANCE();
 
-    if (releaseLocks & OS_QUEUE_WORKITEM_FLAGS_LOCK_GPUS_RW)
+    if (releaseLocks & OS_QUEUE_WORKITEM_FLAGS_LOCK_GPUS)
     {
         rmGpuGroupLockRelease(gpuMask, GPUS_LOCK_FLAGS_NONE);
-    }
-
-    if (releaseLocks & OS_QUEUE_WORKITEM_FLAGS_LOCK_GPUS_RO)
-    {
-        rmGpuGroupLockRelease(gpuMask, GPU_LOCK_FLAGS_READ);
     }
 
     if ((releaseLocks & OS_QUEUE_WORKITEM_FLAGS_LOCK_API_RW) ||

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2004-2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2004-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -895,6 +895,29 @@ Intel_7A04_setupFunc
 }
 
 static NV_STATUS
+Intel_5795_setupFunc
+(
+    OBJCL *pCl
+)
+{
+    pCl->setProperty(pCl, PDB_PROP_CL_RELAXED_ORDERING_NOT_CAPABLE, NV_TRUE);
+
+    return NV_OK;
+}
+
+static NV_STATUS
+Intel_1B81_setupFunc
+(
+    OBJCL *pCl
+)
+{
+    pCl->setProperty(pCl, PDB_PROP_CL_RELAXED_ORDERING_NOT_CAPABLE, NV_TRUE);
+
+    return NV_OK;
+}
+
+
+static NV_STATUS
 Nvidia_T210_setupFunc
 (
     OBJCL *pCl
@@ -1114,6 +1137,9 @@ AMD_X370_setupFunc
     OBJCL *pCl
 )
 {
+
+    // WAR for bug 5107271 handling
+    pCl->setProperty(pCl, PDB_PROP_CL_WAR_AMD_5107271, NV_TRUE);
 
     // Set ASPM L0S\L1 properties
     _Set_ASPM_L0S_L1(pCl, NV_FALSE, NV_FALSE);

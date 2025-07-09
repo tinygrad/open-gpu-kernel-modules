@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2012-2021 NVIDIA CORPORATION & AFFILIATES
+ * SPDX-FileCopyrightText: Copyright (c) 2012-2024 NVIDIA CORPORATION & AFFILIATES
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -102,9 +102,10 @@ struct _NVLOG_BUFFER
 
 #define NVLOG_MAX_BUFFERS_v11       16
 #define NVLOG_MAX_BUFFERS_v12       256
+#define NVLOG_MAX_BUFFERS_v13       3840
 
-#define NVLOG_MAX_BUFFERS           NVLOG_MAX_BUFFERS_v12
-#define NVLOG_LOGGER_VERSION        12          // v1.2
+#define NVLOG_MAX_BUFFERS           NVLOG_MAX_BUFFERS_v13
+#define NVLOG_LOGGER_VERSION        13          // v1.3
 
 // Due to this file's peculiar location, NvPort may or may not be includable
 typedef struct PORT_SPINLOCK PORT_SPINLOCK;
@@ -437,6 +438,26 @@ typedef enum _NVLOG_ARGTYPE
     NVLOG_ARGTYPE_FLOAT,
     NVLOG_ARGTYPE__COUNT
 } NVLOG_ARGTYPE;
+
+// Default flags for NvLog registry, used for single-buffer option or the read fails
+#ifndef   NVLOG_DEFAULT_FLAGS
+#define   NVLOG_DEFAULT_FLAGS                                                  \
+    (                                                                          \
+        DRF_NUM(_REG_STR_RM, _NVLOG, _BUFFER_FLAGS,                            \
+            (                                                                  \
+                DRF_DEF(LOG, _BUFFER_FLAGS, _DISABLED,   _NO)       |          \
+                DRF_DEF(LOG, _BUFFER_FLAGS, _TYPE,       _RING)     |          \
+                DRF_DEF(LOG, _BUFFER_FLAGS, _EXPANDABLE, _NO)       |          \
+                DRF_DEF(LOG, _BUFFER_FLAGS, _NONPAGED,   _YES)      |          \
+                DRF_DEF(LOG, _BUFFER_FLAGS, _LOCKING,    _STATE)    |          \
+                DRF_DEF(LOG, _BUFFER_FLAGS, _OCA,        _YES)                 \
+            ))                                                      |          \
+        DRF_DEF(_REG_STR_RM, _NVLOG, _BUFFER_SIZE,   _DEFAULT)      |          \
+        DRF_NUM(_REG_STR_RM, _NVLOG, _RUNTIME_LEVEL, 0)             |          \
+        DRF_DEF(_REG_STR_RM, _NVLOG, _TIMESTAMP,     _64)           |          \
+        DRF_DEF(_REG_STR_RM, _NVLOG, _INITED,        _YES)                     \
+    )
+#endif // NVLOG_DEFAULT_FLAGS
 
 /**
  * @brief General info about the NvLog Print system

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1999-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1999-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -330,6 +330,9 @@ typedef struct
     /* Flag to check if S0ix-based power management is enabled. */
     NvBool s0ix_pm_enabled;
 
+    /* Variable to track Dynamic Boost support */
+    int db_supported;
+
     /*
      * Maximum FB allocation size which can be saved in system memory
      * during system supened with S0ix-based power management.
@@ -338,6 +341,15 @@ typedef struct
 
     NvU32 pmc_boot_1;
     NvU32 pmc_boot_42;
+
+    /*
+     * This flag is set if the upstream port has been configured ("D3cold Aux Power Limit" and
+     * "PERST# Assertion Delay") for GC6. This configuration is needed only for desktops.
+     */
+    NvBool gc6_upstream_port_configured;
+
+    /* This flag is set if _PR3 ACPI method is available to support RTD3. */
+    NvBool pr3_acpi_method_present;
 } nv_priv_t;
 
 #define NV_SET_NV_PRIV(nv,p) ((nv)->priv = (p))

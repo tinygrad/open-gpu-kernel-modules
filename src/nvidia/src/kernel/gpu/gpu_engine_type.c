@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2022-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -49,62 +49,100 @@ ct_assert(RM_ENGINE_TYPE_LAST == NV2080_ENGINE_TYPE_LAST);
  */
 RM_ENGINE_TYPE gpuGetRmEngineType_IMPL(NvU32 index)
 {
-    NV_ASSERT_OR_RETURN(index < NV2080_ENGINE_TYPE_LAST, RM_ENGINE_TYPE_LAST);
+    //
+    // The passed in index generally comes from outside RM itself w/o any checking. To
+    // avoid log spam, we no longer assert on the value per the new policy on parameter
+    // validation.
+    //
+    NV_CHECK_OR_RETURN(LEVEL_INFO, index < NV2080_ENGINE_TYPE_LAST, RM_ENGINE_TYPE_LAST);
 
     switch (index)
     {
-        case NV2080_ENGINE_TYPE_NULL:       return RM_ENGINE_TYPE_NULL;
-        case NV2080_ENGINE_TYPE_GR0:        return RM_ENGINE_TYPE_GR0;
-        case NV2080_ENGINE_TYPE_GR1:        return RM_ENGINE_TYPE_GR1;
-        case NV2080_ENGINE_TYPE_GR2:        return RM_ENGINE_TYPE_GR2;
-        case NV2080_ENGINE_TYPE_GR3:        return RM_ENGINE_TYPE_GR3;
-        case NV2080_ENGINE_TYPE_GR4:        return RM_ENGINE_TYPE_GR4;
-        case NV2080_ENGINE_TYPE_GR5:        return RM_ENGINE_TYPE_GR5;
-        case NV2080_ENGINE_TYPE_GR6:        return RM_ENGINE_TYPE_GR6;
-        case NV2080_ENGINE_TYPE_GR7:        return RM_ENGINE_TYPE_GR7;
-        case NV2080_ENGINE_TYPE_COPY0:      return RM_ENGINE_TYPE_COPY0;
-        case NV2080_ENGINE_TYPE_COPY1:      return RM_ENGINE_TYPE_COPY1;
-        case NV2080_ENGINE_TYPE_COPY2:      return RM_ENGINE_TYPE_COPY2;
-        case NV2080_ENGINE_TYPE_COPY3:      return RM_ENGINE_TYPE_COPY3;
-        case NV2080_ENGINE_TYPE_COPY4:      return RM_ENGINE_TYPE_COPY4;
-        case NV2080_ENGINE_TYPE_COPY5:      return RM_ENGINE_TYPE_COPY5;
-        case NV2080_ENGINE_TYPE_COPY6:      return RM_ENGINE_TYPE_COPY6;
-        case NV2080_ENGINE_TYPE_COPY7:      return RM_ENGINE_TYPE_COPY7;
-        case NV2080_ENGINE_TYPE_COPY8:      return RM_ENGINE_TYPE_COPY8;
-        case NV2080_ENGINE_TYPE_COPY9:      return RM_ENGINE_TYPE_COPY9;
-        case NV2080_ENGINE_TYPE_NVDEC0:     return RM_ENGINE_TYPE_NVDEC0;
-        case NV2080_ENGINE_TYPE_NVDEC1:     return RM_ENGINE_TYPE_NVDEC1;
-        case NV2080_ENGINE_TYPE_NVDEC2:     return RM_ENGINE_TYPE_NVDEC2;
-        case NV2080_ENGINE_TYPE_NVDEC3:     return RM_ENGINE_TYPE_NVDEC3;
-        case NV2080_ENGINE_TYPE_NVDEC4:     return RM_ENGINE_TYPE_NVDEC4;
-        case NV2080_ENGINE_TYPE_NVDEC5:     return RM_ENGINE_TYPE_NVDEC5;
-        case NV2080_ENGINE_TYPE_NVDEC6:     return RM_ENGINE_TYPE_NVDEC6;
-        case NV2080_ENGINE_TYPE_NVDEC7:     return RM_ENGINE_TYPE_NVDEC7;
-        case NV2080_ENGINE_TYPE_NVENC0:     return RM_ENGINE_TYPE_NVENC0;
-        case NV2080_ENGINE_TYPE_NVENC1:     return RM_ENGINE_TYPE_NVENC1;
-        case NV2080_ENGINE_TYPE_NVENC2:     return RM_ENGINE_TYPE_NVENC2;
-        case NV2080_ENGINE_TYPE_VP:         return RM_ENGINE_TYPE_VP;
-        case NV2080_ENGINE_TYPE_ME:         return RM_ENGINE_TYPE_ME;
-        case NV2080_ENGINE_TYPE_PPP:        return RM_ENGINE_TYPE_PPP;
-        case NV2080_ENGINE_TYPE_MPEG:       return RM_ENGINE_TYPE_MPEG;
-        case NV2080_ENGINE_TYPE_SW:         return RM_ENGINE_TYPE_SW;
-        case NV2080_ENGINE_TYPE_TSEC:       return RM_ENGINE_TYPE_TSEC;
-        case NV2080_ENGINE_TYPE_VIC:        return RM_ENGINE_TYPE_VIC;
-        case NV2080_ENGINE_TYPE_MP:         return RM_ENGINE_TYPE_MP;
-        case NV2080_ENGINE_TYPE_SEC2:       return RM_ENGINE_TYPE_SEC2;
-        case NV2080_ENGINE_TYPE_HOST:       return RM_ENGINE_TYPE_HOST;
-        case NV2080_ENGINE_TYPE_DPU:        return RM_ENGINE_TYPE_DPU;
-        case NV2080_ENGINE_TYPE_PMU:        return RM_ENGINE_TYPE_PMU;
-        case NV2080_ENGINE_TYPE_FBFLCN:     return RM_ENGINE_TYPE_FBFLCN;
-        case NV2080_ENGINE_TYPE_NVJPEG0:    return RM_ENGINE_TYPE_NVJPEG0;
-        case NV2080_ENGINE_TYPE_NVJPEG1:    return RM_ENGINE_TYPE_NVJPEG1;
-        case NV2080_ENGINE_TYPE_NVJPEG2:    return RM_ENGINE_TYPE_NVJPEG2;
-        case NV2080_ENGINE_TYPE_NVJPEG3:    return RM_ENGINE_TYPE_NVJPEG3;
-        case NV2080_ENGINE_TYPE_NVJPEG4:    return RM_ENGINE_TYPE_NVJPEG4;
-        case NV2080_ENGINE_TYPE_NVJPEG5:    return RM_ENGINE_TYPE_NVJPEG5;
-        case NV2080_ENGINE_TYPE_NVJPEG6:    return RM_ENGINE_TYPE_NVJPEG6;
-        case NV2080_ENGINE_TYPE_NVJPEG7:    return RM_ENGINE_TYPE_NVJPEG7;
-        case NV2080_ENGINE_TYPE_OFA0:       return RM_ENGINE_TYPE_OFA0;
+        case NV2080_ENGINE_TYPE_NULL:                   return RM_ENGINE_TYPE_NULL;
+        case NV2080_ENGINE_TYPE_GR0:                    return RM_ENGINE_TYPE_GR0;
+        case NV2080_ENGINE_TYPE_GR1:                    return RM_ENGINE_TYPE_GR1;
+        case NV2080_ENGINE_TYPE_GR2:                    return RM_ENGINE_TYPE_GR2;
+        case NV2080_ENGINE_TYPE_GR3:                    return RM_ENGINE_TYPE_GR3;
+        case NV2080_ENGINE_TYPE_GR4:                    return RM_ENGINE_TYPE_GR4;
+        case NV2080_ENGINE_TYPE_GR5:                    return RM_ENGINE_TYPE_GR5;
+        case NV2080_ENGINE_TYPE_GR6:                    return RM_ENGINE_TYPE_GR6;
+        case NV2080_ENGINE_TYPE_GR7:                    return RM_ENGINE_TYPE_GR7;
+        case NV2080_ENGINE_TYPE_COPY0:                  return RM_ENGINE_TYPE_COPY0;
+        case NV2080_ENGINE_TYPE_COPY1:                  return RM_ENGINE_TYPE_COPY1;
+        case NV2080_ENGINE_TYPE_COPY2:                  return RM_ENGINE_TYPE_COPY2;
+        case NV2080_ENGINE_TYPE_COPY3:                  return RM_ENGINE_TYPE_COPY3;
+        case NV2080_ENGINE_TYPE_COPY4:                  return RM_ENGINE_TYPE_COPY4;
+        case NV2080_ENGINE_TYPE_COPY5:                  return RM_ENGINE_TYPE_COPY5;
+        case NV2080_ENGINE_TYPE_COPY6:                  return RM_ENGINE_TYPE_COPY6;
+        case NV2080_ENGINE_TYPE_COPY7:                  return RM_ENGINE_TYPE_COPY7;
+        case NV2080_ENGINE_TYPE_COPY8:                  return RM_ENGINE_TYPE_COPY8;
+        case NV2080_ENGINE_TYPE_COPY9:                  return RM_ENGINE_TYPE_COPY9;
+        case NV2080_ENGINE_TYPE_NVDEC0:                 return RM_ENGINE_TYPE_NVDEC0;
+        case NV2080_ENGINE_TYPE_NVDEC1:                 return RM_ENGINE_TYPE_NVDEC1;
+        case NV2080_ENGINE_TYPE_NVDEC2:                 return RM_ENGINE_TYPE_NVDEC2;
+        case NV2080_ENGINE_TYPE_NVDEC3:                 return RM_ENGINE_TYPE_NVDEC3;
+        case NV2080_ENGINE_TYPE_NVDEC4:                 return RM_ENGINE_TYPE_NVDEC4;
+        case NV2080_ENGINE_TYPE_NVDEC5:                 return RM_ENGINE_TYPE_NVDEC5;
+        case NV2080_ENGINE_TYPE_NVDEC6:                 return RM_ENGINE_TYPE_NVDEC6;
+        case NV2080_ENGINE_TYPE_NVDEC7:                 return RM_ENGINE_TYPE_NVDEC7;
+        case NV2080_ENGINE_TYPE_NVENC0:                 return RM_ENGINE_TYPE_NVENC0;
+        case NV2080_ENGINE_TYPE_NVENC1:                 return RM_ENGINE_TYPE_NVENC1;
+        case NV2080_ENGINE_TYPE_NVENC2:                 return RM_ENGINE_TYPE_NVENC2;
+// Bug 4175886 - Use this new value for all chips once GB20X is released
+        case NV2080_ENGINE_TYPE_NVENC3:                 return RM_ENGINE_TYPE_NVENC3;
+        case NV2080_ENGINE_TYPE_VP:                     return RM_ENGINE_TYPE_VP;
+        case NV2080_ENGINE_TYPE_ME:                     return RM_ENGINE_TYPE_ME;
+        case NV2080_ENGINE_TYPE_PPP:                    return RM_ENGINE_TYPE_PPP;
+        case NV2080_ENGINE_TYPE_MPEG:                   return RM_ENGINE_TYPE_MPEG;
+        case NV2080_ENGINE_TYPE_SW:                     return RM_ENGINE_TYPE_SW;
+        case NV2080_ENGINE_TYPE_TSEC:                   return RM_ENGINE_TYPE_TSEC;
+        case NV2080_ENGINE_TYPE_VIC:                    return RM_ENGINE_TYPE_VIC;
+        case NV2080_ENGINE_TYPE_MP:                     return RM_ENGINE_TYPE_MP;
+        case NV2080_ENGINE_TYPE_SEC2:                   return RM_ENGINE_TYPE_SEC2;
+        case NV2080_ENGINE_TYPE_HOST:                   return RM_ENGINE_TYPE_HOST;
+        case NV2080_ENGINE_TYPE_DPU:                    return RM_ENGINE_TYPE_DPU;
+        case NV2080_ENGINE_TYPE_PMU:                    return RM_ENGINE_TYPE_PMU;
+        case NV2080_ENGINE_TYPE_FBFLCN:                 return RM_ENGINE_TYPE_FBFLCN;
+        case NV2080_ENGINE_TYPE_NVJPEG0:                return RM_ENGINE_TYPE_NVJPEG0;
+        case NV2080_ENGINE_TYPE_NVJPEG1:                return RM_ENGINE_TYPE_NVJPEG1;
+        case NV2080_ENGINE_TYPE_NVJPEG2:                return RM_ENGINE_TYPE_NVJPEG2;
+        case NV2080_ENGINE_TYPE_NVJPEG3:                return RM_ENGINE_TYPE_NVJPEG3;
+        case NV2080_ENGINE_TYPE_NVJPEG4:                return RM_ENGINE_TYPE_NVJPEG4;
+        case NV2080_ENGINE_TYPE_NVJPEG5:                return RM_ENGINE_TYPE_NVJPEG5;
+        case NV2080_ENGINE_TYPE_NVJPEG6:                return RM_ENGINE_TYPE_NVJPEG6;
+        case NV2080_ENGINE_TYPE_NVJPEG7:                return RM_ENGINE_TYPE_NVJPEG7;
+        case NV2080_ENGINE_TYPE_OFA0:                   return RM_ENGINE_TYPE_OFA0;
+        case NV2080_ENGINE_TYPE_OFA1:                   return RM_ENGINE_TYPE_OFA1;
+        case NV2080_ENGINE_TYPE_COPY10:                 return RM_ENGINE_TYPE_COPY10;
+        case NV2080_ENGINE_TYPE_COPY11:                 return RM_ENGINE_TYPE_COPY11;
+        case NV2080_ENGINE_TYPE_COPY12:                 return RM_ENGINE_TYPE_COPY12;
+        case NV2080_ENGINE_TYPE_COPY13:                 return RM_ENGINE_TYPE_COPY13;
+        case NV2080_ENGINE_TYPE_COPY14:                 return RM_ENGINE_TYPE_COPY14;
+        case NV2080_ENGINE_TYPE_COPY15:                 return RM_ENGINE_TYPE_COPY15;
+        case NV2080_ENGINE_TYPE_COPY16:                 return RM_ENGINE_TYPE_COPY16;
+        case NV2080_ENGINE_TYPE_COPY17:                 return RM_ENGINE_TYPE_COPY17;
+        case NV2080_ENGINE_TYPE_COPY18:                 return RM_ENGINE_TYPE_COPY18;
+        case NV2080_ENGINE_TYPE_COPY19:                 return RM_ENGINE_TYPE_COPY19;
+        case NV2080_ENGINE_TYPE_COMP_DECOMP_COPY0:      return RM_ENGINE_TYPE_COPY0;
+        case NV2080_ENGINE_TYPE_COMP_DECOMP_COPY1:      return RM_ENGINE_TYPE_COPY1;
+        case NV2080_ENGINE_TYPE_COMP_DECOMP_COPY2:      return RM_ENGINE_TYPE_COPY2;
+        case NV2080_ENGINE_TYPE_COMP_DECOMP_COPY3:      return RM_ENGINE_TYPE_COPY3;
+        case NV2080_ENGINE_TYPE_COMP_DECOMP_COPY4:      return RM_ENGINE_TYPE_COPY4;
+        case NV2080_ENGINE_TYPE_COMP_DECOMP_COPY5:      return RM_ENGINE_TYPE_COPY5;
+        case NV2080_ENGINE_TYPE_COMP_DECOMP_COPY6:      return RM_ENGINE_TYPE_COPY6;
+        case NV2080_ENGINE_TYPE_COMP_DECOMP_COPY7:      return RM_ENGINE_TYPE_COPY7;
+        case NV2080_ENGINE_TYPE_COMP_DECOMP_COPY8:      return RM_ENGINE_TYPE_COPY8;
+        case NV2080_ENGINE_TYPE_COMP_DECOMP_COPY9:      return RM_ENGINE_TYPE_COPY9;
+        case NV2080_ENGINE_TYPE_COMP_DECOMP_COPY10:     return RM_ENGINE_TYPE_COPY10;
+        case NV2080_ENGINE_TYPE_COMP_DECOMP_COPY11:     return RM_ENGINE_TYPE_COPY11;
+        case NV2080_ENGINE_TYPE_COMP_DECOMP_COPY12:     return RM_ENGINE_TYPE_COPY12;
+        case NV2080_ENGINE_TYPE_COMP_DECOMP_COPY13:     return RM_ENGINE_TYPE_COPY13;
+        case NV2080_ENGINE_TYPE_COMP_DECOMP_COPY14:     return RM_ENGINE_TYPE_COPY14;
+        case NV2080_ENGINE_TYPE_COMP_DECOMP_COPY15:     return RM_ENGINE_TYPE_COPY15;
+        case NV2080_ENGINE_TYPE_COMP_DECOMP_COPY16:     return RM_ENGINE_TYPE_COPY16;
+        case NV2080_ENGINE_TYPE_COMP_DECOMP_COPY17:     return RM_ENGINE_TYPE_COPY17;
+        case NV2080_ENGINE_TYPE_COMP_DECOMP_COPY18:     return RM_ENGINE_TYPE_COPY18;
+        case NV2080_ENGINE_TYPE_COMP_DECOMP_COPY19:     return RM_ENGINE_TYPE_COPY19;
         default: break;
     }
 
@@ -123,6 +161,10 @@ RM_ENGINE_TYPE gpuGetRmEngineType_IMPL(NvU32 index)
  */
 NvU32 gpuGetNv2080EngineType_IMPL(RM_ENGINE_TYPE index)
 {
+    //
+    // RM itself should never generate an out of range value, so we
+    // continue to assert here to catch internal RM programming errors.
+    //
     NV_ASSERT_OR_RETURN(index < RM_ENGINE_TYPE_LAST, NV2080_ENGINE_TYPE_LAST);
 
     switch (index)
@@ -146,6 +188,16 @@ NvU32 gpuGetNv2080EngineType_IMPL(RM_ENGINE_TYPE index)
         case RM_ENGINE_TYPE_COPY7:      return NV2080_ENGINE_TYPE_COPY7;
         case RM_ENGINE_TYPE_COPY8:      return NV2080_ENGINE_TYPE_COPY8;
         case RM_ENGINE_TYPE_COPY9:      return NV2080_ENGINE_TYPE_COPY9;
+        case RM_ENGINE_TYPE_COPY10:     return NV2080_ENGINE_TYPE_COPY10;
+        case RM_ENGINE_TYPE_COPY11:     return NV2080_ENGINE_TYPE_COPY11;
+        case RM_ENGINE_TYPE_COPY12:     return NV2080_ENGINE_TYPE_COPY12;
+        case RM_ENGINE_TYPE_COPY13:     return NV2080_ENGINE_TYPE_COPY13;
+        case RM_ENGINE_TYPE_COPY14:     return NV2080_ENGINE_TYPE_COPY14;
+        case RM_ENGINE_TYPE_COPY15:     return NV2080_ENGINE_TYPE_COPY15;
+        case RM_ENGINE_TYPE_COPY16:     return NV2080_ENGINE_TYPE_COPY16;
+        case RM_ENGINE_TYPE_COPY17:     return NV2080_ENGINE_TYPE_COPY17;
+        case RM_ENGINE_TYPE_COPY18:     return NV2080_ENGINE_TYPE_COPY18;
+        case RM_ENGINE_TYPE_COPY19:     return NV2080_ENGINE_TYPE_COPY19;
         case RM_ENGINE_TYPE_NVDEC0:     return NV2080_ENGINE_TYPE_NVDEC0;
         case RM_ENGINE_TYPE_NVDEC1:     return NV2080_ENGINE_TYPE_NVDEC1;
         case RM_ENGINE_TYPE_NVDEC2:     return NV2080_ENGINE_TYPE_NVDEC2;
@@ -157,6 +209,8 @@ NvU32 gpuGetNv2080EngineType_IMPL(RM_ENGINE_TYPE index)
         case RM_ENGINE_TYPE_NVENC0:     return NV2080_ENGINE_TYPE_NVENC0;
         case RM_ENGINE_TYPE_NVENC1:     return NV2080_ENGINE_TYPE_NVENC1;
         case RM_ENGINE_TYPE_NVENC2:     return NV2080_ENGINE_TYPE_NVENC2;
+// Bug 4175886 - Use this new value for all chips once GB20X is released
+        case RM_ENGINE_TYPE_NVENC3:     return NV2080_ENGINE_TYPE_NVENC3;
         case RM_ENGINE_TYPE_VP:         return NV2080_ENGINE_TYPE_VP;
         case RM_ENGINE_TYPE_ME:         return NV2080_ENGINE_TYPE_ME;
         case RM_ENGINE_TYPE_PPP:        return NV2080_ENGINE_TYPE_PPP;
@@ -179,6 +233,7 @@ NvU32 gpuGetNv2080EngineType_IMPL(RM_ENGINE_TYPE index)
         case RM_ENGINE_TYPE_NVJPEG6:    return NV2080_ENGINE_TYPE_NVJPEG6;
         case RM_ENGINE_TYPE_NVJPEG7:    return NV2080_ENGINE_TYPE_NVJPEG7;
         case RM_ENGINE_TYPE_OFA0:       return NV2080_ENGINE_TYPE_OFA0;
+        case RM_ENGINE_TYPE_OFA1:       return NV2080_ENGINE_TYPE_OFA1;
         default: break;
     }
 
@@ -276,4 +331,40 @@ NV_STATUS gpuGetRmEngineTypeCapMask_IMPL
     }
 
     return NV_OK;
+}
+
+/*!
+ *  @brief Convert RM engine type to the engine class as a string
+ *
+ *  Use ENGDESC_FIELD(engDesc, _INST) to get the engine instance
+ *
+ *  @param[in]  engineType      RM_ENGINE_TYPE number
+ *
+ *  @returns engine name as a string
+ */
+const char* gpuRmEngineTypeToString_IMPL
+(
+    RM_ENGINE_TYPE engineType
+)
+{
+    if (RM_ENGINE_TYPE_IS_GR(engineType))          return MAKE_NV_PRINTF_STR("GR");
+    else if (RM_ENGINE_TYPE_IS_COPY(engineType))   return MAKE_NV_PRINTF_STR("COPY");
+    else if (RM_ENGINE_TYPE_IS_NVDEC(engineType))  return MAKE_NV_PRINTF_STR("NVDEC");
+    else if (RM_ENGINE_TYPE_IS_NVENC(engineType))  return MAKE_NV_PRINTF_STR("NVENC");
+    else if (RM_ENGINE_TYPE_IS_NVJPEG(engineType)) return MAKE_NV_PRINTF_STR("NVJPEG");
+    else if (RM_ENGINE_TYPE_IS_OFA(engineType))    return MAKE_NV_PRINTF_STR("OFA");
+    else if (engineType == RM_ENGINE_TYPE_VP)      return MAKE_NV_PRINTF_STR("VP");
+    else if (engineType == RM_ENGINE_TYPE_ME)      return MAKE_NV_PRINTF_STR("ME");
+    else if (engineType == RM_ENGINE_TYPE_PPP)     return MAKE_NV_PRINTF_STR("PPP");
+    else if (engineType == RM_ENGINE_TYPE_MPEG)    return MAKE_NV_PRINTF_STR("MPEG");
+    else if (engineType == RM_ENGINE_TYPE_SW)      return MAKE_NV_PRINTF_STR("SW");
+    else if (engineType == RM_ENGINE_TYPE_TSEC)    return MAKE_NV_PRINTF_STR("TSEC");
+    else if (engineType == RM_ENGINE_TYPE_VIC)     return MAKE_NV_PRINTF_STR("VIC");
+    else if (engineType == RM_ENGINE_TYPE_MP)      return MAKE_NV_PRINTF_STR("MP");
+    else if (engineType == RM_ENGINE_TYPE_SEC2)    return MAKE_NV_PRINTF_STR("SEC2");
+    else if (engineType == RM_ENGINE_TYPE_HOST)    return MAKE_NV_PRINTF_STR("HOST");
+    else if (engineType == RM_ENGINE_TYPE_DPU)     return MAKE_NV_PRINTF_STR("DPU");
+    else if (engineType == RM_ENGINE_TYPE_PMU)     return MAKE_NV_PRINTF_STR("PMU");
+    else if (engineType == RM_ENGINE_TYPE_FBFLCN)  return MAKE_NV_PRINTF_STR("FBFLCN");
+    else                                           return MAKE_NV_PRINTF_STR("");
 }

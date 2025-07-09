@@ -1,6 +1,15 @@
+
 #ifndef _G_SYSTEM_NVOC_H_
 #define _G_SYSTEM_NVOC_H_
+
+// Version of generated metadata structures
+#ifdef NVOC_METADATA_VERSION
+#undef NVOC_METADATA_VERSION
+#endif
+#define NVOC_METADATA_VERSION 2
+
 #include "nvoc/runtime.h"
+#include "nvoc/rtti.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -28,6 +37,7 @@ extern "C" {
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  * DEALINGS IN THE SOFTWARE.
  */
+#pragma once
 #include "g_system_nvoc.h"
 
 #ifndef SYSTEM_H
@@ -40,6 +50,7 @@ extern "C" {
 \***************************************************************************/
 
 #include "core/core.h"
+#include "nvoc/object.h"
 #include "nvlimits.h" // NV_MAX_DEVICES
 #include "ctrl/ctrl2080/ctrl2080gpu.h"
 #include "diagnostics/traceable.h"
@@ -70,18 +81,16 @@ extern "C" {
 #define SYS_GET_GPUDB(p)          ((p)->pGpuDb)
 #define SYS_GET_HALMGR(p)         ((p)->pHalMgr)
 
+#if RMCFG_FEATURE_GSPRM_BULLSEYE || defined(GSPRM_BULLSEYE_ENABLE)
+#define SYS_GET_CODE_COV_MGR(p)   ((p)->pCodeCovMgr)
+#else
+#define SYS_GET_CODE_COV_MGR(p)   (NULL)
+#endif
+
 #define IsMobile(p)             ((p)->getProperty((p), PDB_PROP_GPU_IS_MOBILE))
 
-//
-// OS defines (Windows flavor can be added later on)
-// Unix flavor need to be sync with defines in file "nv.h"
-//
-#define OS_TYPE_LINUX   0x1
-#define OS_TYPE_FREEBSD 0x2
-#define OS_TYPE_SUNOS   0x3
-#define OS_TYPE_VMWARE  0x4
-
 // Child class forward declarations.
+
 struct OBJPFM;
 
 #ifndef __NVOC_CLASS_OBJPFM_TYPEDEF__
@@ -92,6 +101,7 @@ typedef struct OBJPFM OBJPFM;
 #ifndef __nvoc_class_id_OBJPFM
 #define __nvoc_class_id_OBJPFM 0xb543ae
 #endif /* __nvoc_class_id_OBJPFM */
+
 
 
 struct OBJVMM;
@@ -106,6 +116,7 @@ typedef struct OBJVMM OBJVMM;
 #endif /* __nvoc_class_id_OBJVMM */
 
 
+
 struct OBJHYPERVISOR;
 
 #ifndef __NVOC_CLASS_OBJHYPERVISOR_TYPEDEF__
@@ -116,6 +127,7 @@ typedef struct OBJHYPERVISOR OBJHYPERVISOR;
 #ifndef __nvoc_class_id_OBJHYPERVISOR
 #define __nvoc_class_id_OBJHYPERVISOR 0x33c1ba
 #endif /* __nvoc_class_id_OBJHYPERVISOR */
+
 
 
 struct OBJGPUMGR;
@@ -130,6 +142,7 @@ typedef struct OBJGPUMGR OBJGPUMGR;
 #endif /* __nvoc_class_id_OBJGPUMGR */
 
 
+
 struct OBJDISPMGR;
 
 #ifndef __NVOC_CLASS_OBJDISPMGR_TYPEDEF__
@@ -140,6 +153,7 @@ typedef struct OBJDISPMGR OBJDISPMGR;
 #ifndef __nvoc_class_id_OBJDISPMGR
 #define __nvoc_class_id_OBJDISPMGR 0x69ad03
 #endif /* __nvoc_class_id_OBJDISPMGR */
+
 
 
 struct PlatformRequestHandler;
@@ -154,6 +168,7 @@ typedef struct PlatformRequestHandler PlatformRequestHandler;
 #endif /* __nvoc_class_id_PlatformRequestHandler */
 
 
+
 struct GpuAccounting;
 
 #ifndef __NVOC_CLASS_GpuAccounting_TYPEDEF__
@@ -164,6 +179,7 @@ typedef struct GpuAccounting GpuAccounting;
 #ifndef __nvoc_class_id_GpuAccounting
 #define __nvoc_class_id_GpuAccounting 0x0f1350
 #endif /* __nvoc_class_id_GpuAccounting */
+
 
 
 struct OBJHALMGR;
@@ -178,6 +194,7 @@ typedef struct OBJHALMGR OBJHALMGR;
 #endif /* __nvoc_class_id_OBJHALMGR */
 
 
+
 struct Fabric;
 
 #ifndef __NVOC_CLASS_Fabric_TYPEDEF__
@@ -188,6 +205,7 @@ typedef struct Fabric Fabric;
 #ifndef __nvoc_class_id_Fabric
 #define __nvoc_class_id_Fabric 0x0ac791
 #endif /* __nvoc_class_id_Fabric */
+
 
 
 struct GpuDb;
@@ -202,6 +220,7 @@ typedef struct GpuDb GpuDb;
 #endif /* __nvoc_class_id_GpuDb */
 
 
+
 struct OBJCL;
 
 #ifndef __NVOC_CLASS_OBJCL_TYPEDEF__
@@ -212,6 +231,7 @@ typedef struct OBJCL OBJCL;
 #ifndef __nvoc_class_id_OBJCL
 #define __nvoc_class_id_OBJCL 0x547dbb
 #endif /* __nvoc_class_id_OBJCL */
+
 
 
 struct KernelVgpuMgr;
@@ -226,6 +246,7 @@ typedef struct KernelVgpuMgr KernelVgpuMgr;
 #endif /* __nvoc_class_id_KernelVgpuMgr */
 
 
+
 struct OBJVRRMGR;
 
 #ifndef __NVOC_CLASS_OBJVRRMGR_TYPEDEF__
@@ -236,6 +257,7 @@ typedef struct OBJVRRMGR OBJVRRMGR;
 #ifndef __nvoc_class_id_OBJVRRMGR
 #define __nvoc_class_id_OBJVRRMGR 0x442804
 #endif /* __nvoc_class_id_OBJVRRMGR */
+
 
 
 struct OBJGPUBOOSTMGR;
@@ -250,6 +272,7 @@ typedef struct OBJGPUBOOSTMGR OBJGPUBOOSTMGR;
 #endif /* __nvoc_class_id_OBJGPUBOOSTMGR */
 
 
+
 struct OBJGSYNCMGR;
 
 #ifndef __NVOC_CLASS_OBJGSYNCMGR_TYPEDEF__
@@ -260,6 +283,7 @@ typedef struct OBJGSYNCMGR OBJGSYNCMGR;
 #ifndef __nvoc_class_id_OBJGSYNCMGR
 #define __nvoc_class_id_OBJGSYNCMGR 0xd07fd0
 #endif /* __nvoc_class_id_OBJGSYNCMGR */
+
 
 
 struct OBJVGPUMGR;
@@ -274,6 +298,7 @@ typedef struct OBJVGPUMGR OBJVGPUMGR;
 #endif /* __nvoc_class_id_OBJVGPUMGR */
 
 
+
 struct OBJOS;
 
 #ifndef __NVOC_CLASS_OBJOS_TYPEDEF__
@@ -284,6 +309,19 @@ typedef struct OBJOS OBJOS;
 #ifndef __nvoc_class_id_OBJOS
 #define __nvoc_class_id_OBJOS 0xaa1d70
 #endif /* __nvoc_class_id_OBJOS */
+
+
+
+struct CodeCoverageManager;
+
+#ifndef __NVOC_CLASS_CodeCoverageManager_TYPEDEF__
+#define __NVOC_CLASS_CodeCoverageManager_TYPEDEF__
+typedef struct CodeCoverageManager CodeCoverageManager;
+#endif /* __NVOC_CLASS_CodeCoverageManager_TYPEDEF__ */
+
+#ifndef __nvoc_class_id_CodeCoverageManager
+#define __nvoc_class_id_CodeCoverageManager 0x62cbfb
+#endif /* __nvoc_class_id_CodeCoverageManager */
 
 
 
@@ -302,13 +340,19 @@ typedef struct SYS_STATIC_CONFIG
     /*! Initial SLI configuration flags */
     NvU32 initialSliFlags;
 
-    /*! Indicates the type of OS flavor */
-    NvU32 osType;
-
-    /*! Indicates confidentail compute OS support is enabled or not */
+    /*! Indicates confidential compute OS support is enabled or not */
     NvBool bOsCCEnabled;
 
-    /*! Indicates Intel TDX confidentail compute OS support is enabled or not */
+    /*! Indicates SEV-SNP confidential compute OS support is enabled or not */
+    NvBool bOsCCSevSnpEnabled;
+
+    /*! Indicates Memory Encryption OS support is enabled or not */
+    NvBool bOsCCSmeEnabled;
+
+    /*! Indicates SEV-SNP vTOM confidential compute OS support is enabled or not */
+    NvBool bOsCCSnpVtomEnabled;
+
+    /*! Indicates Intel TDX confidential compute OS support is enabled or not */
     NvBool bOsCCTdxEnabled;
 } SYS_STATIC_CONFIG;
 
@@ -361,14 +405,32 @@ MAKE_MULTIMAP(SYS_MEM_EXPORT_CACHE, SysMemExportCacheEntry);
 #define PRIVATE_FIELD(x) NVOC_PRIVATE_FIELD(x)
 #endif
 
+
+// Metadata with per-class RTTI and vtable with ancestor(s)
+struct NVOC_METADATA__OBJSYS;
+struct NVOC_METADATA__Object;
+struct NVOC_METADATA__OBJTRACEABLE;
+struct NVOC_VTABLE__OBJSYS;
+
+
 struct OBJSYS {
-    const struct NVOC_RTTI *__nvoc_rtti;
+
+    // Metadata starts with RTTI structure.
+    union {
+         const struct NVOC_METADATA__OBJSYS *__nvoc_metadata_ptr;
+         const struct NVOC_RTTI *__nvoc_rtti;
+    };
+
+    // Parent (i.e. superclass or base class) objects
     struct Object __nvoc_base_Object;
     struct OBJTRACEABLE __nvoc_base_OBJTRACEABLE;
-    struct Object *__nvoc_pbase_Object;
-    struct OBJTRACEABLE *__nvoc_pbase_OBJTRACEABLE;
-    struct OBJSYS *__nvoc_pbase_OBJSYS;
-    NV_STATUS (*__sysCaptureState__)(struct OBJSYS *);
+
+    // Ancestor object pointers for `staticCast` feature
+    struct Object *__nvoc_pbase_Object;    // obj super
+    struct OBJTRACEABLE *__nvoc_pbase_OBJTRACEABLE;    // traceable super
+    struct OBJSYS *__nvoc_pbase_OBJSYS;    // sys
+
+    // 34 PDB properties
     NvBool PDB_PROP_SYS_SBIOS_NVIF_POWERMIZER_LIMIT;
     NvBool PDB_PROP_SYS_MXM_THERMAL_CONTROL_PRESENT;
     NvBool PDB_PROP_SYS_POWER_BATTERY;
@@ -390,34 +452,36 @@ struct OBJSYS {
     NvBool PDB_PROP_SYS_VALIDATE_KERNEL_BUFFERS;
     NvBool PDB_PROP_SYS_INTERNAL_EVENT_BUFFER_ALLOC_ALLOWED;
     NvBool PDB_PROP_SYS_IS_AGGRESSIVE_GC6_ENABLED;
-    NvBool PDB_PROP_SYS_IS_EFI_INIT;
     NvBool PDB_PROP_SYS_IN_OCA_DATA_COLLECTION;
     NvBool PDB_PROP_SYS_DEBUGGER_DISABLED;
     NvBool PDB_PROP_SYS_PRIORITY_BOOST;
     NvU32 PDB_PROP_SYS_PRIORITY_THROTTLE_DELAY_US;
     NvBool PDB_PROP_SYS_BUGCHECK_ON_TIMEOUT;
-    NvBool PDB_PROP_SYS_CLIENT_HANDLE_LOOKUP;
     NvBool PDB_PROP_SYS_RM_LOCK_TIME_COLLECT;
+    NvBool PDB_PROP_SYS_ENABLE_RM_TEST_ONLY_CODE;
+    NvBool PDB_PROP_SYS_ROUTE_TO_PHYSICAL_LOCK_BYPASS;
+    NvBool PDB_PROP_SYS_IS_QSYNC_FW_REVISION_CHECK_DISABLED;
+    NvBool PDB_PROP_SYS_GPU_LOCK_MIDPATH_ENABLED;
+    NvBool PDB_PROP_SYS_ENABLE_FORCE_SHARED_LOCK;
+    NvBool PDB_PROP_SYS_DESTRUCTING;
+    NvBool PDB_PROP_SYS_RECOVERY_REBOOT_REQUIRED;
+
+    // Data members
     NvU32 apiLockMask;
     NvU32 apiLockModuleMask;
     NvU32 gpuLockModuleMask;
-    NvBool PDB_PROP_SYS_ROUTE_TO_PHYSICAL_LOCK_BYPASS;
     NvU32 pwrTransitionTimeoutOverride;
     SYS_STATIC_CONFIG staticConfig;
     NvU32 debugFlags;
-    NvU32 backtraceStackDepth;
     SYS_CPU_INFO cpuInfo;
     SYS_VGA_POST_STATE vgaPostState;
     NvBool gpuHotPlugPollingActive[32];
     NvU32 gridSwPkg;
     void *pSema;
     NvU32 binMask;
-    PNODE pMemFilterList;
-    NvBool PDB_PROP_SYS_IS_QSYNC_FW_REVISION_CHECK_DISABLED;
-    NvBool PDB_PROP_SYS_GPU_LOCK_MIDPATH_ENABLED;
-    NvBool PDB_PROP_SYS_DESTRUCTING;
     NvU64 rmInstanceId;
-    NvU32 currentCid;
+    NvU32 currentChannelUniqueId;
+    NvU32 currentVasUniqueId;
     NvBool bUseDeferredClientListFree;
     NvU32 clientListDeferredFreeLimit;
     OS_RM_CAPS *pOsRmCaps;
@@ -443,6 +507,22 @@ struct OBJSYS {
     struct OBJHALMGR *pHalMgr;
     struct Fabric *pFabric;
     struct GpuDb *pGpuDb;
+    struct CodeCoverageManager *pCodeCovMgr;
+    NvBool bIsGridBuild;
+};
+
+
+// Vtable with 1 per-class function pointer
+struct NVOC_VTABLE__OBJSYS {
+    NV_STATUS (*__sysCaptureState__)(struct OBJSYS * /*this*/);  // virtual
+};
+
+// Metadata with per-class RTTI and vtable with ancestor(s)
+struct NVOC_METADATA__OBJSYS {
+    const struct NVOC_RTTI rtti;
+    const struct NVOC_METADATA__Object metadata__Object;
+    const struct NVOC_METADATA__OBJTRACEABLE metadata__OBJTRACEABLE;
+    const struct NVOC_VTABLE__OBJSYS vtable;
 };
 
 #ifndef __NVOC_CLASS_OBJSYS_TYPEDEF__
@@ -454,22 +534,22 @@ typedef struct OBJSYS OBJSYS;
 #define __nvoc_class_id_OBJSYS 0x40e2c8
 #endif /* __nvoc_class_id_OBJSYS */
 
+// Casting support
 extern const struct NVOC_CLASS_DEF __nvoc_class_def_OBJSYS;
 
 #define __staticCast_OBJSYS(pThis) \
     ((pThis)->__nvoc_pbase_OBJSYS)
 
 #ifdef __nvoc_system_h_disabled
-#define __dynamicCast_OBJSYS(pThis) ((OBJSYS*)NULL)
+#define __dynamicCast_OBJSYS(pThis) ((OBJSYS*) NULL)
 #else //__nvoc_system_h_disabled
 #define __dynamicCast_OBJSYS(pThis) \
-    ((OBJSYS*)__nvoc_dynamicCast(staticCast((pThis), Dynamic), classInfo(OBJSYS)))
+    ((OBJSYS*) __nvoc_dynamicCast(staticCast((pThis), Dynamic), classInfo(OBJSYS)))
 #endif //__nvoc_system_h_disabled
 
+// Property macros
 #define PDB_PROP_SYS_REGISTRY_OVERRIDES_INITIALIZED_BASE_CAST
 #define PDB_PROP_SYS_REGISTRY_OVERRIDES_INITIALIZED_BASE_NAME PDB_PROP_SYS_REGISTRY_OVERRIDES_INITIALIZED
-#define PDB_PROP_SYS_IS_EFI_INIT_BASE_CAST
-#define PDB_PROP_SYS_IS_EFI_INIT_BASE_NAME PDB_PROP_SYS_IS_EFI_INIT
 #define PDB_PROP_SYS_GPU_LOCK_MIDPATH_ENABLED_BASE_CAST
 #define PDB_PROP_SYS_GPU_LOCK_MIDPATH_ENABLED_BASE_NAME PDB_PROP_SYS_GPU_LOCK_MIDPATH_ENABLED
 #define PDB_PROP_SYS_INITIALIZE_SYSTEM_MEMORY_ALLOCATIONS_BASE_CAST
@@ -492,14 +572,14 @@ extern const struct NVOC_CLASS_DEF __nvoc_class_def_OBJSYS;
 #define PDB_PROP_SYS_PRIMARY_VBIOS_STATE_SAVED_BASE_NAME PDB_PROP_SYS_PRIMARY_VBIOS_STATE_SAVED
 #define PDB_PROP_SYS_BUGCHECK_ON_TIMEOUT_BASE_CAST
 #define PDB_PROP_SYS_BUGCHECK_ON_TIMEOUT_BASE_NAME PDB_PROP_SYS_BUGCHECK_ON_TIMEOUT
+#define PDB_PROP_SYS_ENABLE_RM_TEST_ONLY_CODE_BASE_CAST
+#define PDB_PROP_SYS_ENABLE_RM_TEST_ONLY_CODE_BASE_NAME PDB_PROP_SYS_ENABLE_RM_TEST_ONLY_CODE
 #define PDB_PROP_SYS_ENABLE_STREAM_MEMOPS_BASE_CAST
 #define PDB_PROP_SYS_ENABLE_STREAM_MEMOPS_BASE_NAME PDB_PROP_SYS_ENABLE_STREAM_MEMOPS
 #define PDB_PROP_SYS_SBIOS_NVIF_POWERMIZER_LIMIT_BASE_CAST
 #define PDB_PROP_SYS_SBIOS_NVIF_POWERMIZER_LIMIT_BASE_NAME PDB_PROP_SYS_SBIOS_NVIF_POWERMIZER_LIMIT
 #define PDB_PROP_SYS_IS_UEFI_BASE_CAST
 #define PDB_PROP_SYS_IS_UEFI_BASE_NAME PDB_PROP_SYS_IS_UEFI
-#define PDB_PROP_SYS_CLIENT_HANDLE_LOOKUP_BASE_CAST
-#define PDB_PROP_SYS_CLIENT_HANDLE_LOOKUP_BASE_NAME PDB_PROP_SYS_CLIENT_HANDLE_LOOKUP
 #define PDB_PROP_SYS_INTERNAL_EVENT_BUFFER_ALLOC_ALLOWED_BASE_CAST
 #define PDB_PROP_SYS_INTERNAL_EVENT_BUFFER_ALLOC_ALLOWED_BASE_NAME PDB_PROP_SYS_INTERNAL_EVENT_BUFFER_ALLOC_ALLOWED
 #define PDB_PROP_SYS_IS_GSYNC_ENABLED_BASE_CAST
@@ -522,10 +602,14 @@ extern const struct NVOC_CLASS_DEF __nvoc_class_def_OBJSYS;
 #define PDB_PROP_SYS_VALIDATE_CLIENT_HANDLE_BASE_NAME PDB_PROP_SYS_VALIDATE_CLIENT_HANDLE
 #define PDB_PROP_SYS_FABRIC_IS_EXTERNALLY_MANAGED_BASE_CAST
 #define PDB_PROP_SYS_FABRIC_IS_EXTERNALLY_MANAGED_BASE_NAME PDB_PROP_SYS_FABRIC_IS_EXTERNALLY_MANAGED
+#define PDB_PROP_SYS_ENABLE_FORCE_SHARED_LOCK_BASE_CAST
+#define PDB_PROP_SYS_ENABLE_FORCE_SHARED_LOCK_BASE_NAME PDB_PROP_SYS_ENABLE_FORCE_SHARED_LOCK
 #define PDB_PROP_SYS_IS_AGGRESSIVE_GC6_ENABLED_BASE_CAST
 #define PDB_PROP_SYS_IS_AGGRESSIVE_GC6_ENABLED_BASE_NAME PDB_PROP_SYS_IS_AGGRESSIVE_GC6_ENABLED
 #define PDB_PROP_SYS_HASWELL_CPU_C0_STEPPING_BASE_CAST
 #define PDB_PROP_SYS_HASWELL_CPU_C0_STEPPING_BASE_NAME PDB_PROP_SYS_HASWELL_CPU_C0_STEPPING
+#define PDB_PROP_SYS_RECOVERY_REBOOT_REQUIRED_BASE_CAST
+#define PDB_PROP_SYS_RECOVERY_REBOOT_REQUIRED_BASE_NAME PDB_PROP_SYS_RECOVERY_REBOOT_REQUIRED
 #define PDB_PROP_SYS_RM_LOCK_TIME_COLLECT_BASE_CAST
 #define PDB_PROP_SYS_RM_LOCK_TIME_COLLECT_BASE_NAME PDB_PROP_SYS_RM_LOCK_TIME_COLLECT
 #define PDB_PROP_SYS_DEBUGGER_DISABLED_BASE_CAST
@@ -539,12 +623,17 @@ NV_STATUS __nvoc_objCreate_OBJSYS(OBJSYS**, Dynamic*, NvU32);
 #define __objCreate_OBJSYS(ppNewObj, pParent, createFlags) \
     __nvoc_objCreate_OBJSYS((ppNewObj), staticCast((pParent), Dynamic), (createFlags))
 
-#define sysCaptureState(arg0) sysCaptureState_DISPATCH(arg0)
-NV_STATUS sysCaptureState_IMPL(struct OBJSYS *arg0);
 
-static inline NV_STATUS sysCaptureState_DISPATCH(struct OBJSYS *arg0) {
-    return arg0->__sysCaptureState__(arg0);
+// Wrapper macros
+#define sysCaptureState_FNPTR(arg_this) arg_this->__nvoc_metadata_ptr->vtable.__sysCaptureState__
+#define sysCaptureState(arg_this) sysCaptureState_DISPATCH(arg_this)
+
+// Dispatch functions
+static inline NV_STATUS sysCaptureState_DISPATCH(struct OBJSYS *arg_this) {
+    return arg_this->__nvoc_metadata_ptr->vtable.__sysCaptureState__(arg_this);
 }
+
+NV_STATUS sysCaptureState_IMPL(struct OBJSYS *arg1);
 
 static inline NvU32 sysGetPwrTransitionTimeout(struct OBJSYS *pSys) {
     return pSys->pwrTransitionTimeoutOverride;
@@ -557,69 +646,79 @@ static inline const SYS_STATIC_CONFIG *sysGetStaticConfig(struct OBJSYS *pSys) {
 NV_STATUS sysConstruct_IMPL(struct OBJSYS *arg_);
 
 #define __nvoc_sysConstruct(arg_) sysConstruct_IMPL(arg_)
-void sysDestruct_IMPL(struct OBJSYS *arg0);
+void sysDestruct_IMPL(struct OBJSYS *arg1);
 
-#define __nvoc_sysDestruct(arg0) sysDestruct_IMPL(arg0)
-void sysInitRegistryOverrides_IMPL(struct OBJSYS *arg0);
+#define __nvoc_sysDestruct(arg1) sysDestruct_IMPL(arg1)
+void sysInitRegistryOverrides_IMPL(struct OBJSYS *arg1);
 
 #ifdef __nvoc_system_h_disabled
-static inline void sysInitRegistryOverrides(struct OBJSYS *arg0) {
+static inline void sysInitRegistryOverrides(struct OBJSYS *arg1) {
     NV_ASSERT_FAILED_PRECOMP("OBJSYS was disabled!");
 }
 #else //__nvoc_system_h_disabled
-#define sysInitRegistryOverrides(arg0) sysInitRegistryOverrides_IMPL(arg0)
+#define sysInitRegistryOverrides(arg1) sysInitRegistryOverrides_IMPL(arg1)
 #endif //__nvoc_system_h_disabled
 
-void sysApplyLockingPolicy_IMPL(struct OBJSYS *arg0);
+void sysApplyLockingPolicy_IMPL(struct OBJSYS *arg1);
 
 #ifdef __nvoc_system_h_disabled
-static inline void sysApplyLockingPolicy(struct OBJSYS *arg0) {
+static inline void sysApplyLockingPolicy(struct OBJSYS *arg1) {
     NV_ASSERT_FAILED_PRECOMP("OBJSYS was disabled!");
 }
 #else //__nvoc_system_h_disabled
-#define sysApplyLockingPolicy(arg0) sysApplyLockingPolicy_IMPL(arg0)
+#define sysApplyLockingPolicy(arg1) sysApplyLockingPolicy_IMPL(arg1)
 #endif //__nvoc_system_h_disabled
 
-struct OBJOS *sysGetOs_IMPL(struct OBJSYS *arg0);
+struct OBJOS *sysGetOs_IMPL(struct OBJSYS *arg1);
 
 #ifdef __nvoc_system_h_disabled
-static inline struct OBJOS *sysGetOs(struct OBJSYS *arg0) {
+static inline struct OBJOS *sysGetOs(struct OBJSYS *arg1) {
     NV_ASSERT_FAILED_PRECOMP("OBJSYS was disabled!");
     return NULL;
 }
 #else //__nvoc_system_h_disabled
-#define sysGetOs(arg0) sysGetOs_IMPL(arg0)
+#define sysGetOs(arg1) sysGetOs_IMPL(arg1)
 #endif //__nvoc_system_h_disabled
 
-void sysEnableExternalFabricMgmt_IMPL(struct OBJSYS *arg0);
+void sysEnableExternalFabricMgmt_IMPL(struct OBJSYS *arg1);
 
 #ifdef __nvoc_system_h_disabled
-static inline void sysEnableExternalFabricMgmt(struct OBJSYS *arg0) {
+static inline void sysEnableExternalFabricMgmt(struct OBJSYS *arg1) {
     NV_ASSERT_FAILED_PRECOMP("OBJSYS was disabled!");
 }
 #else //__nvoc_system_h_disabled
-#define sysEnableExternalFabricMgmt(arg0) sysEnableExternalFabricMgmt_IMPL(arg0)
+#define sysEnableExternalFabricMgmt(arg1) sysEnableExternalFabricMgmt_IMPL(arg1)
 #endif //__nvoc_system_h_disabled
 
-void sysForceInitFabricManagerState_IMPL(struct OBJSYS *arg0);
+void sysForceInitFabricManagerState_IMPL(struct OBJSYS *arg1);
 
 #ifdef __nvoc_system_h_disabled
-static inline void sysForceInitFabricManagerState(struct OBJSYS *arg0) {
+static inline void sysForceInitFabricManagerState(struct OBJSYS *arg1) {
     NV_ASSERT_FAILED_PRECOMP("OBJSYS was disabled!");
 }
 #else //__nvoc_system_h_disabled
-#define sysForceInitFabricManagerState(arg0) sysForceInitFabricManagerState_IMPL(arg0)
+#define sysForceInitFabricManagerState(arg1) sysForceInitFabricManagerState_IMPL(arg1)
 #endif //__nvoc_system_h_disabled
 
-NV_STATUS sysSyncExternalFabricMgmtWAR_IMPL(struct OBJSYS *arg0, OBJGPU *arg1);
+NV_STATUS sysSyncExternalFabricMgmtWAR_IMPL(struct OBJSYS *arg1, OBJGPU *arg2);
 
 #ifdef __nvoc_system_h_disabled
-static inline NV_STATUS sysSyncExternalFabricMgmtWAR(struct OBJSYS *arg0, OBJGPU *arg1) {
+static inline NV_STATUS sysSyncExternalFabricMgmtWAR(struct OBJSYS *arg1, OBJGPU *arg2) {
     NV_ASSERT_FAILED_PRECOMP("OBJSYS was disabled!");
     return NV_ERR_NOT_SUPPORTED;
 }
 #else //__nvoc_system_h_disabled
-#define sysSyncExternalFabricMgmtWAR(arg0, arg1) sysSyncExternalFabricMgmtWAR_IMPL(arg0, arg1)
+#define sysSyncExternalFabricMgmtWAR(arg1, arg2) sysSyncExternalFabricMgmtWAR_IMPL(arg1, arg2)
+#endif //__nvoc_system_h_disabled
+
+void sysSetRecoveryRebootRequired_IMPL(struct OBJSYS *pSys, NvBool bRebootRequired);
+
+#ifdef __nvoc_system_h_disabled
+static inline void sysSetRecoveryRebootRequired(struct OBJSYS *pSys, NvBool bRebootRequired) {
+    NV_ASSERT_FAILED_PRECOMP("OBJSYS was disabled!");
+}
+#else //__nvoc_system_h_disabled
+#define sysSetRecoveryRebootRequired(pSys, bRebootRequired) sysSetRecoveryRebootRequired_IMPL(pSys, bRebootRequired)
 #endif //__nvoc_system_h_disabled
 
 #undef PRIVATE_FIELD

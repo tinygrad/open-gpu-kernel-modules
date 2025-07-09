@@ -40,9 +40,6 @@ NVIDIA_KO = nvidia/nvidia.ko
 NVIDIA_BINARY_OBJECT := $(src)/nvidia/nv-kernel.o_binary
 NVIDIA_BINARY_OBJECT_O := nvidia/nv-kernel.o
 
-quiet_cmd_symlink = SYMLINK $@
- cmd_symlink = ln -sf $< $@
-
 targets += $(NVIDIA_BINARY_OBJECT_O)
 
 $(obj)/$(NVIDIA_BINARY_OBJECT_O): $(NVIDIA_BINARY_OBJECT) FORCE
@@ -112,7 +109,6 @@ $(obj)/$(NVIDIA_INTERFACE): $(addprefix $(obj)/,$(NVIDIA_OBJECTS))
 
 NV_OBJECTS_DEPEND_ON_CONFTEST += $(NVIDIA_OBJECTS)
 
-NV_CONFTEST_FUNCTION_COMPILE_TESTS += hash__remap_4k_pfn
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += set_pages_uc
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += list_is_first
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += set_memory_uc
@@ -134,9 +130,7 @@ NV_CONFTEST_FUNCTION_COMPILE_TESTS += dma_map_page_attrs
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += write_cr4
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += of_find_node_by_phandle
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += of_node_to_nid
-NV_CONFTEST_FUNCTION_COMPILE_TESTS += pnv_pci_get_npu_dev
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += of_get_ibm_chip_id
-NV_CONFTEST_FUNCTION_COMPILE_TESTS += pci_bus_address
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += pci_stop_and_remove_bus_device
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += pci_rebar_get_possible_sizes
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += wait_for_random_bytes
@@ -160,8 +154,11 @@ NV_CONFTEST_FUNCTION_COMPILE_TESTS += full_name_hash
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += pci_enable_atomic_ops_to_root
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += vga_tryget
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += cc_platform_has
+NV_CONFTEST_FUNCTION_COMPILE_TESTS += cc_attr_guest_sev_snp
+NV_CONFTEST_FUNCTION_COMPILE_TESTS += hv_get_isolation_type
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += seq_read_iter
-NV_CONFTEST_FUNCTION_COMPILE_TESTS += unsafe_follow_pfn
+NV_CONFTEST_FUNCTION_COMPILE_TESTS += follow_pfn
+NV_CONFTEST_FUNCTION_COMPILE_TESTS += ptep_get
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += drm_gem_object_get
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += drm_gem_object_put_unlocked
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += add_memory_driver_managed
@@ -181,6 +178,7 @@ NV_CONFTEST_FUNCTION_COMPILE_TESTS += gpio_get_value
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += gpio_set_value
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += gpio_to_irq
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += icc_get
+NV_CONFTEST_FUNCTION_COMPILE_TESTS += devm_of_icc_get
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += icc_put
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += icc_set_bw
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += dma_buf_export_args
@@ -188,14 +186,15 @@ NV_CONFTEST_FUNCTION_COMPILE_TESTS += dma_buf_ops_has_kmap
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += dma_buf_ops_has_kmap_atomic
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += dma_buf_ops_has_map
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += dma_buf_ops_has_map_atomic
-NV_CONFTEST_FUNCTION_COMPILE_TESTS += dma_buf_has_dynamic_attachment
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += dma_buf_attachment_has_peer2peer
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += dma_set_mask_and_coherent
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += devm_clk_bulk_get_all
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += get_task_ioprio
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += mdev_set_iommu_device
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += offline_and_remove_memory
+NV_CONFTEST_FUNCTION_COMPILE_TESTS += stack_trace
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += crypto_tfm_ctx_aligned
+NV_CONFTEST_FUNCTION_COMPILE_TESTS += assign_str
 
 NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_gpl_of_node_to_nid
 NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_gpl_sme_active
@@ -228,6 +227,21 @@ NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_present_tsec_comms_alloc_me
 NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_present_tsec_comms_free_gscco_mem
 NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_present_memory_block_size_bytes
 NV_CONFTEST_SYMBOL_COMPILE_TESTS += crypto
+NV_CONFTEST_SYMBOL_COMPILE_TESTS += crypto_akcipher_verify
+NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_present_follow_pte
+NV_CONFTEST_SYMBOL_COMPILE_TESTS += follow_pte_arg_vma
+NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_present_follow_pfnmap_start
+NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_gpl_pci_ats_supported
+NV_CONFTEST_SYMBOL_COMPILE_TESTS += ecc_digits_from_bytes
+NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_gpl_set_memory_encrypted
+NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_gpl_set_memory_decrypted
+NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_gpl___platform_driver_register
+NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_present___platform_driver_register
+NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_present_hrtimer_setup
+NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_present_timer_delete_sync
+NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_gpl___vma_start_write
+NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_gpl_iommu_dev_enable_feature
+NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_gpl_iommu_dev_disable_feature
 
 NV_CONFTEST_TYPE_COMPILE_TESTS += dma_ops
 NV_CONFTEST_TYPE_COMPILE_TESTS += swiotlb_dma_ops
@@ -251,6 +265,12 @@ NV_CONFTEST_TYPE_COMPILE_TESTS += pci_driver_has_driver_managed_dma
 NV_CONFTEST_TYPE_COMPILE_TESTS += vm_area_struct_has_const_vm_flags
 NV_CONFTEST_TYPE_COMPILE_TESTS += memory_failure_has_trapno_arg
 NV_CONFTEST_TYPE_COMPILE_TESTS += foll_longterm_present
+NV_CONFTEST_TYPE_COMPILE_TESTS += bus_type_has_iommu_ops
+NV_CONFTEST_TYPE_COMPILE_TESTS += of_property_for_each_u32_has_internal_args
+NV_CONFTEST_TYPE_COMPILE_TESTS += platform_driver_struct_remove_returns_void
+NV_CONFTEST_TYPE_COMPILE_TESTS += class_create_has_no_owner_arg
+NV_CONFTEST_TYPE_COMPILE_TESTS += class_devnode_has_const_arg
+NV_CONFTEST_TYPE_COMPILE_TESTS += has_enum_pidtype_tgid
 
 NV_CONFTEST_GENERIC_COMPILE_TESTS += dom0_kernel_present
 NV_CONFTEST_GENERIC_COMPILE_TESTS += nvidia_vgpu_kvm_build
@@ -269,3 +289,6 @@ NV_CONFTEST_GENERIC_COMPILE_TESTS += mdev_available
 NV_CONFTEST_GENERIC_COMPILE_TESTS += cmd_uphy_display_port_init
 NV_CONFTEST_GENERIC_COMPILE_TESTS += cmd_uphy_display_port_off
 NV_CONFTEST_GENERIC_COMPILE_TESTS += memory_failure_mf_sw_simulated_defined
+NV_CONFTEST_GENERIC_COMPILE_TESTS += device_vm_build
+NV_CONFTEST_GENERIC_COMPILE_TESTS += pcie_reset_flr
+NV_CONFTEST_GENERIC_COMPILE_TESTS += module_import_ns_takes_constant

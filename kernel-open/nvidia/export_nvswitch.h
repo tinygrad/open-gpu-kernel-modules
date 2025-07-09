@@ -670,6 +670,19 @@ nvswitch_os_print
 );
 
 /*
+ * Log the given error code via an OS-specifric programmatic API
+ */
+void
+NVSWITCH_PRINT_ATTRIB(3, 4)
+nvswitch_os_report_error
+(
+    void *os_handle,
+    NvU32 error_code,
+    const char *fmt,
+    ...
+);
+
+/*
  * "Registry" interface for dword
  */
 NvlStatus
@@ -996,6 +1009,22 @@ nvswitch_os_get_supported_register_events_params
 (
     NvBool *bSupportsManyEvents,
     NvBool *bUserSuppliesOsData
+);
+
+/*
+ * @Brief : Is TNVL mode enabled.
+ *
+ * @Description : Returns if TNVL is enabled for the device
+ *
+ * @param[in] device        a reference to the device
+ *
+ * @returns                 NV_TRUE,  if TNVL is enabled
+ *                          NV_FALSE, if TNVL is disabled
+ */
+NvBool
+nvswitch_lib_is_tnvl_enabled
+(
+    nvswitch_device *device
 );
 
 #ifdef __cplusplus

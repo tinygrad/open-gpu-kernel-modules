@@ -1,6 +1,15 @@
+
 #ifndef _G_KERN_HWPM_POWER_NVOC_H_
 #define _G_KERN_HWPM_POWER_NVOC_H_
+
+// Version of generated metadata structures
+#ifdef NVOC_METADATA_VERSION
+#undef NVOC_METADATA_VERSION
+#endif
+#define NVOC_METADATA_VERSION 2
+
 #include "nvoc/runtime.h"
+#include "nvoc/rtti.h"
 
 #ifdef __cplusplus
 extern "C" {

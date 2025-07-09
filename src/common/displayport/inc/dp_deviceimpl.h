@@ -44,6 +44,8 @@ namespace DisplayPort
     #define HDCP_BCAPS_DDC_EN_BIT 0x80
     #define HDCP_BCAPS_DP_EN_BIT  0x01
     #define HDCP_I2C_CLIENT_ADDR  0x74
+    #define DEVICE_OUI_SIZE       3
+    #define DSC_CAPS_SIZE         16
 
     struct GroupImpl;
     struct ConnectorImpl;
@@ -77,9 +79,10 @@ namespace DisplayPort
         {
             struct _Enum_Path
             {
-                unsigned availableStreams, total, free;
+                unsigned availableStreams, total, free, dfpLinkAvailable;
                 bool     bPathFECCapable;
                 bool     dataValid;                     // Is the cache valid?
+                bool     availablePbnUpdated;
             } enum_path;
 
             struct Compound_Query_State
@@ -108,6 +111,7 @@ namespace DisplayPort
 
         void                resetCacheInferredLink();
         LinkConfiguration * inferLeafLink(unsigned * totalLinkSlots);
+        void                inferPathConstraints();
 
 
         DeviceImpl      * parent;               // Upstream parent device
@@ -131,7 +135,7 @@ namespace DisplayPort
         bool              multistream;
         bool              videoSink, audioSink;
         bool              plugged;
-
+        bool              bApplyPclkWarBug4949066;
 
         AuxRetry          friendlyAux;
         bool              payloadAllocated;             // did the allocate payload go through?
@@ -170,7 +174,8 @@ namespace DisplayPort
 
         // Panel replay Caps
         PanelReplayCaps prCaps;
-
+        // ALPM caps
+        AlpmCaps alpmCaps;
         bool bIsFakedMuxDevice;
         bool bIsPreviouslyFakedMuxDevice;
         bool bisMarkedForDeletion;
@@ -199,6 +204,8 @@ namespace DisplayPort
         TriState bAsyncSDPCapable;
         bool bMSAOverMSTCapable;
         bool bDscPassThroughColorFormatWar;
+
+        NvU64 maxModeBwRequired;
 
         DeviceImpl(DPCDHAL * hal, ConnectorImpl * connector, DeviceImpl * parent);
         ~DeviceImpl();
@@ -379,6 +386,11 @@ namespace DisplayPort
             return dpcdRevisionMinor >= minor;
         }
 
+        NvU64 getMaxModeBwRequired()
+        {
+            return maxModeBwRequired;
+        }
+
         virtual void queryGUID2();
 
         virtual bool getSDPExtnForColorimetrySupported();
@@ -420,6 +432,7 @@ namespace DisplayPort
         virtual void    markDeviceForDeletion() {bisMarkedForDeletion = true;};
         virtual bool    isMarkedForDeletion() {return bisMarkedForDeletion;};
         virtual bool    getRawDscCaps(NvU8 *buffer, NvU32 bufferSize);
+        virtual bool    setRawDscCaps(const NvU8 *buffer, NvU32 bufferSize);
 
         virtual AuxBus::status dscCrcControl(NvBool bEnable, gpuDscCrc *dataGpu, sinkDscCrc *dataSink);
 
@@ -444,7 +457,19 @@ namespace DisplayPort
         bool isPanelReplaySupported(void);
         void getPanelReplayCaps(void);
         bool setPanelReplayConfig(panelReplayConfig prcfg);
+        bool getPanelReplayConfig(panelReplayConfig *pPrcfg);
         bool getPanelReplayStatus(PanelReplayStatus *pPrStatus);
+        NvBool isSelectiveUpdateSupported(void);
+        NvBool isEarlyRegionTpSupported(void);
+        NvBool enableAdaptiveSyncSdp(NvBool enable);
+        SelectiveUpdateCaps getSelectiveUpdateCaps(void);
+        NvBool isAdaptiveSyncSdpNotSupportedInPr(void);
+        NvBool isdscDecodeNotSupportedInPr(void);
+        NvBool isLinkOffSupportedAfterAsSdpInPr(void);
+        void getAlpmCaps(void);
+        NvBool setAlpmConfig(AlpmConfig alpmcfg);
+        NvBool getAlpmStatus(AlpmStatus *pAlpmStatus);
+        NvBool isAuxLessAlpmSupported(void);
 
         NvBool getDSCSupport();
         bool getFECSupport();
@@ -480,6 +505,14 @@ namespace DisplayPort
         unsigned getDscMaxSliceWidth();
         unsigned getDscDecoderColorDepthSupportMask();
         void setDscDecompressionDevice(bool bDscCapBasedOnParent);
+        virtual bool getDeviceSpecificData(NvU8 *oui, NvU8 *deviceIdString,
+                                           NvU8 *hwRevision, NvU8 *swMajorRevision,
+                                           NvU8 *swMinorRevision);
+        virtual bool getParentSpecificData(NvU8 *oui, NvU8 *deviceIdString,
+                                           NvU8 *hwRevision, NvU8 *swMajorRevision,
+                                           NvU8 *swMinorRevision);
+
+        virtual bool setModeList(DisplayPort::DpModesetParams *pModeList, unsigned numModes);
     };
     class DeviceHDCPDetection : public Object, MessageManager::Message::MessageEventSink, Timer::TimerCallback
     {

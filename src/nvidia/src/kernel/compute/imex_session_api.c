@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2022-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2022-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -71,6 +71,21 @@ _performRcAndDisableChannels
 }
 
 static NvBool
+_checkDanglingExports
+(
+    RsClient *pRsClient
+)
+{
+    RS_ITERATOR it = clientRefIter(pRsClient, 0, classId(MemoryExport),
+                                   RS_ITERATE_CHILDREN, NV_TRUE);
+
+    if (clientRefIterNext(pRsClient, &it))
+        return NV_TRUE;
+
+    return NV_FALSE;
+}
+
+static NvBool
 _checkClientDesiredImporterAndClearCache
 (
     RsClient *pRsClient,
@@ -126,7 +141,7 @@ _checkClientDesiredImporterAndClearCache
     return bMatch;
 }
 
-void
+NvBool
 rcAndDisableOutstandingClientsWithImportedMemory
 (
     OBJGPU   *pGpu,
@@ -139,6 +154,7 @@ rcAndDisableOutstandingClientsWithImportedMemory
     NvU32 gpuMask = 0;
     NvU32 gpuCount = 0;
     NvU32 gpuInstance = 0;
+    NvBool channelRcInvoked = NV_FALSE;
 
     NV_ASSERT(rmapiLockIsOwner());
 
@@ -198,13 +214,19 @@ rcAndDisableOutstandingClientsWithImportedMemory
                             NV_FIFO_PERMANENTLY_DISABLE_CHANNELS_MAX_CLIENTS)
             {
                 _performRcAndDisableChannels(pGpu, &params);
+                channelRcInvoked = NV_TRUE;
                 params.numClients = 0;
             }
         }
 
         if (params.numClients != 0)
+        {
             _performRcAndDisableChannels(pGpu, &params);
+            channelRcInvoked = NV_TRUE;
+        }
     }
+
+    return channelRcInvoked;
 }
 
 NV_STATUS
@@ -219,9 +241,11 @@ imexsessionapiConstruct_IMPL
     OBJSYS *pSys = SYS_GET_INSTANCE();
     Fabric *pFabric = SYS_GET_FABRIC(pSys);
     NvHandle hClient = pCallContext->pClient->hClient;
+    RmClient *pRmClient = dynamicCast(pCallContext->pClient, RmClient);
     NV_STATUS status;
     NvP64 pImexOsEvent = NvP64_NULL;
 
+    NV_ASSERT_OR_RETURN(pRmClient != NULL, NV_ERR_INVALID_CLIENT);
     NV_ASSERT_OR_RETURN(RMCFG_FEATURE_KERNEL_RM, NV_ERR_NOT_SUPPORTED);
 
     if ((pUserParams->flags != 0) ||
@@ -263,7 +287,7 @@ imexsessionapiConstruct_IMPL
     //
     if (status == NV_ERR_NOT_SUPPORTED)
     {
-        if (!rmclientIsAdminByHandle(hClient, pCallContext->secInfo.privLevel))
+        if (!rmclientIsAdmin(pRmClient, pCallContext->secInfo.privLevel))
         {
             NV_PRINTF(LEVEL_ERROR, "insufficient permissions\n");
             status = NV_ERR_INSUFFICIENT_PERMISSIONS;
@@ -278,6 +302,8 @@ imexsessionapiConstruct_IMPL
 
     fabricSetNodeId(pFabric, pUserParams->nodeId);
     pImexSessionApi->flags = pUserParams->flags;
+
+    fabricEnableMemAlloc(pFabric);
 
     return NV_OK;
 
@@ -300,6 +326,22 @@ imexsessionapiDestruct_IMPL
     Fabric *pFabric = SYS_GET_FABRIC(pSys);
     NvP64 pImexOsEvent = fabricGetImexEvent(pFabric);
 
+    //
+    // If the IMEX daemon shutdown (crashed) without explicitly cleaning up all
+    // its state (e.g. duped exported memory), disable future fabric allocations.
+    // The memory is released prematurely due to the IMEX  daemon crash could
+    // still be in-use from other nodes and we don't want it to be re-allocated
+    // (reused) until all the users (importers) are killed. Thus, until the
+    // IMEX daemon restarts after appropriate recovery (admin controlled),
+    // disable any future fabric allocations.
+    //
+
+    if (_checkDanglingExports(RES_GET_CLIENT(pImexSessionApi)))
+    {
+        fabricDisableMemAlloc(pFabric);
+        NV_PRINTF(LEVEL_ERROR, "Abrupt nvidia-imex daemon shutdown detected, disabled fabric allocations\n");
+    }
+
     // Invalidate export cache to block future imports on this node ID.
     memoryexportClearCache(fabricGetNodeId(pFabric));
 
@@ -317,10 +359,11 @@ imexsessionapiDestruct_IMPL
 
     if (!(pImexSessionApi->flags & NV00F1_ALLOC_DISABLE_CHANNEL_RECOVERY))
     {
-        rcAndDisableOutstandingClientsWithImportedMemory(NULL, NV_FABRIC_INVALID_NODE_ID);
+        if (rcAndDisableOutstandingClientsWithImportedMemory(NULL, NV_FABRIC_INVALID_NODE_ID))
+        {
+            NV_PRINTF(LEVEL_ERROR, "Abrupt nvidia-imex daemon shutdown detected, robust channel recovery invoked\n");
+        }
     }
-
-    NV_PRINTF(LEVEL_WARNING, "IMEX daemon shutdown!\n");
 }
 
 NV_STATUS
@@ -382,7 +425,11 @@ imexsessionapiCtrlCmdDisableImporters_IMPL
     if (pImexSessionApi->flags & NV00F1_ALLOC_DISABLE_CHANNEL_RECOVERY)
         return NV_ERR_NOT_SUPPORTED;
 
-    rcAndDisableOutstandingClientsWithImportedMemory(NULL, pParams->nodeId);
+    if (rcAndDisableOutstandingClientsWithImportedMemory(NULL, pParams->nodeId))
+    {
+        NV_PRINTF(LEVEL_ERROR, "nvidia-imex daemon has invoked robust channel recovery for remote node: %u\n",
+                  pParams->nodeId);
+    }
 
     return NV_OK;
 }

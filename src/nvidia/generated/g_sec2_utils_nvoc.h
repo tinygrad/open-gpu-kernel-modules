@@ -1,6 +1,15 @@
+
 #ifndef _G_SEC2_UTILS_NVOC_H_
 #define _G_SEC2_UTILS_NVOC_H_
+
+// Version of generated metadata structures
+#ifdef NVOC_METADATA_VERSION
+#undef NVOC_METADATA_VERSION
+#endif
+#define NVOC_METADATA_VERSION 2
+
 #include "nvoc/runtime.h"
+#include "nvoc/rtti.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -29,6 +38,7 @@ extern "C" {
  * DEALINGS IN THE SOFTWARE.
  */
 
+#pragma once
 #include "g_sec2_utils_nvoc.h"
 
 #ifndef SEC2_UTILS_H
@@ -71,11 +81,28 @@ typedef struct
 #define PRIVATE_FIELD(x) NVOC_PRIVATE_FIELD(x)
 #endif
 
+
+// Metadata with per-class RTTI with ancestor(s)
+struct NVOC_METADATA__Sec2Utils;
+struct NVOC_METADATA__Object;
+
+
 struct Sec2Utils {
-    const struct NVOC_RTTI *__nvoc_rtti;
+
+    // Metadata starts with RTTI structure.
+    union {
+         const struct NVOC_METADATA__Sec2Utils *__nvoc_metadata_ptr;
+         const struct NVOC_RTTI *__nvoc_rtti;
+    };
+
+    // Parent (i.e. superclass or base class) objects
     struct Object __nvoc_base_Object;
-    struct Object *__nvoc_pbase_Object;
-    struct Sec2Utils *__nvoc_pbase_Sec2Utils;
+
+    // Ancestor object pointers for `staticCast` feature
+    struct Object *__nvoc_pbase_Object;    // obj super
+    struct Sec2Utils *__nvoc_pbase_Sec2Utils;    // sec2utils
+
+    // Data members
     NvHandle hClient;
     NvHandle hDevice;
     NvHandle hSubdevice;
@@ -91,6 +118,13 @@ struct Sec2Utils {
     NvU32 authTagGetIndex;
 };
 
+
+// Metadata with per-class RTTI with ancestor(s)
+struct NVOC_METADATA__Sec2Utils {
+    const struct NVOC_RTTI rtti;
+    const struct NVOC_METADATA__Object metadata__Object;
+};
+
 #ifndef __NVOC_CLASS_Sec2Utils_TYPEDEF__
 #define __NVOC_CLASS_Sec2Utils_TYPEDEF__
 typedef struct Sec2Utils Sec2Utils;
@@ -100,25 +134,29 @@ typedef struct Sec2Utils Sec2Utils;
 #define __nvoc_class_id_Sec2Utils 0x7716b1
 #endif /* __nvoc_class_id_Sec2Utils */
 
+// Casting support
 extern const struct NVOC_CLASS_DEF __nvoc_class_def_Sec2Utils;
 
 #define __staticCast_Sec2Utils(pThis) \
     ((pThis)->__nvoc_pbase_Sec2Utils)
 
 #ifdef __nvoc_sec2_utils_h_disabled
-#define __dynamicCast_Sec2Utils(pThis) ((Sec2Utils*)NULL)
+#define __dynamicCast_Sec2Utils(pThis) ((Sec2Utils*) NULL)
 #else //__nvoc_sec2_utils_h_disabled
 #define __dynamicCast_Sec2Utils(pThis) \
-    ((Sec2Utils*)__nvoc_dynamicCast(staticCast((pThis), Dynamic), classInfo(Sec2Utils)))
+    ((Sec2Utils*) __nvoc_dynamicCast(staticCast((pThis), Dynamic), classInfo(Sec2Utils)))
 #endif //__nvoc_sec2_utils_h_disabled
-
 
 NV_STATUS __nvoc_objCreateDynamic_Sec2Utils(Sec2Utils**, Dynamic*, NvU32, va_list);
 
-NV_STATUS __nvoc_objCreate_Sec2Utils(Sec2Utils**, Dynamic*, NvU32, struct OBJGPU * arg_pGpu, KERNEL_MIG_GPU_INSTANCE * arg_pKernelMIGGPUInstance);
+NV_STATUS __nvoc_objCreate_Sec2Utils(Sec2Utils**, Dynamic*, NvU32, struct OBJGPU *arg_pGpu, KERNEL_MIG_GPU_INSTANCE *arg_pKernelMIGGPUInstance);
 #define __objCreate_Sec2Utils(ppNewObj, pParent, createFlags, arg_pGpu, arg_pKernelMIGGPUInstance) \
     __nvoc_objCreate_Sec2Utils((ppNewObj), staticCast((pParent), Dynamic), (createFlags), arg_pGpu, arg_pKernelMIGGPUInstance)
 
+
+// Wrapper macros
+
+// Dispatch functions
 NV_STATUS sec2utilsConstruct_IMPL(struct Sec2Utils *arg_psec2utils, struct OBJGPU *arg_pGpu, KERNEL_MIG_GPU_INSTANCE *arg_pKernelMIGGPUInstance);
 
 #define __nvoc_sec2utilsConstruct(arg_psec2utils, arg_pGpu, arg_pKernelMIGGPUInstance) sec2utilsConstruct_IMPL(arg_psec2utils, arg_pGpu, arg_pKernelMIGGPUInstance)

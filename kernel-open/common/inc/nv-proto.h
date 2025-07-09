@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1999-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1999-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -41,7 +41,7 @@ void        nv_procfs_remove_gpu        (nv_linux_state_t *);
 
 int         nvidia_mmap                 (struct file *, struct vm_area_struct *);
 int         nvidia_mmap_helper          (nv_state_t *, nv_linux_file_private_t *, nvidia_stack_t *, struct vm_area_struct *, void *);
-int         nv_encode_caching           (pgprot_t *, NvU32, NvU32);
+int         nv_encode_caching           (pgprot_t *, NvU32, nv_memory_type_t);
 void        nv_revoke_gpu_mappings_locked(nv_state_t *);
 
 NvUPtr      nv_vm_map_pages             (struct page **, NvU32, NvBool, NvBool);
@@ -59,6 +59,8 @@ NV_STATUS   nv_uvm_resume               (void);
 void        nv_uvm_notify_start_device  (const NvU8 *uuid);
 void        nv_uvm_notify_stop_device   (const NvU8 *uuid);
 NV_STATUS   nv_uvm_event_interrupt      (const NvU8 *uuid);
+NV_STATUS   nv_uvm_drain_P2P            (const NvU8 *uuid);
+NV_STATUS   nv_uvm_resume_P2P           (const NvU8 *uuid);
 
 /* Move these to nv.h once implemented by other UNIX platforms */
 NvBool      nvidia_get_gpuid_list       (NvU32 *gpu_ids, NvU32 *gpu_count);

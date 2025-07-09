@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2009-2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2009-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -306,8 +306,10 @@ typedef struct NV208F_CTRL_CMD_FB_ECC_GET_FORWARD_MAP_ADDRESS_PARAMS {
     NvU32 col;
     NvU32 extBank;
     NvU32 rank;
-    NvU32 sublocation;
-    NvU32 partition;
+    NvU32 physicalSublocation;
+    NvU32 physicalPartition;
+    NvU32 logicalSublocation;
+    NvU32 logicalPartition;
     NvU32 writeKillPtr0;
     NvU32 injectionAddr;
     NvU32 injectionAddrExt;
@@ -427,9 +429,11 @@ typedef struct NV208F_CTRL_FB_ECC_INJECTION_SUPPORTED_PARAMS {
     NvBool bUncorrectableSupported;
 } NV208F_CTRL_FB_ECC_INJECTION_SUPPORTED_PARAMS;
 
-#define NV208F_CTRL_FB_ECC_INJECTION_SUPPORTED_LOC          0:0
-#define NV208F_CTRL_FB_ECC_INJECTION_SUPPORTED_LOC_LTC  (0x00000000)
-#define NV208F_CTRL_FB_ECC_INJECTION_SUPPORTED_LOC_DRAM (0x00000001)
+#define NV208F_CTRL_FB_ECC_INJECTION_SUPPORTED_LOC          1:0
+#define NV208F_CTRL_FB_ECC_INJECTION_SUPPORTED_LOC_LTC   (0x00000000)
+#define NV208F_CTRL_FB_ECC_INJECTION_SUPPORTED_LOC_DRAM  (0x00000001)
+#define NV208F_CTRL_FB_ECC_INJECTION_SUPPORTED_LOC_LRC   (0x00000002)
+#define NV208F_CTRL_FB_ECC_INJECTION_SUPPORTED_LOC_SYSL2 (0x00000003)
 
 /*
  * NV208F_CTRL_CMD_FB_ECC_SET_WRITE_KILL
@@ -451,7 +455,7 @@ typedef struct NV208F_CTRL_FB_ECC_INJECTION_SUPPORTED_PARAMS {
  *   address
  *      The physical DRAM address to be targeted by the write kill
  */
-#define NV208F_CTRL_CMD_FB_ECC_SET_WRITE_KILL           (0x208f0511) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_DIAG_FB_INTERFACE_ID << 8) | NV208F_CTRL_FB_ECC_SET_WRITE_KILL_PARAMS_MESSAGE_ID" */
+#define NV208F_CTRL_CMD_FB_ECC_SET_WRITE_KILL            (0x208f0511) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_DIAG_FB_INTERFACE_ID << 8) | NV208F_CTRL_FB_ECC_SET_WRITE_KILL_PARAMS_MESSAGE_ID" */
 
 #define NV208F_CTRL_FB_ECC_SET_WRITE_KILL_PARAMS_MESSAGE_ID (0x11U)
 
@@ -460,11 +464,20 @@ typedef struct NV208F_CTRL_FB_ECC_SET_WRITE_KILL_PARAMS {
     NV_DECLARE_ALIGNED(NvU64 address, 8);
 } NV208F_CTRL_FB_ECC_SET_WRITE_KILL_PARAMS;
 
+typedef struct NV208F_CTRL_FB_REMAPPING_RBC_ADDRESS_INFO {
+    NvU32 bank;
+    NvU32 stackId;
+    NvU32 row;
+    NvU32 partition;
+    NvU32 sublocation;
+} NV208F_CTRL_FB_REMAPPING_RBC_ADDRESS_INFO;
+
+#define NV208F_CTRL_FB_REMAP_ROW_ADDRESS_TYPE_PHYSICAL 0x0
+#define NV208F_CTRL_FB_REMAP_ROW_ADDRESS_TYPE_RBC      0x1
+
 /*
  * NV208F_CTRL_FB_REMAPPING_ADDRESS_INFO
  *
- *   physicalAddress
- *     Physical address to be remapped
  *   source
  *     The reason for retirement. Valid values for this parameter are
  *     from NV2080_CTRL_FB_REMAPPED_ROW_SOURCE_*
@@ -480,11 +493,23 @@ typedef struct NV208F_CTRL_FB_ECC_SET_WRITE_KILL_PARAMS {
  *         Attempting to remap a reserved row
  *       NV208F_CTRL_FB_REMAP_ROW_STATUS_INTERNAL_ERROR
  *         Some other RM failure
+ *   addressType
+ *     Type of address passed. Valid values are:
+ *       NV208F_CTRL_FB_REMAP_ROW_ADDRESS_TYPE_PHYSICAL
+ *         The specified address is physical address.
+ *       NV208F_CTRL_FB_REMAP_ROW_ADDRESS_TYPE_RBC
+ *         The specified address is DRAM Row Bank Column address.
+ *   address
+ *     Union of physicalAddress and rbcAddress. Set the appropriate one based on the address type.
  */
 typedef struct NV208F_CTRL_FB_REMAPPING_ADDRESS_INFO {
-    NV_DECLARE_ALIGNED(NvU64 physicalAddress, 8);
     NvU8  source;
     NvU32 status;
+    NvU8  addressType;
+    union {
+        NV_DECLARE_ALIGNED(NvU64 physicalAddress, 8);
+        NV208F_CTRL_FB_REMAPPING_RBC_ADDRESS_INFO rbcAddress;
+    } address;
 } NV208F_CTRL_FB_REMAPPING_ADDRESS_INFO;
 
 /* valid values for status */
@@ -591,25 +616,112 @@ typedef struct NV208F_CTRL_FB_CLEAR_REMAPPED_ROWS_PARAMS {
     NvBool bForcePurge;
 } NV208F_CTRL_FB_CLEAR_REMAPPED_ROWS_PARAMS;
 
+
+
 /*
- * NV208F_CTRL_CMD_FB_GET_FLOORSWEPT_FBPA_MASK
+ * NV208F_CTRL_CMD_FB_INJECT_LRC_ECC_ERROR
  *
- * This command calculates the floorswept fbpa mask by taking 1/2 HBM
- * floorsweeping into account
+ * This API allows a client to inject ECC errors in the LRC.
  *
- *   fbpaMask
- *     This value of the mask.
+ *   lrcc:
+ *      The physical LRCC number to inject the error into.
+ *   lrc:
+ *      THe physical LRC number within the LRCC to inject the error into.
+ *   locationMask
+ *      LTC location subtype(s) where error is to be injected. (Valid on Ampere and later)
+ *   errorType
+ *      Type of error to inject
+ *      NV208F_CTRL_FB_ERROR_TYPE_CORRECTABLE for SBE.
+ *      NV208F_CTRL_FB_ERROR_TYPE_UNCORRECTABLE for DBE.
  *
- *   Possbile status values returned are:
- *     NV_OK
- *     NV_ERR_NOT_SUPPORTED
  */
-#define NV208F_CTRL_CMD_FB_GET_FLOORSWEPT_FBPA_MASK (0x208f0516) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_DIAG_FB_INTERFACE_ID << 8) | NV208F_CTRL_FB_GET_FLOORSWEPT_FBPA_MASK_PARAMS_MESSAGE_ID" */
+#define NV208F_CTRL_CMD_FB_INJECT_LRC_ECC_ERROR (0x208f0516) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_DIAG_FB_INTERFACE_ID << 8) | NV208F_CTRL_FB_INJECT_LRC_ECC_ERROR_PARAMS_MESSAGE_ID" */
 
-#define NV208F_CTRL_FB_GET_FLOORSWEPT_FBPA_MASK_PARAMS_MESSAGE_ID (0x16U)
+#define NV208F_CTRL_FB_INJECT_LRC_ECC_ERROR_PARAMS_MESSAGE_ID (0x16U)
 
-typedef struct NV208F_CTRL_FB_GET_FLOORSWEPT_FBPA_MASK_PARAMS {
-    NvU32 fbpaMask;
-} NV208F_CTRL_FB_GET_FLOORSWEPT_FBPA_MASK_PARAMS;
+typedef struct NV208F_CTRL_FB_INJECT_LRC_ECC_ERROR_PARAMS {
+    NvU8                      lrcc;
+    NvU8                      lrc;
+    NvU8                      locationMask;
+    NV208F_CTRL_FB_ERROR_TYPE errorType;
+} NV208F_CTRL_FB_INJECT_LRC_ECC_ERROR_PARAMS;
 
+/*
+ * NV208F_CTRL_CMD_FB_INJECT_SYSLTC_ECC_ERROR
+ *
+ * This API allows a client to inject ECC errors in the SYSLTC.
+ *
+ *   group:
+ *      The physical group number to inject the error into.
+ *   instance:
+ *      The physical instance number within the group to inject the error into.
+ *   instance:
+ *      The physical slice number within the instance to inject the error into.
+ *   locationMask
+ *      SYSLTC location subtype(s) where error is to be injected. Same as LTC.
+ *   errorType
+ *      Type of error to inject
+ *      NV208F_CTRL_FB_ERROR_TYPE_CORRECTABLE for SBE.
+ *      NV208F_CTRL_FB_ERROR_TYPE_UNCORRECTABLE for DBE.
+ *
+ */
+#define NV208F_CTRL_CMD_FB_INJECT_SYSLTC_ECC_ERROR (0x208f0517) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_DIAG_FB_INTERFACE_ID << 8) | NV208F_CTRL_FB_INJECT_SYSLTC_ECC_ERROR_PARAMS_MESSAGE_ID" */
+
+#define NV208F_CTRL_FB_INJECT_SYSLTC_ECC_ERROR_PARAMS_MESSAGE_ID (0x17U)
+
+typedef struct NV208F_CTRL_FB_INJECT_SYSLTC_ECC_ERROR_PARAMS {
+    NvU8                      group;
+    NvU8                      instance;
+    NvU8                      slice;
+    NvU8                      locationMask;
+    NV208F_CTRL_FB_ERROR_TYPE errorType;
+} NV208F_CTRL_FB_INJECT_SYSLTC_ECC_ERROR_PARAMS;
+
+/*
+ * NV208F_CTRL_CMD_FB_GET_FBPA_PAC_MASKS
+ *
+ * This API returns the PAC mask for an FBPA. The format is an array where the
+ * index is the physical FBPA value and the value at the index is the channel
+ * mask at the corresponding FBPA. At this time there can only be max 4
+ * channels per FBPA. A floorswept FBPA will have a value of 0x0, vs a
+ * non-floorswept FBPA with no floorswept channels will have a value of 0xf
+ *
+ */
+#define NV208F_CTRL_FB_GET_FBPA_PAC_MASKS_MAX_FBPAS 64
+
+#define NV208F_CTRL_CMD_FB_GET_FBPA_PAC_MASKS       (0x208f0518) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_DIAG_FB_INTERFACE_ID << 8) | NV208F_CTRL_FB_GET_FBPA_PAC_MASKS_PARAMS_MESSAGE_ID" */
+
+#define NV208F_CTRL_FB_GET_FBPA_PAC_MASKS_PARAMS_MESSAGE_ID (0x18U)
+
+typedef struct NV208F_CTRL_FB_GET_FBPA_PAC_MASKS_PARAMS {
+    NvU8 fbpas[NV208F_CTRL_FB_GET_FBPA_PAC_MASKS_MAX_FBPAS];
+} NV208F_CTRL_FB_GET_FBPA_PAC_MASKS_PARAMS;
+
+/*
+ * NV208F_CTRL_CMD_FB_CONVERT_CHANNEL
+ *
+ * This API converts either a channel from physical to logical or vice-versa
+ *
+ *   conversionType:
+ *      See NV208F_CTRL_FB_CHANNEL_CONVERSION_TYPE
+ *   fbpa:
+ *      The physical fbpa the channel resides
+ *   input:
+ *      Input channel
+ *   output:
+ *      Output channel
+ */
+#define NV208F_CTRL_CMD_FB_CONVERT_CHANNEL (0x208f0519) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_DIAG_FB_INTERFACE_ID << 8) | NV208F_CTRL_FB_CONVERT_CHANNEL_PARAMS_MESSAGE_ID" */
+
+#define NV208F_CTRL_FB_CONVERT_CHANNEL_PARAMS_MESSAGE_ID (0x19U)
+
+typedef struct NV208F_CTRL_FB_CONVERT_CHANNEL_PARAMS {
+    NvU32 conversionType;
+    NvU32 fbpa;
+    NvU32 input;
+    NvU32 output;
+} NV208F_CTRL_FB_CONVERT_CHANNEL_PARAMS;
+
+#define NV208F_CTRL_FB_CHANNEL_CONVERSION_TYPE_LOGICAL_TO_PHYSICAL (0x00000000U)
+#define NV208F_CTRL_FB_CHANNEL_CONVERSION_TYPE_PHYSICAL_TO_LOGICAL (0x00000001U)
 /* _ctrl208ffb_h_ */

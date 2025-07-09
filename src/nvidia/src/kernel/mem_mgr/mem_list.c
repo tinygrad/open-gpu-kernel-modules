@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2019-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2019-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -341,7 +341,7 @@ continue_alloc_object:
 
         // this will fake a memory allocation at
         // the OS driver interface level - and also set pMemDesc->Allocated
-        memdescTagAlloc(status, NV_FB_ALLOC_RM_INTERNAL_OWNER_UNNAMED_TAG_46, 
+        memdescTagAlloc(status, NV_FB_ALLOC_RM_INTERNAL_OWNER_UNNAMED_TAG_46,
                         pMemDesc);
 
         if (status != NV_OK)
@@ -383,6 +383,20 @@ continue_alloc_object:
         if (status != NV_OK)
         {
             memdescDestroy(pMemDesc);
+        }
+        //
+        // We currently map all allocations that get registered with GSP
+        // since there is no mechanism to specify whether the registered
+        // allocation is ever accessed by GSP.
+        //
+        else if (RMCFG_FEATURE_PLATFORM_GSP)
+        {
+            // GSP only supports contiguous mappings
+            if (pAllocParams->pageCount == 1)
+            {
+                NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
+                    memCreateKernelMapping(pMemory, NV_PROTECT_READ_WRITE, NV_FALSE));
+            }
         }
     }
     else if (addressSpace == ADDR_FBMEM)
@@ -705,6 +719,7 @@ continue_alloc_object:
             case RM_ATTR_PAGE_SIZE_DEFAULT:
                 NV_PRINTF(LEVEL_INFO, "page size default doesn't have any impact \n");
                 break;
+            case RM_ATTR_PAGE_SIZE_256GB:
             case RM_ATTR_PAGE_SIZE_INVALID:
                 NV_PRINTF(LEVEL_INFO, "unexpected pageSizeAttr = 0x%x\n", pageSizeAttr);
                 status = NV_ERR_INVALID_STATE;

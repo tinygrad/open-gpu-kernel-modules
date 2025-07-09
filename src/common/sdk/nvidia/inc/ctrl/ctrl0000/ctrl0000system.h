@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2005-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2005-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -44,10 +44,10 @@
  *         
  *       NV0000_CTRL_GET_FEATURES_SLI
  *         When this bit is set, SLI is supported.
- *       NV0000_CTRL_GET_FEATURES_UEFI
- *         When this bit is set, it is a UEFI system.
  *       NV0000_CTRL_SYSTEM_GET_FEATURES_IS_EFI_INIT
  *         When this bit is set, EFI has initialized core channel 
+ *       NV0000_CTRL_SYSTEM_GET_FEATURES_RM_TEST_ONLY_CODE_ENABLED
+ *         When this bit is set, RM test only code is supported.
  *
  * Possible status values returned are:
  *   NV_OK
@@ -65,21 +65,16 @@ typedef struct NV0000_CTRL_SYSTEM_GET_FEATURES_PARAMS {
 
 /* Valid feature values */
 #define NV0000_CTRL_SYSTEM_GET_FEATURES_SLI                                 0:0
-#define NV0000_CTRL_SYSTEM_GET_FEATURES_SLI_FALSE                    (0x00000000U)
-#define NV0000_CTRL_SYSTEM_GET_FEATURES_SLI_TRUE                     (0x00000001U)
-
-#define NV0000_CTRL_SYSTEM_GET_FEATURES_UEFI                                1:1
-#define NV0000_CTRL_SYSTEM_GET_FEATURES_UEFI_FALSE                   (0x00000000U)
-#define NV0000_CTRL_SYSTEM_GET_FEATURES_UEFI_TRUE                    (0x00000001U)
-
-#define NV0000_CTRL_SYSTEM_GET_FEATURES_IS_EFI_INIT                         2:2
-#define NV0000_CTRL_SYSTEM_GET_FEATURES_IS_EFI_INIT_FALSE            (0x00000000U)
-#define NV0000_CTRL_SYSTEM_GET_FEATURES_IS_EFI_INIT_TRUE             (0x00000001U)
+#define NV0000_CTRL_SYSTEM_GET_FEATURES_SLI_FALSE                       (0x00000000U)
+#define NV0000_CTRL_SYSTEM_GET_FEATURES_SLI_TRUE                        (0x00000001U)
 
 #define NV0000_CTRL_SYSTEM_GET_FEATURES_UUID_BASED_MEM_SHARING              3:3
-#define NV0000_CTRL_SYSTEM_GET_FEATURES_UUID_BASED_MEM_SHARING_FALSE (0x00000000U)
-#define NV0000_CTRL_SYSTEM_GET_FEATURES_UUID_BASED_MEM_SHARING_TRUE  (0x00000001U)
+#define NV0000_CTRL_SYSTEM_GET_FEATURES_UUID_BASED_MEM_SHARING_FALSE    (0x00000000U)
+#define NV0000_CTRL_SYSTEM_GET_FEATURES_UUID_BASED_MEM_SHARING_TRUE     (0x00000001U)
 
+#define NV0000_CTRL_SYSTEM_GET_FEATURES_RM_TEST_ONLY_CODE_ENABLED              4:4
+#define NV0000_CTRL_SYSTEM_GET_FEATURES_RM_TEST_ONLY_CODE_ENABLED_FALSE (0x00000000U)
+#define NV0000_CTRL_SYSTEM_GET_FEATURES_RM_TEST_ONLY_CODE_ENABLED_TRUE  (0x00000001U)
 /*
  * NV0000_CTRL_CMD_SYSTEM_GET_BUILD_VERSION
  *
@@ -110,7 +105,7 @@ typedef struct NV0000_CTRL_SYSTEM_GET_FEATURES_PARAMS {
  *   NV_ERR_INVALID_PARAM_STRUCT
  */
 
-#define NV0000_CTRL_CMD_SYSTEM_GET_BUILD_VERSION                     (0x101U) /* finn: Evaluated from "(FINN_NV01_ROOT_SYSTEM_INTERFACE_ID << 8) | NV0000_CTRL_SYSTEM_GET_BUILD_VERSION_PARAMS_MESSAGE_ID" */
+#define NV0000_CTRL_CMD_SYSTEM_GET_BUILD_VERSION                        (0x101U) /* finn: Evaluated from "(FINN_NV01_ROOT_SYSTEM_INTERFACE_ID << 8) | NV0000_CTRL_SYSTEM_GET_BUILD_VERSION_PARAMS_MESSAGE_ID" */
 
 #define NV0000_CTRL_SYSTEM_GET_BUILD_VERSION_PARAMS_MESSAGE_ID (0x1U)
 
@@ -122,6 +117,12 @@ typedef struct NV0000_CTRL_SYSTEM_GET_BUILD_VERSION_PARAMS {
     NvU32 changelistNumber;
     NvU32 officialChangelistNumber;
 } NV0000_CTRL_SYSTEM_GET_BUILD_VERSION_PARAMS;
+
+typedef enum NV0000_CTRL_SYSTEM_SH_SOC_TYPE {
+    NV0000_CTRL_SYSTEM_SH_SOC_TYPE_NA = 0,
+    NV0000_CTRL_SYSTEM_SH_SOC_TYPE_NV_GRACE = 1,
+
+} NV0000_CTRL_SYSTEM_SH_SOC_TYPE;
 
 /*
  * NV0000_CTRL_CMD_SYSTEM_GET_CPU_INFO
@@ -204,6 +205,8 @@ typedef struct NV0000_CTRL_SYSTEM_GET_BUILD_VERSION_PARAMS {
  *     Silicon stepping
  *   bCCEnabled
  *     Confidentail compute enabled/disabled state
+ *   selfHostedSocType
+ *     SoC type NV0000_CTRL_SYSTEM_SH_SOC_TYPE* in case of self hosted systems
  *
  * Possible status values returned are:
  *   NV_OK
@@ -214,20 +217,21 @@ typedef struct NV0000_CTRL_SYSTEM_GET_BUILD_VERSION_PARAMS {
 #define NV0000_CTRL_SYSTEM_GET_CPU_INFO_PARAMS_MESSAGE_ID (0x2U)
 
 typedef struct NV0000_CTRL_SYSTEM_GET_CPU_INFO_PARAMS {
-    NvU32  type;                               /* processor type        */
-    NvU32  capabilities;                       /* processor caps        */
-    NvU32  clock;                              /* processor speed (MHz) */
-    NvU32  L1DataCacheSize;                    /* L1 dcache size (KB)   */
-    NvU32  L2DataCacheSize;                    /* L2 dcache size (KB)   */
-    NvU32  dataCacheLineSize;                  /* L1 dcache bytes/line  */
-    NvU32  numLogicalCpus;                     /* logial processor cnt  */
-    NvU32  numPhysicalCpus;                    /* physical processor cnt*/
-    NvU8   name[52];                           /* embedded cpu name     */
-    NvU32  family;                             /* Vendor defined Family and Extended Family combined */
-    NvU32  model;                              /* Vendor defined Model and Extended Model combined   */
-    NvU8   stepping;                           /* Silicon stepping      */
-    NvU32  coresOnDie;                         /* cpu cores per die     */
-    NvBool bCCEnabled;                        /* CC enabled on cpu    */
+    NvU32                          type;                               /* processor type        */
+    NvU32                          capabilities;                       /* processor caps        */
+    NvU32                          clock;                              /* processor speed (MHz) */
+    NvU32                          L1DataCacheSize;                    /* L1 dcache size (KB)   */
+    NvU32                          L2DataCacheSize;                    /* L2 dcache size (KB)   */
+    NvU32                          dataCacheLineSize;                  /* L1 dcache bytes/line  */
+    NvU32                          numLogicalCpus;                     /* logial processor cnt  */
+    NvU32                          numPhysicalCpus;                    /* physical processor cnt*/
+    NvU8                           name[52];                           /* embedded cpu name     */
+    NvU32                          family;                             /* Vendor defined Family and Extended Family combined */
+    NvU32                          model;                              /* Vendor defined Model and Extended Model combined   */
+    NvU8                           stepping;                           /* Silicon stepping      */
+    NvU32                          coresOnDie;                         /* cpu cores per die     */
+    NvBool                         bCCEnabled;                        /* CC enabled on cpu    */
+    NV0000_CTRL_SYSTEM_SH_SOC_TYPE selfHostedSocType;                  /* SoC type in case of self hosted systems    */
 } NV0000_CTRL_SYSTEM_GET_CPU_INFO_PARAMS;
 
 // Macros for CPU family information
@@ -419,6 +423,28 @@ typedef struct NV0000_CTRL_SYSTEM_GET_CHIPSET_INFO_PARAMS {
 
 
 /*
+ * NV0000_CTRL_SYSTEM_GET_VRR_COOKIE_PRESENT
+ *
+ * This command returns whether the VRR cookie is present in the SBIOS.
+ *
+ * bIsPresent (out)
+ *     This parameter contains whether the VRR cookie is present in the SBIOS.
+ *
+ * Possible status values returned are:
+ *   NV_OK
+ *   NV_ERR_INVALID_REQUEST
+ *   NV_ERR_NOT_SUPPORTED
+ */
+
+#define NV0000_CTRL_SYSTEM_GET_VRR_COOKIE_PRESENT                                      (0x107U) /* finn: Evaluated from "(FINN_NV01_ROOT_SYSTEM_INTERFACE_ID << 8) | NV0000_CTRL_SYSTEM_GET_VRR_COOKIE_PRESENT_PARAMS_MESSAGE_ID" */
+
+#define NV0000_CTRL_SYSTEM_GET_VRR_COOKIE_PRESENT_PARAMS_MESSAGE_ID (0x7U)
+
+typedef struct NV0000_CTRL_SYSTEM_GET_VRR_COOKIE_PRESENT_PARAMS {
+    NvBool bIsPresent;
+} NV0000_CTRL_SYSTEM_GET_VRR_COOKIE_PRESENT_PARAMS;
+
+/*
  * NV0000_CTRL_CMD_SYSTEM_GET_LOCK_TIMES
  *
  * This command is used to retrieve the measured times spent holding and waiting for
@@ -445,7 +471,7 @@ typedef struct NV0000_CTRL_SYSTEM_GET_CHIPSET_INFO_PARAMS {
  *   NV_ERR_NOT_SUPPORTED
  */
 
-#define NV0000_CTRL_CMD_SYSTEM_GET_LOCK_TIMES                                          (0x109U) /* finn: Evaluated from "(FINN_NV01_ROOT_SYSTEM_INTERFACE_ID << 8) | NV0000_CTRL_SYSTEM_GET_LOCK_TIMES_PARAMS_MESSAGE_ID" */
+#define NV0000_CTRL_CMD_SYSTEM_GET_LOCK_TIMES (0x109U) /* finn: Evaluated from "(FINN_NV01_ROOT_SYSTEM_INTERFACE_ID << 8) | NV0000_CTRL_SYSTEM_GET_LOCK_TIMES_PARAMS_MESSAGE_ID" */
 
 #define NV0000_CTRL_SYSTEM_GET_LOCK_TIMES_PARAMS_MESSAGE_ID (0x9U)
 
@@ -2086,46 +2112,127 @@ typedef struct NV0000_CTRL_SYSTEM_GET_RM_INSTANCE_ID_PARAMS {
  *   NV_ERR_INVALID_REQUEST
  *   NV_ERR_NOT_SUPPORTED
  */
-#define NV0000_CTRL_CMD_SYSTEM_NVPCF_GET_POWER_MODE_INFO (0x13bU) /* finn: Evaluated from "(FINN_NV01_ROOT_SYSTEM_INTERFACE_ID << 8) | NV0000_CTRL_CMD_SYSTEM_NVPCF_GET_POWER_MODE_INFO_PARAMS_MESSAGE_ID" */
+#define NV0000_CTRL_CMD_SYSTEM_NVPCF_GET_POWER_MODE_INFO (0x13bU) /* finn: Evaluated from "(FINN_NV01_ROOT_SYSTEM_INTERFACE_ID << 8) | NV0000_CTRL_SYSTEM_NVPCF_GET_POWER_MODE_INFO_PARAMS_MESSAGE_ID" */
+#define NVPCF_CTRL_SYSPWRLIMIT_TYPE_BASE                 1U
+#define NV0000_CTRL_SYSTEM_POWER_INFO_INDEX_MAX_SIZE     32U
 
-#define NV0000_CTRL_CMD_SYSTEM_NVPCF_GET_POWER_MODE_INFO_PARAMS_MESSAGE_ID (0x3BU)
+#define NV0000_CTRL_CMD_SYSTEM_GET_SYSTEM_POWER_LIMIT_MESSAGE_ID (0x48U)
 
-typedef struct NV0000_CTRL_CMD_SYSTEM_NVPCF_GET_POWER_MODE_INFO_PARAMS {
+typedef struct NV0000_CTRL_CMD_SYSTEM_GET_SYSTEM_POWER_LIMIT {
+
+    /* Battery state of charge threshold (percent 0-100) */
+    NvU8  batteryStateOfChargePercent;
+
+    /* Long Timescale Battery current limit (milliamps) */
+    NvU32 batteryCurrentLimitmA;
+
+    /* Rest of system reserved power (milliwatts) */
+    NvU32 restOfSytemReservedPowermW;
+
+    /* Min CPU TDP (milliwatts) */
+    NvU32 minCpuTdpmW;
+
+    /* Max CPU TDP (milliwatts) */
+    NvU32 maxCpuTdpmW;
+
+    /* Short Timescale Battery current limit (milliamps) */
+    NvU32 shortTimescaleBatteryCurrentLimitmA;
+} NV0000_CTRL_CMD_SYSTEM_GET_SYSTEM_POWER_LIMIT;
+
+/*!
+ * States for the Battery CPU TDP Control ability.
+ * _CPU_TDP_CONTROL_TYPE_DC_ONLY :==> Legacy setting for DC only CPU TDP Control
+ * _CPU_TDP_CONTROL_TYPE_DC_AC   :==> AC and DC both support CPU TDP Control
+ */
+typedef enum QBOOST_CPU_TDP_CONTROL_TYPE {
+    QBOOST_CPU_TDP_CONTROL_TYPE_DC_ONLY = 0,
+    QBOOST_CPU_TDP_CONTROL_TYPE_DC_AC = 1,
+} QBOOST_CPU_TDP_CONTROL_TYPE;
+
+#define NV0000_CTRL_SYSTEM_NVPCF_GET_POWER_MODE_INFO_PARAMS_MESSAGE_ID (0x3BU)
+
+typedef struct NV0000_CTRL_SYSTEM_NVPCF_GET_POWER_MODE_INFO_PARAMS {
+    /*Buffer to get all the supported functions*/
+    NvU32  supportedFuncs;
+
     /* GPU ID */
-    NvU32 gpuId;
+    NvU32  gpuId;
 
     /* Total processing power including CPU and GPU */
-    NvU32 tpp;
+    NvU32  tpp;
 
     /* Rated total GPU Power */
-    NvU32 ratedTgp;
+    NvU32  ratedTgp;
 
     /* NVPCF subfunction id */
-    NvU32 subFunc;
+    NvU32  subFunc;
 
     /* Configurable TGP offset, in mW */
-    NvS32 ctgpOffsetmW;
+    NvS32  ctgpOffsetmW;
 
     /* TPP, as offset in mW */
-    NvS32 targetTppOffsetmW;
+    NvS32  targetTppOffsetmW;
 
     /* Maximum allowed output, as offset in mW */
-    NvS32 maxOutputOffsetmW;
+    NvS32  maxOutputOffsetmW;
 
     /* Minimum allowed output, as offset in mW */
-    NvS32 minOutputOffsetmW;
+    NvS32  minOutputOffsetmW;
+
+    /* Configurable TGP offset, on battery, in milli-Watts. */
+    NvS32  ctgpBattOffsetmW;
+
+    /* Target total processing power on battery, offset, in milli-Watts. */
+    NvS32  targetTppBattOffsetmW;
+
+    /*
+     * Maximum allowed output on battery, offset, in milli-Watts.
+     */
+    NvS32  maxOutputBattOffsetmW;
+
+    /*
+     * Minimum allowed output on battery, offset, in milli-Watts.
+     */
+    NvS32  minOutputBattOffsetmW;
+
+    /*
+     * If value specified is larger than the statically assigned ROS reserve in
+     * the system power limits table, this will take affect.
+     *
+     * A value of zero naturally works as a clear as it will be lesser than the
+     * statically assigned value.
+     */
+    NvU32  dcRosReserveOverridemW;
+
+    /*
+     * This is the active arbitrated long timescale limit provided by Qboost and
+     * honored by JPAC/JPPC
+     */
+    NvU32  dcTspLongTimescaleLimitmA;
+
+   /*
+    * This is the active arbitrated short timescale limit provided by Qboost and
+    * honored by RM/PMU
+    */
+    NvU32  dcTspShortTimescaleLimitmA;
+
+    /* Dynamic Boost AC support */
+    NvBool bEnableForAC;
+
+    /* Dynamic Boost DC support */
+    NvBool bEnableForDC;
 
     /* The System Controller Table Version */
-    NvU8  version;
+    NvU8   version;
 
     /* Base sampling period */
-    NvU16 samplingPeriodmS;
+    NvU16  samplingPeriodmS;
 
     /* Sampling Multiplier */
-    NvU16 samplingMulti;
+    NvU16  samplingMulti;
 
     /* Fitler function type */
-    NvU8  filterType;
+    NvU8   filterType;
 
     union {
 
@@ -2137,56 +2244,98 @@ typedef struct NV0000_CTRL_CMD_SYSTEM_NVPCF_GET_POWER_MODE_INFO_PARAMS {
     } filterParam;
 
     /* Reserved */
-    NvU16  filterReserved;
+    NvU16                                         filterReserved;
 
     /* Controller Type Dynamic Boost Controller */
-    NvBool bIsBoostController;
+    NvBool                                        bIsBoostController;
 
     /* Increase power limit ratio */
-    NvU16  incRatio;
+    NvU16                                         incRatio;
 
     /* Decrease power limit ratio */
-    NvU16  decRatio;
+    NvU16                                         decRatio;
 
     /* Dynamic Boost Controller DC Support */
-    NvBool bSupportBatt;
+    NvBool                                        bSupportBatt;
 
     /* CPU type(Intel/AMD) */
-    NvU8   cpuType;
+    NvU8                                          cpuType;
 
     /* GPU type(Nvidia) */
-    NvU8   gpuType;
-} NV0000_CTRL_CMD_SYSTEM_NVPCF_GET_POWER_MODE_INFO_PARAMS;
+    NvU8                                          gpuType;
+
+    /* System Power Table info index */
+    NvU32                                         sysPwrIndex;
+
+    /* System Power Table get table limits */
+    NV0000_CTRL_CMD_SYSTEM_GET_SYSTEM_POWER_LIMIT sysPwrGetInfo[NV0000_CTRL_SYSTEM_POWER_INFO_INDEX_MAX_SIZE];
+
+    /*
+     * Does this version of the system power limits table support TSP -> table
+     * version 2.0 and later should set this to true
+     */
+    NvBool                                        bIsTspSupported;
+
+    /*
+     * Stores the System Power Limits (Battery State of Charge aka BSOC) table version implemented by the SBIOS
+     *
+     */
+    NvU8                                          sysPwrLimitsTableVersion;
+
+    /* SYSPWRLIMIT class types */
+    NvU32                                         type;
+
+    /* CPU TDP Limit to be set (milliwatts) */
+    NvU32                                         cpuTdpmw;
+
+    /* CPU TDP Control Support */
+    QBOOST_CPU_TDP_CONTROL_TYPE                   cpuTdpControlType;
+} NV0000_CTRL_SYSTEM_NVPCF_GET_POWER_MODE_INFO_PARAMS;
 
 /* Define the filter types */
-#define CONTROLLER_FILTER_TYPE_EMWA                                0U
-#define CONTROLLER_FILTER_TYPE_MOVING_MAX                          1U
+#define CONTROLLER_FILTER_TYPE_EMWA                                        0U
+#define CONTROLLER_FILTER_TYPE_MOVING_MAX                                  1U
 
 /* Valid NVPCF subfunction case */
-#define NVPCF0100_CTRL_CONFIG_DSM_2X_FUNC_GET_SUPPORTED_CASE       2U
-#define NVPCF0100_CTRL_CONFIG_DSM_2X_FUNC_GET_DYNAMIC_CASE         3U
+#define NVPCF0100_CTRL_CONFIG_DSM_2X_FUNC_GET_SUPPORTED_CASE               2U
+#define NVPCF0100_CTRL_CONFIG_DSM_2X_FUNC_GET_DYNAMIC_CASE                 3U
 
 /* NVPCF subfunction to get the static data tables */
-#define NVPCF0100_CTRL_CONFIG_DSM_2X_FUNC_GET_STATIC_CASE          4U
+#define NVPCF0100_CTRL_CONFIG_DSM_2X_FUNC_GET_STATIC_CASE                  4U
+
+/* NVPCF subfunction to get the system power limits table */
+#define NVPCF0100_CTRL_CONFIG_DSM_2X_FUNC_GET_DC_SYSTEM_POWER_LIMITS_CASE  5U
+
+/* NVPCF subfunction to change the CPU's TDP limit */
+#define NVPCF0100_CTRL_CONFIG_DSM_2X_FUNC_CPU_TDP_LIMIT_CONTROL_CASE       6U
 
 /* Valid NVPCF subfunction ids */
-#define NVPCF0100_CTRL_CONFIG_DSM_1X_FUNC_GET_SUPPORTED            (0x00000000)
-#define NVPCF0100_CTRL_CONFIG_DSM_1X_FUNC_GET_DYNAMIC_PARAMS       (0x00000002)
+#define NVPCF0100_CTRL_CONFIG_DSM_1X_FUNC_GET_SUPPORTED                    (0x00000000)
+#define NVPCF0100_CTRL_CONFIG_DSM_1X_FUNC_GET_DYNAMIC_PARAMS               (0x00000002)
 
 /*
  *  Defines for get supported sub functions bit fields
  */
-#define NVPCF0100_CTRL_CONFIG_DSM_FUNC_GET_SUPPORTED_IS_SUPPORTED        0:0
-#define NVPCF0100_CTRL_CONFIG_DSM_FUNC_GET_SUPPORTED_IS_SUPPORTED_YES    1
-#define NVPCF0100_CTRL_CONFIG_DSM_FUNC_GET_SUPPORTED_IS_SUPPORTED_NO     0
+#define NVPCF0100_CTRL_CONFIG_DSM_FUNC_GET_SUPPORTED_IS_SUPPORTED                     0:0
+#define NVPCF0100_CTRL_CONFIG_DSM_FUNC_GET_SUPPORTED_IS_SUPPORTED_YES                 1
+#define NVPCF0100_CTRL_CONFIG_DSM_FUNC_GET_SUPPORTED_IS_SUPPORTED_NO                  0
+#define NVPCF0100_CTRL_CONFIG_DSM_FUNC_GET_DC_SYSTEM_POWER_LIMITS_IS_SUPPORTED        8:8
+#define NVPCF0100_CTRL_CONFIG_DSM_FUNC_GET_DC_SYSTEM_POWER_LIMITS_IS_SUPPORTED_YES    1
+#define NVPCF0100_CTRL_CONFIG_DSM_FUNC_GET_DC_SYSTEM_POWER_LIMITS_IS_SUPPORTED_NO     0
+#define NVPCF0100_CTRL_CONFIG_DSM_FUNC_CPU_TDP_LIMIT_CONTROL_IS_SUPPORTED             9:9
+#define NVPCF0100_CTRL_CONFIG_DSM_FUNC_CPU_TDP_LIMIT_CONTROL_IS_SUPPORTED_YES         1
+#define NVPCF0100_CTRL_CONFIG_DSM_FUNC_CPU_TDP_LIMIT_CONTROL_IS_SUPPORTED_NO          0
+
 
 /*!
  * Config DSM 2x version specific defines
  */
-#define NVPCF0100_CTRL_CONFIG_DSM_2X_VERSION                       (0x00000200)
-#define NVPCF0100_CTRL_CONFIG_DSM_2X_FUNC_GET_SUPPORTED            (0x00000000)
-#define NVPCF0100_CTRL_CONFIG_DSM_2X_FUNC_GET_STATIC_CONFIG_TABLES (0x00000001)
-#define NVPCF0100_CTRL_CONFIG_DSM_2X_FUNC_GET_DYNAMIC_PARAMS       (0x00000002)
+#define NVPCF0100_CTRL_CONFIG_DSM_2X_VERSION                               (0x00000200)
+#define NVPCF0100_CTRL_CONFIG_DSM_2X_FUNC_GET_SUPPORTED                    (0x00000000)
+#define NVPCF0100_CTRL_CONFIG_DSM_2X_FUNC_GET_STATIC_CONFIG_TABLES         (0x00000001)
+#define NVPCF0100_CTRL_CONFIG_DSM_2X_FUNC_GET_DYNAMIC_PARAMS               (0x00000002)
+#define NVPCF0100_CTRL_CONFIG_DSM_2X_FUNC_GET_DC_SYSTEM_POWER_LIMITS_TABLE (0x00000008)
+#define NVPCF0100_CTRL_CONFIG_DSM_2X_FUNC_CPU_TDP_LIMIT_CONTROL            (0x00000009)
 
 /*!
  * Defines the max buffer size for config
@@ -2205,7 +2354,7 @@ typedef struct NV0000_CTRL_CMD_SYSTEM_NVPCF_GET_POWER_MODE_INFO_PARAMS {
  * Possible status values returned are:
  *   NV_OK
  */
-#define NV0000_CTRL_CMD_SYSTEM_SYNC_EXTERNAL_FABRIC_MGMT           (0x13cU) /* finn: Evaluated from "(FINN_NV01_ROOT_SYSTEM_INTERFACE_ID << 8) | NV0000_CTRL_CMD_SYSTEM_SYNC_EXTERNAL_FABRIC_MGMT_PARAMS_MESSAGE_ID" */
+#define NV0000_CTRL_CMD_SYSTEM_SYNC_EXTERNAL_FABRIC_MGMT                   (0x13cU) /* finn: Evaluated from "(FINN_NV01_ROOT_SYSTEM_INTERFACE_ID << 8) | NV0000_CTRL_CMD_SYSTEM_SYNC_EXTERNAL_FABRIC_MGMT_PARAMS_MESSAGE_ID" */
 
 #define NV0000_CTRL_CMD_SYSTEM_SYNC_EXTERNAL_FABRIC_MGMT_PARAMS_MESSAGE_ID (0x3CU)
 
@@ -2246,6 +2395,8 @@ typedef struct NV0000_CTRL_SYSTEM_GET_CLIENT_DATABASE_INFO_PARAMS {
  *       This field returns the version (NV_VERSION_STRING).
  *   versionBuffer
  *       This field returns the version (NV_BUILD_BRANCH_VERSION).
+ *   driverBranch
+ *       This field returns the branch (NV_BUILD_BRANCH).
  *   titleBuffer
  *       This field returns the title (NV_DISPLAY_DRIVER_TITLE).
  *   changelistNumber
@@ -2266,6 +2417,7 @@ typedef struct NV0000_CTRL_SYSTEM_GET_CLIENT_DATABASE_INFO_PARAMS {
 typedef struct NV0000_CTRL_SYSTEM_GET_BUILD_VERSION_V2_PARAMS {
     char  driverVersionBuffer[NV0000_CTRL_SYSTEM_GET_BUILD_VERSION_V2_MAX_STRING_SIZE];
     char  versionBuffer[NV0000_CTRL_SYSTEM_GET_BUILD_VERSION_V2_MAX_STRING_SIZE];
+    char  driverBranch[NV0000_CTRL_SYSTEM_GET_BUILD_VERSION_V2_MAX_STRING_SIZE];
     char  titleBuffer[NV0000_CTRL_SYSTEM_GET_BUILD_VERSION_V2_MAX_STRING_SIZE];
     NvU32 changelistNumber;
     NvU32 officialChangelistNumber;

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -54,9 +54,11 @@
 #include "class/cl503b.h"
 #include "nv_ref.h"
 #include "platform/sli/sli.h"
-#include "nvRmReg.h"
+#include "nvrm_registry.h"
 
 #include "kernel/gpu/ccu/kernel_ccu.h"
+
+#include "class/cl503c.h"
 
 struct KERNEL_MIG_MANAGER_PRIVATE_DATA
 {
@@ -229,7 +231,6 @@ kmigmgrCountEnginesOfType_IMPL
 )
 {
     NV_RANGE range = rangeMake(rmEngineType, rmEngineType);
-    ENGTYPE_BIT_VECTOR mask;
 
     if (pEngines == NULL)
         return 0;
@@ -250,10 +251,121 @@ kmigmgrCountEnginesOfType_IMPL
     else if (RM_ENGINE_TYPE_IS_OFA(rmEngineType))
         range = RM_ENGINE_RANGE_OFA();
 
+    return kmigmgrCountEnginesInRange(pEngines, range);
+}
+
+/*!
+ * @brief Count set bits within range indicated.
+ *
+ * @param[in] pEngines     Bitvector to count
+ * @param[in] range        Range to count for engines present in pEngines
+ */
+NvU32
+kmigmgrCountEnginesInRange_IMPL
+(
+    const ENGTYPE_BIT_VECTOR *pEngines,
+    NV_RANGE range
+)
+{
+    ENGTYPE_BIT_VECTOR mask;
+
+    if ((pEngines == NULL) || rangeIsEmpty(range))
+        return 0;
+
     bitVectorClrAll(&mask);
     bitVectorSetRange(&mask, range);
     bitVectorAnd(&mask, &mask, pEngines);
     return bitVectorCountSetBits(&mask);
+}
+
+/*!
+ * Utility fn to get the range of GRCE engines based on this GPU
+ * On PF this function uses the index of first async LCE as calculated
+ *
+ * @return  NV_RANGE of GRCE Engines.
+ *          Note: Not all engines in this range are valid, depending on what engines are available/floorswept.
+ */
+NV_RANGE
+kmigmgrGetGRCERange_PF
+(
+    OBJGPU *pGpu,
+    KernelMIGManager *pKernelMIGManager
+)
+{
+    NV_RANGE allCesRange = RM_ENGINE_RANGE_COPY();
+    RM_ENGINE_TYPE firstAsyncCE = gpuGetRmEngineType(gpuGetFirstAsyncLce_HAL(pGpu));
+
+    return rangeMake(allCesRange.lo, firstAsyncCE - 1);
+}
+
+/*!
+ * Utility fn to get the range of GRCE engines based on this GPU
+ * On VF this function uses the stored value of first async LCE in VGPU static info
+ *
+ * @return  NV_RANGE of GRCE Engines.
+ *          Note: Not all engines in this range are valid, depending on what engines are available/floorswept.
+ */
+NV_RANGE
+kmigmgrGetGRCERange_VF
+(
+    OBJGPU *pGpu,
+    KernelMIGManager *pKernelMIGManager
+)
+{
+    VGPU_STATIC_INFO *pVSI = GPU_GET_STATIC_INFO(pGpu);
+    NV_RANGE allCesRange = RM_ENGINE_RANGE_COPY();
+    RM_ENGINE_TYPE firstAsyncCE;
+
+    NV_ASSERT_OR_RETURN(pVSI != NULL, rangeMake(0,0));
+
+    firstAsyncCE = pVSI->vgpuStaticProperties.firstAsyncCEIdx;
+
+    return rangeMake(allCesRange.lo, firstAsyncCE - 1);
+}
+
+/*!
+ * Utility fn to get the range of Async CE engines on this GPU.
+ * On PF this function uses the index of first async LCE as calculated
+ *
+ * @return  NV_RANGE of Async CE Engines.
+ *          Note: Not all engines in this range are valid, depending on what engines are available/floorswept.
+ */
+NV_RANGE
+kmigmgrGetAsyncCERange_PF
+(
+    OBJGPU *pGpu,
+    KernelMIGManager *pKernelMIGManager
+)
+{
+    NV_RANGE allCesRange = RM_ENGINE_RANGE_COPY();
+    RM_ENGINE_TYPE firstAsyncCE = gpuGetRmEngineType(gpuGetFirstAsyncLce_HAL(pGpu));
+
+    return rangeMake(firstAsyncCE, allCesRange.hi);
+}
+
+/*!
+ * Utility fn to get the range of Async CE engines on this GPU.
+ * On VF this function uses the stored value of first async LCE in VGPU static info
+ *
+ * @return  NV_RANGE of Async CE Engines.
+ *          Note: Not all engines in this range are valid, depending on what engines are available/floorswept.
+ */
+NV_RANGE
+kmigmgrGetAsyncCERange_VF
+(
+    OBJGPU *pGpu,
+    KernelMIGManager *pKernelMIGManager
+)
+{
+    VGPU_STATIC_INFO *pVSI = GPU_GET_STATIC_INFO(pGpu);
+    NV_RANGE allCesRange = RM_ENGINE_RANGE_COPY();
+    RM_ENGINE_TYPE firstAsyncCE;
+
+    NV_ASSERT_OR_RETURN(pVSI != NULL, rangeMake(0,0));
+
+    firstAsyncCE = pVSI->vgpuStaticProperties.firstAsyncCEIdx;
+
+    return rangeMake(firstAsyncCE, allCesRange.hi);
 }
 
 /*!
@@ -341,6 +453,45 @@ kmigmgrEngineTypeXlate_IMPL
     NV_ASSERT(bFound);
 
     *pDstEngineType = tempDstEngineType;
+
+    return NV_OK;
+}
+
+/*!
+ * @brief   Function to convert a bitVector from Source domain to Destination domain
+ *
+ * @param[in]     pSrcRef    Source bitVector domain for reference
+ * @param[in]     pSrc       Source bitVector to be converted
+ * @param[in]     pDstRef    Destination bitVector domain for reference
+ * @param[out]    pDst       bitVector after conversion
+ */
+NV_STATUS
+kmigmgrEngBitVectorXlate_IMPL
+(
+    ENGTYPE_BIT_VECTOR *pSrcRef,
+    ENGTYPE_BIT_VECTOR *pSrc,
+    ENGTYPE_BIT_VECTOR *pDstRef,
+    ENGTYPE_BIT_VECTOR *pDst
+)
+{
+    RM_ENGINE_TYPE srcRmEngineType;
+    RM_ENGINE_TYPE dstRmEngineType;
+
+    NV_ASSERT_OR_RETURN(pSrcRef != NULL, NV_ERR_INVALID_ARGUMENT);
+    NV_ASSERT_OR_RETURN(pSrc != NULL, NV_ERR_INVALID_ARGUMENT);
+    NV_ASSERT_OR_RETURN(pDstRef != NULL, NV_ERR_INVALID_ARGUMENT);
+    NV_ASSERT_OR_RETURN(pDst != NULL, NV_ERR_INVALID_ARGUMENT);
+
+    bitVectorClrAll(pDst);
+    FOR_EACH_IN_BITVECTOR(pSrc, srcRmEngineType)
+    {
+        NV_ASSERT_OK_OR_RETURN(
+            kmigmgrEngineTypeXlate(pSrcRef, srcRmEngineType,
+                                   pDstRef, &dstRmEngineType));
+
+        bitVectorSet(pDst, dstRmEngineType);
+    }
+    FOR_EACH_IN_BITVECTOR_END();
 
     return NV_OK;
 }
@@ -468,6 +619,7 @@ kmigmgrAllocateInstanceEngines_IMPL
 void
 kmigmgrGetLocalEngineMask_IMPL
 (
+    OBJGPU *pGpu,
     ENGTYPE_BIT_VECTOR *pPhysicalEngineMask,
     ENGTYPE_BIT_VECTOR *pLocalEngineMask
 )
@@ -482,14 +634,36 @@ kmigmgrGetLocalEngineMask_IMPL
         range = rangeMake(RM_ENGINE_TYPE_GR(0), RM_ENGINE_TYPE_GR(count - 1));
         bitVectorSetRange(pLocalEngineMask, range);
     }
-
-    count = kmigmgrCountEnginesOfType(pPhysicalEngineMask, RM_ENGINE_TYPE_COPY(0));
-    if (count > 0)
+    KernelMIGManager *pKernelMIGManager = GPU_GET_KERNEL_MIG_MANAGER(pGpu);
+    if (pGpu->getProperty(pGpu, PDB_PROP_GPU_MIG_SUPPORTS_SPLIT_CE_RANGES))
     {
-        range = rangeMake(RM_ENGINE_TYPE_COPY(0), RM_ENGINE_TYPE_COPY(count - 1));
-        bitVectorSetRange(pLocalEngineMask, range);
-    }
+        // When MIG Supports GFX, GRCEs are allowed. We need to treat GRCEs are separate engine types.
+        NV_RANGE ceRange = kmigmgrGetGRCERange_HAL(pGpu, pKernelMIGManager);
 
+        count = kmigmgrCountEnginesInRange(pPhysicalEngineMask, ceRange);
+        if (count > 0)
+        {
+            range = rangeMake(ceRange.lo, ceRange.lo + count -1);
+            bitVectorSetRange(pLocalEngineMask, range);
+        }
+
+        ceRange = kmigmgrGetAsyncCERange_HAL(pGpu, pKernelMIGManager);
+        count = kmigmgrCountEnginesInRange(pPhysicalEngineMask, ceRange);
+        if (count > 0)
+        {
+            range = rangeMake(ceRange.lo, ceRange.lo + count -1);
+            bitVectorSetRange(pLocalEngineMask, range);
+        }
+    }
+    else
+    {
+        count = kmigmgrCountEnginesOfType(pPhysicalEngineMask, RM_ENGINE_TYPE_COPY(0));
+        if (count > 0)
+        {
+            range = rangeMake(RM_ENGINE_TYPE_COPY(0), RM_ENGINE_TYPE_COPY(count - 1));
+            bitVectorSetRange(pLocalEngineMask, range);
+        }
+    }
     count = kmigmgrCountEnginesOfType(pPhysicalEngineMask, RM_ENGINE_TYPE_NVDEC(0));
     if (count > 0)
     {
@@ -519,6 +693,47 @@ kmigmgrGetLocalEngineMask_IMPL
     }
 }
 
+NV_STATUS
+_kmigmgrAllocThirdPartyP2PObject
+(
+    OBJGPU  *pGpu,
+    KERNEL_MIG_GPU_INSTANCE *pKernelMIGGpuInstance
+)
+{
+    NV_STATUS status;
+    RM_API *pRmApi = rmapiGetInterface(RMAPI_GPU_LOCK_INTERNAL);
+    NV503C_ALLOC_PARAMETERS params;
+    NvHandle hThirdPartyP2P = NV01_NULL_OBJECT;
+
+    portMemSet(&params, 0, sizeof(params));
+    if (pGpu->getProperty(pGpu, PDB_PROP_GPU_COHERENT_CPU_MAPPING))
+    {
+        params.flags = NV503C_ALLOC_PARAMETERS_FLAGS_TYPE_NVLINK;
+    }
+    else
+    {
+        params.flags = NV503C_ALLOC_PARAMETERS_FLAGS_TYPE_BAR1;
+    }
+
+    status = pRmApi->Alloc(pRmApi,
+                           pKernelMIGGpuInstance->instanceHandles.hClient,
+                           pKernelMIGGpuInstance->instanceHandles.hSubdevice,
+                           &hThirdPartyP2P,
+                           NV50_THIRD_PARTY_P2P,
+                           &params,
+                           sizeof(params));
+    if (status != NV_OK)
+    {
+        NV_PRINTF(LEVEL_WARNING, "Error creating internal ThirdPartyP2P object: 0x%x\n",
+                  status);
+        hThirdPartyP2P = NV01_NULL_OBJECT;
+    }
+
+    pKernelMIGGpuInstance->instanceHandles.hThirdPartyP2P = hThirdPartyP2P;
+
+    return NV_OK;
+}
+
 /*!
  * @brief   Create client and subdevice handles to make calls into this gpu instance
  */
@@ -536,21 +751,36 @@ kmigmgrAllocGPUInstanceHandles_IMPL
     NvHandle hDevice;
     NvHandle hSubdevice;
     NVC637_ALLOCATION_PARAMETERS params;
+    NV_STATUS status;
 
     NV_ASSERT_OK_OR_RETURN(
         rmapiutilAllocClientAndDeviceHandles(pRmApi, pGpu, &hClient, &hDevice, &hSubdevice));
 
-    portMemSet(&params, 0, sizeof(params));
-    params.swizzId = swizzId;
-    NV_ASSERT_OK_OR_RETURN(
-        pRmApi->Alloc(pRmApi, hClient, hSubdevice, &hSubscription, AMPERE_SMC_PARTITION_REF, &params, sizeof(params)));
-
     pKernelMIGGpuInstance->instanceHandles.hClient = hClient;
     pKernelMIGGpuInstance->instanceHandles.hDevice = hDevice;
     pKernelMIGGpuInstance->instanceHandles.hSubdevice = hSubdevice;
+
+    portMemSet(&params, 0, sizeof(params));
+    params.swizzId = swizzId;
+    NV_ASSERT_OK_OR_GOTO(status,
+                         pRmApi->Alloc(pRmApi, hClient, hSubdevice, &hSubscription,
+                                       AMPERE_SMC_PARTITION_REF, &params, sizeof(params)),
+                         failed);
+
     pKernelMIGGpuInstance->instanceHandles.hSubscription = hSubscription;
 
+    {
+        NV_ASSERT_OK_OR_GOTO(status,
+                             _kmigmgrAllocThirdPartyP2PObject(pGpu, pKernelMIGGpuInstance),
+                             failed);
+    }
+
     return NV_OK;
+
+failed:
+    kmigmgrFreeGPUInstanceHandles(pKernelMIGGpuInstance);
+
+    return status;
 }
 
 /*!
@@ -571,6 +801,7 @@ kmigmgrFreeGPUInstanceHandles_IMPL
         pKernelMIGGpuInstance->instanceHandles.hDevice = NV01_NULL_OBJECT;
         pKernelMIGGpuInstance->instanceHandles.hSubdevice = NV01_NULL_OBJECT;
         pKernelMIGGpuInstance->instanceHandles.hSubscription = NV01_NULL_OBJECT;
+        pKernelMIGGpuInstance->instanceHandles.hThirdPartyP2P = NV01_NULL_OBJECT;
     }
 }
 
@@ -654,17 +885,21 @@ kmigmgrDestruct_IMPL
     NvU32 GIIdx;
     NvU32 CIIdx;
 
-    portMemFree(pKernelMIGManager->pPrivate->staticInfo.pProfiles);
-    pKernelMIGManager->pPrivate->staticInfo.pProfiles = NULL;
-    portMemFree(pKernelMIGManager->pPrivate->staticInfo.pSwizzIdFbMemPageRanges);
-    pKernelMIGManager->pPrivate->staticInfo.pSwizzIdFbMemPageRanges = NULL;
-    portMemFree(pKernelMIGManager->pPrivate->staticInfo.pCIProfiles);
-    pKernelMIGManager->pPrivate->staticInfo.pCIProfiles = NULL;
-    portMemFree(pKernelMIGManager->pPrivate->staticInfo.pSkylineInfo);
-    pKernelMIGManager->pPrivate->staticInfo.pSkylineInfo = NULL;
 
-    portMemFree(pKernelMIGManager->pPrivate);
-    pKernelMIGManager->pPrivate = NULL;
+    if (pKernelMIGManager->pPrivate != NULL)
+    {
+        portMemFree(pKernelMIGManager->pPrivate->staticInfo.pProfiles);
+        pKernelMIGManager->pPrivate->staticInfo.pProfiles = NULL;
+        portMemFree(pKernelMIGManager->pPrivate->staticInfo.pSwizzIdFbMemPageRanges);
+        pKernelMIGManager->pPrivate->staticInfo.pSwizzIdFbMemPageRanges = NULL;
+        portMemFree(pKernelMIGManager->pPrivate->staticInfo.pCIProfiles);
+        pKernelMIGManager->pPrivate->staticInfo.pCIProfiles = NULL;
+        portMemFree(pKernelMIGManager->pPrivate->staticInfo.pSkylineInfo);
+        pKernelMIGManager->pPrivate->staticInfo.pSkylineInfo = NULL;
+
+        portMemFree(pKernelMIGManager->pPrivate);
+        pKernelMIGManager->pPrivate = NULL;
+    }
 
     for (GIIdx = 0; GIIdx < NV_ARRAY_ELEMENTS(pKernelMIGManager->kernelMIGGpuInstance); ++GIIdx)
     {
@@ -765,7 +1000,7 @@ _kmigmgrHandlePostSchedulingEnableCallback
     if ((pKernelMIGManager == NULL) || !kmigmgrIsMIGSupported(pGpu, pKernelMIGManager))
     {
         NV_PRINTF(LEVEL_INFO, "MIG not supported on this GPU.\n");
-        return NV_ERR_NOT_SUPPORTED;
+        return NV_OK;
     }
 
     if (!IS_MIG_ENABLED(pGpu) && !IS_VIRTUAL(pGpu) &&
@@ -1031,6 +1266,21 @@ kmigmgrInitRegistryOverrides_IMPL
 
     pKernelMIGManager->bBootConfigSupported = FLD_TEST_DRF(_REG_STR_RM, _MIG_BOOT_CONFIGURATION_FEATURE_FLAGS, _SUPPORTED, _TRUE, data32);
     pKernelMIGManager->bAutoUpdateBootConfig = FLD_TEST_DRF(_REG_STR_RM, _MIG_BOOT_CONFIGURATION_FEATURE_FLAGS, _SUPPORTED, _TRUE, data32);
+
+    // Mark SMG as enabled if supported on this GPU.
+    pKernelMIGManager->bIsSmgEnabled = pGpu->getProperty(pGpu, PDB_PROP_GPU_MIG_GFX_SUPPORTED);
+    /*! If SMG is enabled (For Internal use only. Not supported on production builds) */
+    if (osReadRegistryDword(pGpu, NV_REG_STR_RM_ENABLE_MIG_GFX, &data32) == NV_OK)
+    {
+        if (data32 == NV_REG_STR_RM_ENABLE_MIG_GFX_ENABLED)
+        {
+            pKernelMIGManager->bIsSmgEnabled = NV_TRUE;
+        }
+        else if (data32 == NV_REG_STR_RM_ENABLE_MIG_GFX_DISABLED)
+        {
+            pKernelMIGManager->bIsSmgEnabled = NV_FALSE;
+        }
+    }
 }
 
 /**
@@ -1184,6 +1434,12 @@ kmigmgrLoadStaticInfo_VF
         pPartitionDesc->partitionFlag   = (DRF_DEF(2080_CTRL_GPU, _PARTITION_FLAG, _MEMORY_SIZE, _FULL) |
                                            DRF_DEF(2080_CTRL_GPU, _PARTITION_FLAG, _COMPUTE_SIZE, _FULL));
 
+        if (pVSI->gpuPartitionInfo.gfxGpcCount > 0)
+        {
+            pPartitionDesc->partitionFlag = pPartitionDesc->partitionFlag |
+                    DRF_DEF(2080_CTRL_GPU, _PARTITION_FLAG, _GFX_SIZE, _FULL);
+        }
+
         pPartitionDesc->grCount         = pVSI->gpuPartitionInfo.grEngCount;
         pPartitionDesc->gpcCount        = pVSI->gpuPartitionInfo.gpcCount;
         pPartitionDesc->virtualGpcCount = pVSI->gpuPartitionInfo.virtualGpcCount;
@@ -1196,6 +1452,7 @@ kmigmgrLoadStaticInfo_VF
         pPartitionDesc->nvJpgCount      = pVSI->gpuPartitionInfo.nvJpgCount;
         pPartitionDesc->nvOfaCount      = pVSI->gpuPartitionInfo.nvOfaCount;
         pPartitionDesc->validCTSIdMask  = pVSI->gpuPartitionInfo.validCTSIdMask;
+        pPartitionDesc->validGfxCTSIdMask     = pVSI->gpuPartitionInfo.validGfxCTSIdMask;
         pPrivate->staticInfo.pProfiles->count = 1;
     }
 
@@ -1523,17 +1780,50 @@ kmigmgrSaveToPersistenceFromVgpuStaticInfo_VF
 
     gpumgrCacheCreateGpuInstance(pGpu, pGPUInstanceSave->swizzId);
 
+    // Set GFX_SIZE when graphics GPC is available
+    if (pVSI->gpuPartitionInfo.gfxGpcCount > 0)
+    {
+        pGPUInstanceSave->giInfo.partitionFlags = pGPUInstanceSave->giInfo.partitionFlags |
+                                    DRF_DEF(2080_CTRL_GPU, _PARTITION_FLAG, _GFX_SIZE, _FULL);
+    }
+
     bitVectorClrAll(&engines);
 
     if (pVSI->gpuPartitionInfo.grEngCount > 0)
         bitVectorSetRange(&engines,
                           rangeMake(RM_ENGINE_TYPE_GR(0),
                                     RM_ENGINE_TYPE_GR(pVSI->gpuPartitionInfo.grEngCount - 1)));
-
-    if (pVSI->gpuPartitionInfo.ceCount > 0)
-        bitVectorSetRange(&engines,
+    if (pGpu->getProperty(pGpu, PDB_PROP_GPU_MIG_SUPPORTS_SPLIT_CE_RANGES))
+    {
+        if (pVSI->gpuPartitionInfo.gfxGpcCount > 0)
+        {
+            NV_RANGE grceRange = kmigmgrGetGRCERange_HAL(pGpu, pKernelMIGManager);
+            //
+            // Setup GR CEs in this instance
+            // There is a 1:1 mapping between Grs and GRCEs. So we use the gr engine count to
+            // setup GRCEs.
+            //
+            if (pVSI->gpuPartitionInfo.grEngCount > 0)
+                bitVectorSetRange(&engines,
+                            rangeMake(grceRange.lo,
+                                      grceRange.lo + pVSI->gpuPartitionInfo.grEngCount - 1));
+        }
+        {
+            NV_RANGE asyncCeRange = kmigmgrGetAsyncCERange_HAL(pGpu, pKernelMIGManager);
+            if (pVSI->gpuPartitionInfo.ceCount > 0)
+                bitVectorSetRange(&engines,
+                            rangeMake(asyncCeRange.lo,
+                                      asyncCeRange.lo + pVSI->gpuPartitionInfo.ceCount - 1));
+        }
+    }
+    else
+    {
+        if (pVSI->gpuPartitionInfo.ceCount > 0)
+            bitVectorSetRange(&engines,
                           rangeMake(RM_ENGINE_TYPE_COPY(0),
                                     RM_ENGINE_TYPE_COPY(pVSI->gpuPartitionInfo.ceCount - 1)));
+
+    }
 
     if (pVSI->gpuPartitionInfo.nvDecCount > 0)
         bitVectorSetRange(&engines,
@@ -1580,7 +1870,7 @@ kmigmgrSaveToPersistenceFromVgpuStaticInfo_VF
     {
         GPUMGR_SAVE_COMPUTE_INSTANCE *pComputeInstanceSave = &pGPUInstanceSave->saveCI[savedCIIdx];
         NVC637_CTRL_EXEC_PARTITIONS_INFO *pExecPartInfo = &pVSI->execPartitionInfo.execPartInfo[CIIdx];
-        NvU32 grIdx = portUtilCountTrailingZeros32(assignableGrMask);
+        NvU32 grIdx = pVSI->execSyspipeInfo.syspipeId[CIIdx];
         ENGTYPE_BIT_VECTOR engines;
 
         NV_CHECK_OR_RETURN(LEVEL_ERROR, grIdx < RM_ENGINE_TYPE_GR_SIZE, NV_ERR_INVALID_STATE);
@@ -1601,12 +1891,34 @@ kmigmgrSaveToPersistenceFromVgpuStaticInfo_VF
         bitVectorSetRange(&engines,
                           rangeMake(RM_ENGINE_TYPE_GR(grIdx),
                                     RM_ENGINE_TYPE_GR(grIdx)));
-        assignableGrMask &= ~(NVBIT32(grIdx));
 
+    if (pGpu->getProperty(pGpu, PDB_PROP_GPU_MIG_SUPPORTS_SPLIT_CE_RANGES))
+    {
+        if (pExecPartInfo->gfxGpcCount > 0)
+        {
+            //
+            // Setup GR CEs in this instance
+            // There is a 1:1 mapping between Grs and GRCEs. So we use the gr engine count to
+            // setup GRCEs. For Exec Partition (CI) there is only one GR assigned
+            //
+            bitVectorSetRange(&engines,
+                            rangeMake(RM_ENGINE_TYPE_COPY(grIdx), RM_ENGINE_TYPE_COPY(grIdx)));
+        }
+        {
+            NV_RANGE ceRange = kmigmgrGetAsyncCERange_HAL(pGpu, pKernelMIGManager);
+            if (pExecPartInfo->ceCount > 0)
+                bitVectorSetRange(&engines,
+                                rangeMake(ceRange.lo,
+                                          ceRange.lo + pExecPartInfo->ceCount - 1));
+        }
+    }
+    else
+    {
         if (pExecPartInfo->ceCount > 0)
             bitVectorSetRange(&engines,
                               rangeMake(RM_ENGINE_TYPE_COPY(0),
                                         RM_ENGINE_TYPE_COPY(pExecPartInfo->ceCount - 1)));
+    }
 
         if (pExecPartInfo->nvDecCount > 0)
             bitVectorSetRange(&engines,
@@ -1644,6 +1956,8 @@ kmigmgrSaveToPersistenceFromVgpuStaticInfo_VF
                               osRmCapRegisterSmcExecutionPartition(pGPUInstanceSave->pOsRmCaps,
                                                                    &(pComputeInstanceSave->pOsRmCaps),
                                                                    pComputeInstanceSave->id));
+        gpumgrCacheCreateComputeInstance(pGpu, pGPUInstanceSave->swizzId,
+                                         pComputeInstanceSave->id);
 
         ++savedCIIdx;
     }
@@ -1672,10 +1986,13 @@ kmigmgrSetStaticInfo_VF
     KERNEL_MIG_GPU_INSTANCE *pKernelMIGGpuInstance;
     MIG_RESOURCE_ALLOCATION *pResourceAllocation;
     NvU32 veidOffset = 0;
-    NvU32 grIdx;
     NV_RANGE memoryRange;
     MemoryManager *pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
     KernelGraphicsManager *pKernelGraphicsManager = GPU_GET_KERNEL_GRAPHICS_MANAGER(pGpu);
+    RM_ENGINE_TYPE globalEngineType;
+    RM_ENGINE_TYPE localEngineType;
+    ENGTYPE_BIT_VECTOR *pGlobalMask;
+    ENGTYPE_BIT_VECTOR *pLocalMask;
 
     pVSI = GPU_GET_STATIC_INFO(pGpu);
     NV_ASSERT_OR_RETURN(pVSI != NULL, NV_ERR_OBJECT_NOT_FOUND);
@@ -1733,13 +2050,18 @@ kmigmgrSetStaticInfo_VF
             .type = KMIGMGR_CREATE_GPU_INSTANCE_PARAMS_TYPE_RESTORE,
             .inst.restore.pGPUInstanceSave = &save
         };
-        NvU32 grCount;
         NvUuid uuid;
 
         save.bValid = NV_TRUE;
         save.swizzId = 0;
         save.giInfo.partitionFlags = (DRF_DEF(2080_CTRL_GPU, _PARTITION_FLAG, _MEMORY_SIZE, _FULL) |
                                       DRF_DEF(2080_CTRL_GPU, _PARTITION_FLAG, _COMPUTE_SIZE, _FULL) );
+
+        if (pVSI->gpuPartitionInfo.gfxGpcCount > 0)
+        {
+            save.giInfo.partitionFlags = save.giInfo.partitionFlags |
+                        DRF_DEF(2080_CTRL_GPU, _PARTITION_FLAG, _GFX_SIZE, _FULL);
+        }
 
         bitVectorToRaw(&pStaticInfo->partitionableEngines,
                         save.giInfo.enginesMask,
@@ -1761,21 +2083,37 @@ kmigmgrSetStaticInfo_VF
         pResourceAllocation->virtualGpcCount = pVSI->gpuPartitionInfo.virtualGpcCount;
         pResourceAllocation->gfxGpcCount = pVSI->gpuPartitionInfo.gfxGpcCount;
 
-        grCount = kmigmgrCountEnginesOfType(&pResourceAllocation->engines, RM_ENGINE_TYPE_GR(0));
-        for (grIdx = 0; grIdx < grCount; ++grIdx)
-        {
-            // set VEID mask for grIdx
-            kgrmgrSetGrIdxVeidMask(pGpu, pKernelGraphicsManager, grIdx,  DRF_MASK64(pVSI->gpuPartitionInfo.veidsPerGr[grIdx] - 1:0) << veidOffset);
-            veidOffset += pVSI->gpuPartitionInfo.veidsPerGr[grIdx];
+        pGlobalMask = &pResourceAllocation->engines;
+        pLocalMask = &pResourceAllocation->localEngines;
 
-            if (pVSI->gpuPartitionInfo.gpcsPerGr[grIdx] != 0)
+        // Iterate over both global/local masks at the same time
+        FOR_EACH_IN_BITVECTOR_PAIR(pGlobalMask, globalEngineType, pLocalMask, localEngineType)
+        {
+            NvU32 globalGrIdx;
+            NvU32 localGrIdx;
+
+            if (!RM_ENGINE_TYPE_IS_GR(globalEngineType))
+                continue;
+
+            globalGrIdx = RM_ENGINE_TYPE_GR_IDX(globalEngineType);
+            localGrIdx = RM_ENGINE_TYPE_GR_IDX(localEngineType);
+
+            if (pVSI->gpuPartitionInfo.veidsPerGr[localGrIdx] != 0)
             {
-                KernelGraphics *pKernelGraphics = GPU_GET_KERNEL_GRAPHICS(pGpu, grIdx);
+                // set VEID mask for grIdx
+                kgrmgrSetGrIdxVeidMask(pGpu, pKernelGraphicsManager, globalGrIdx, DRF_MASK64(pVSI->gpuPartitionInfo.veidsPerGr[localGrIdx] - 1:0) << veidOffset);
+                veidOffset += pVSI->gpuPartitionInfo.veidsPerGr[localGrIdx];
+            }
+
+            if (pVSI->gpuPartitionInfo.gpcsPerGr[localGrIdx] != 0)
+            {
+                KernelGraphics *pKernelGraphics = GPU_GET_KERNEL_GRAPHICS(pGpu, globalGrIdx);
 
                 kgraphicsInvalidateStaticInfo(pGpu, pKernelGraphics);
                 NV_ASSERT_OK(kgraphicsLoadStaticInfo_HAL(pGpu, pKernelGraphics, 0));
             }
         }
+        FOR_EACH_IN_BITVECTOR_PAIR_END();
     }
 
     return NV_OK;
@@ -2736,11 +3074,12 @@ kmigmgrIsDeviceUsingDeviceProfiling_IMPL
         return NV_FALSE;
     }
 
-    NV_ASSERT_OR_RETURN(pDevice != NULL, NV_ERR_INVALID_ARGUMENT);
+    NV_ASSERT_OR_RETURN(pDevice != NULL, NV_FALSE);
     pRsClient = RES_GET_CLIENT(pDevice);
 
-    NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
-        subdeviceGetByInstance(pRsClient, RES_GET_HANDLE(pDevice), 0, &pSubdevice));
+    NV_CHECK_OK_OR_ELSE(status, LEVEL_INFO,
+        subdeviceGetByInstance(pRsClient, RES_GET_HANDLE(pDevice), 0, &pSubdevice),
+        return NV_FALSE; );
 
     NV_CHECK_OK_OR_ELSE(status, LEVEL_ERROR,
         gisubscriptionGetGPUInstanceSubscription(pRsClient, RES_GET_HANDLE(pSubdevice), &pGPUInstanceSubscription),
@@ -2771,9 +3110,15 @@ kmigmgrEnableAllLCEs_IMPL
     NV_ASSERT_OK_OR_RETURN(kceFindFirstInstance(pGpu, &pKCe));
 
     if (bEnableAllLCEs)
+    {
         NV_ASSERT_OK_OR_RETURN(kceUpdateClassDB_HAL(pGpu, pKCe));
+    }
     else
-        NV_ASSERT_OK_OR_RETURN(kceTopLevelPceLceMappingsUpdate(pGpu, pKCe));
+    {
+        KCE_ITER_SHIM_BEGIN(pGpu, pKCe)
+            NV_ASSERT_OK_OR_RETURN(kceTopLevelPceLceMappingsUpdate(pGpu, pKCe));
+        KCE_ITER_END
+    }
 
     return NV_OK;
 }
@@ -2808,10 +3153,10 @@ kmigmgrGetInstanceRefFromDevice_IMPL
     NV_ASSERT_OR_RETURN(pDevice != NULL, NV_ERR_INVALID_ARGUMENT);
     pRsClient = RES_GET_CLIENT(pDevice);
 
-    NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
+    NV_CHECK_OK_OR_RETURN(LEVEL_INFO,
         subdeviceGetByInstance(pRsClient, RES_GET_HANDLE(pDevice), 0, &pSubdevice));
 
-    NV_CHECK_OK_OR_RETURN(LEVEL_NOTICE,
+    NV_CHECK_OK_OR_RETURN(LEVEL_INFO,
         gisubscriptionGetGPUInstanceSubscription(pRsClient, RES_GET_HANDLE(pSubdevice),
                                                  &pGPUInstanceSubscription));
 
@@ -2852,16 +3197,20 @@ kmigmgrGetMemoryPartitionHeapFromDevice_IMPL
     MIG_INSTANCE_REF ref;
     NV_STATUS rmStatus = NV_OK;
     NvHandle hClient;
+    RmClient *pRmClient;
 
     NV_ASSERT_OR_RETURN(IS_MIG_IN_USE(pGpu), NV_ERR_INVALID_STATE);
 
     NV_ASSERT_OR_RETURN(pDevice != NULL, NV_ERR_INVALID_ARGUMENT);
     hClient = RES_GET_CLIENT_HANDLE(pDevice);
+    pRmClient = dynamicCast(RES_GET_CLIENT(pDevice), RmClient);
+
+    NV_ASSERT_OR_RETURN(pRmClient != NULL, NV_ERR_INVALID_CLIENT);
 
     rmStatus = kmigmgrGetInstanceRefFromDevice(pGpu, pKernelMIGManager, pDevice, &ref);
     if ((rmStatus != NV_OK) || !kmigmgrIsMIGReferenceValid(&ref))
     {
-        RS_PRIV_LEVEL privLevel = rmclientGetCachedPrivilegeByHandle(hClient);
+        RS_PRIV_LEVEL privLevel = rmclientGetCachedPrivilege(pRmClient);
 
         // It's okay for kernel/root clients to not be associated to a GPU instance
         if (privLevel >= RS_PRIV_LEVEL_KERNEL)
@@ -2931,8 +3280,8 @@ kmigmgrPrintGPUInstanceInfo_IMPL
 
     NvU32 grCount = kmigmgrCountEnginesOfType(&pKernelMIGGpuInstance->resourceAllocation.engines,
                                               RM_ENGINE_TYPE_GR(0));
-    NvU32 ceCount = kmigmgrCountEnginesOfType(&pKernelMIGGpuInstance->resourceAllocation.engines,
-                                              RM_ENGINE_TYPE_COPY(0));
+    NvU32 ceCount = kmigmgrCountEnginesInRange(&pKernelMIGGpuInstance->resourceAllocation.engines,
+                                               kmigmgrGetAsyncCERange_HAL(pGpu, pKernelMIGManager));
     NvU32 decCount = kmigmgrCountEnginesOfType(&pKernelMIGGpuInstance->resourceAllocation.engines,
                                                RM_ENGINE_TYPE_NVDEC(0));
     NvU32 encCount = kmigmgrCountEnginesOfType(&pKernelMIGGpuInstance->resourceAllocation.engines,
@@ -2960,6 +3309,12 @@ kmigmgrPrintGPUInstanceInfo_IMPL
               "OBJCE Count",
               "NVDEC Count");
     NV_PRINTF(LEVEL_INFO, "%s\n", PADDING_STR);
+    NV_PRINTF(LEVEL_INFO, "| %61s |\n",
+             "Note: GRCE Count is same as OBJGR Count");
+    NV_PRINTF(LEVEL_INFO, "| %61s |\n",
+            "Note: OBJCE Count does not include GRCEs");
+    NV_PRINTF(LEVEL_INFO, "%s\n", PADDING_STR);
+
     NV_PRINTF(LEVEL_INFO, "| %18d | %18d | %18d  |\n",
               grCount,
               ceCount,
@@ -3336,15 +3691,10 @@ kmigmgrFilterEngineList_IMPL
     NvU32 *pEngineCount
 )
 {
-    MIG_INSTANCE_REF ref;
     NvBool bMIGInUse = IS_MIG_IN_USE(pGpu);
     NvU32 i;
-
-    if (bMIGInUse)
-    {
-        NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
-            kmigmgrGetInstanceRefFromDevice(pGpu, pKernelMIGManager, GPU_RES_GET_DEVICE(pSubdevice), &ref));
-    }
+    Device *pDevice = GPU_RES_GET_DEVICE(pSubdevice);
+    NvBool bDeviceUsingDeviceProfiling = kmigmgrIsDeviceUsingDeviceProfiling(pGpu, pKernelMIGManager, pDevice);
 
     *pEngineCount = 0;
     for (i = 0; i < pGpu->engineDB.size; ++i)
@@ -3353,24 +3703,37 @@ kmigmgrFilterEngineList_IMPL
         RM_ENGINE_TYPE newEngineType = rmEngineType;
         NvBool bAddEngine = NV_TRUE;
 
-        if (bMIGInUse)
+        if (!bDeviceUsingDeviceProfiling)
         {
-            if (kmigmgrIsEngineInInstance(pGpu, pKernelMIGManager, rmEngineType, ref))
+            if (bMIGInUse)
             {
-                // Override the engine type with the local engine idx
-                NV_ASSERT_OK(kmigmgrGetGlobalToLocalEngineType(pGpu, pKernelMIGManager, ref,
-                                                               rmEngineType,
-                                                               &newEngineType));
+                MIG_INSTANCE_REF ref;
+                NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
+                    kmigmgrGetInstanceRefFromDevice(pGpu, pKernelMIGManager, pDevice, &ref));
+
+                if (kmigmgrIsEngineInInstance(pGpu, pKernelMIGManager, rmEngineType, ref))
+                {
+                    // Override the engine type with the local engine idx
+                    NV_ASSERT_OK(kmigmgrGetGlobalToLocalEngineType(pGpu, pKernelMIGManager, ref,
+                                                                   rmEngineType,
+                                                                   &newEngineType));
+                }
+                else
+                {
+                    bAddEngine = NV_FALSE;
+                }
             }
-            else
+            else if (RM_ENGINE_TYPE_IS_GR(rmEngineType) &&
+                    (RM_ENGINE_TYPE_GR_IDX(rmEngineType) != 0))
             {
                 bAddEngine = NV_FALSE;
             }
-        }
-        else if (RM_ENGINE_TYPE_IS_GR(rmEngineType) &&
-                (0 != RM_ENGINE_TYPE_GR_IDX(rmEngineType)))
-        {
-            bAddEngine = NV_FALSE;
+            else if (pGpu->getProperty(pGpu, PDB_PROP_GPU_MIG_GFX_SUPPORTED) &&
+                     RM_ENGINE_TYPE_IS_COPY(rmEngineType) && ceIsCeGrce(pGpu, rmEngineType) &&
+                    (RM_ENGINE_TYPE_COPY_IDX(rmEngineType) != 0))
+            {
+                bAddEngine = NV_FALSE;
+            }
         }
 
         if (bAddEngine)
@@ -3420,7 +3783,7 @@ kmigmgrFilterEnginePartnerList_IMPL
 
     for (i = 0; i < pPartnerListParams->numPartners; ++i)
     {
-        RM_ENGINE_TYPE rmEngineType = pPartnerListParams->partnerList[i];
+        RM_ENGINE_TYPE rmEngineType = gpuGetRmEngineType(pPartnerListParams->partnerList[i]);
 
         if (!kmigmgrIsEngineInInstance(pGpu, pKernelMIGManager, rmEngineType, ref))
         {
@@ -3439,6 +3802,18 @@ kmigmgrFilterEnginePartnerList_IMPL
             }
 
             i--;
+        }
+        else
+        {
+            // Convert rmEngineId to MIG local Ids and then to NV2080 Engine type
+            RM_ENGINE_TYPE localRmEngineType;
+            NV_ASSERT_OK_OR_RETURN(
+                kmigmgrGetGlobalToLocalEngineType(pGpu, pKernelMIGManager, ref,
+                                            rmEngineType,
+                                            &localRmEngineType));
+            NV_PRINTF(LEVEL_INFO, "Overriding global engine type 0x%x to local engine type 0x%x (0x%x) due to MIG\n",
+                rmEngineType, localRmEngineType, localRmEngineType);
+            pPartnerListParams->partnerList[i] = gpuGetNv2080EngineType(localRmEngineType);
         }
     }
 
@@ -3472,7 +3847,7 @@ kmigmgrGetProfileByPartitionFlag_IMPL
         }
     }
 
-    return NV_ERR_INVALID_STATE;
+    return NV_ERR_OBJECT_NOT_FOUND;
 }
 
 /*
@@ -3596,7 +3971,7 @@ kmigmgrGetMIGReferenceFromEngineType_IMPL
 )
 {
     KERNEL_MIG_GPU_INSTANCE *pKernelMIGGPUInstance;
-    MIG_COMPUTE_INSTANCE *pMIGComputeInstance;
+    MIG_COMPUTE_INSTANCE *pMIGComputeInstance = NULL;
     NvU32 CIIdx;
 
     NV_ASSERT_OR_RETURN(pRef != NULL, NV_ERR_INVALID_ARGUMENT);
@@ -3659,39 +4034,12 @@ kmigmgrGetMIGReferenceFromEngineType_IMPL
 }
 
 /*!
- * @brief Check if we are running on a reduced config GPU then set the corresponding flag
- */
-void
-kmigmgrDetectReducedConfig_KERNEL
-(
-    OBJGPU *pGpu,
-    KernelMIGManager *pKernelMIGManager
-)
-{
-    const KERNEL_MIG_MANAGER_STATIC_INFO *pStaticInfo = kmigmgrGetStaticInfo(pGpu, pKernelMIGManager);
-    NvU32 i;
-
-    NV_ASSERT_OR_RETURN_VOID(pStaticInfo != NULL);
-
-    for (i = 0; i < pStaticInfo->pCIProfiles->profileCount; ++i)
-    {
-        // Reduced config A100 does not support 1/8 compute size
-        if (pStaticInfo->pCIProfiles->profiles[i].computeSize == NV2080_CTRL_GPU_PARTITION_FLAG_COMPUTE_SIZE_EIGHTH)
-        {
-            return;
-        }
-    }
-
-    pKernelMIGManager->bIsA100ReducedConfig = NV_TRUE;
-}
-
-/*!
  * @brief   Get the CE in GI that can be used for scrubbing
  *
  * @param[IN]   pGpu
  * @param[IN]   pKernelMIGManager
  * @param[IN]   pDevice            Device subscribed to GI
- * @param[OUT]  ppCe               Scrubber CE
+ * @param[OUT]  pCeInst            Scrubber CE
  */
 NV_STATUS
 kmigmgrGetGPUInstanceScrubberCe_IMPL
@@ -3699,11 +4047,13 @@ kmigmgrGetGPUInstanceScrubberCe_IMPL
     OBJGPU *pGpu,
     KernelMIGManager *pKernelMIGManager,
     Device *pDevice,
-    NvU32 *ceInst
+    NvU32 *pCeInst
 )
 {
     MIG_INSTANCE_REF ref;
     ENGTYPE_BIT_VECTOR ces;
+    RM_ENGINE_TYPE rmEngineType;
+    *pCeInst = RM_ENGINE_TYPE_NULL;
 
     NV_ASSERT_OK_OR_RETURN(
         kmigmgrGetInstanceRefFromDevice(pGpu, pKernelMIGManager, pDevice, &ref));
@@ -3714,8 +4064,22 @@ kmigmgrGetGPUInstanceScrubberCe_IMPL
 
     NV_ASSERT_OR_RETURN(!bitVectorTestAllCleared(&ces), NV_ERR_INSUFFICIENT_RESOURCES);
 
-    // Pick the first CE in the instance
-    *ceInst = RM_ENGINE_TYPE_COPY_IDX(bitVectorCountTrailingZeros(&ces));
+    // Pick the first non-GRCE in the instance
+    FOR_EACH_IN_BITVECTOR(&ces, rmEngineType)
+    {
+        if (!ceIsCeGrce(pGpu, rmEngineType))
+        {
+            *pCeInst = RM_ENGINE_TYPE_COPY_IDX(rmEngineType);
+            break;
+        }
+    }
+    FOR_EACH_IN_BITVECTOR_END();
+
+    // If can't find any non-GRCE, then just pick the first CE
+    if (*pCeInst == RM_ENGINE_TYPE_NULL)
+    {
+        *pCeInst = RM_ENGINE_TYPE_COPY_IDX(bitVectorCountTrailingZeros(&ces));
+    }
 
     return NV_OK;
 }
@@ -3934,7 +4298,7 @@ kmigmgrSwizzIdToResourceAllocation_IMPL
     bitVectorFromRaw(&pResourceAllocation->engines, info.enginesMask, sizeof(info.enginesMask));
 
     // Cache the local engine mask for this instance
-    kmigmgrGetLocalEngineMask(&pResourceAllocation->engines, &pResourceAllocation->localEngines);
+    kmigmgrGetLocalEngineMask(pGpu, &pResourceAllocation->engines, &pResourceAllocation->localEngines);
 
     return NV_OK;
 }
@@ -4009,7 +4373,7 @@ kmigmgrGenerateComputeInstanceUuid_VF
 )
 {
     VGPU_STATIC_INFO *pVSI = GPU_GET_STATIC_INFO(pGpu);
-    NvU16 chipId = DRF_VAL(_PMC, _BOOT_42, _CHIP_ID, pGpu->chipId1);
+    NvU16 chipId = decodePmcBoot42ChipId(pGpu->chipId1);
     NvU64 gid;
 
     NV_ASSERT_OR_RETURN(pVSI != NULL, NV_ERR_INVALID_STATE);
@@ -4120,10 +4484,12 @@ kmigmgrCreateComputeInstances_VF
         if (pMIGComputeInstance->bValid)
         {
             NvU32 smCount = pMIGComputeInstance->resourceAllocation.smCount;
+            NvU32 gpcCount = pMIGComputeInstance->resourceAllocation.gpcCount;
+
             NV2080_CTRL_INTERNAL_MIGMGR_COMPUTE_PROFILE ciProfile;
 
             NV_CHECK_OK_OR_ELSE(status, LEVEL_ERROR,
-                kmigmgrGetComputeProfileFromSmCount(pGpu, pKernelMIGManager, smCount, &ciProfile),
+                kmigmgrGetComputeProfileForRequest(pGpu, pKernelMIGManager, pKernelMIGGpuInstance, smCount, gpcCount, &ciProfile),
                 goto done; );
 
             inUseGpcCount += ciProfile.gpcCount;
@@ -4179,10 +4545,10 @@ kmigmgrCreateComputeInstances_VF
             spanStart = KMIGMGR_SPAN_OFFSET_INVALID;
             if (FLD_TEST_REF(NVC637_CTRL_DMA_EXEC_PARTITIONS_CREATE_REQUEST_AT_SPAN, _TRUE, params.inst.request.requestFlags))
             {
-                NvU32 veidStepSize;
+                NvU32 veidSizePerSpan;
 
                 NV_ASSERT_OK_OR_GOTO(status,
-                    kgrmgrGetVeidStepSize(pGpu, pKernelGraphicsManager, &veidStepSize),
+                    kgrmgrGetVeidSizePerSpan(pGpu, pKernelGraphicsManager, &veidSizePerSpan),
                     done);
 
                 //
@@ -4191,7 +4557,7 @@ kmigmgrCreateComputeInstances_VF
                 //
                 spanStart = (params.inst.request.pReqComputeInstanceInfo[CIIdx].spanStart != 0)
                             ? params.inst.request.pReqComputeInstanceInfo[CIIdx].spanStart
-                            : params.inst.request.pReqComputeInstanceInfo[CIIdx].veidStartOffset / veidStepSize;
+                            : params.inst.request.pReqComputeInstanceInfo[CIIdx].veidStartOffset / veidSizePerSpan;
             }
         }
         else
@@ -4501,7 +4867,7 @@ kmigmgrCreateComputeInstances_VF
         }
 
         // Cache local mask of engine IDs for this compute instance
-        kmigmgrGetLocalEngineMask(&pResourceAllocation->engines,
+        kmigmgrGetLocalEngineMask(pGpu, &pResourceAllocation->engines,
                                   &pResourceAllocation->localEngines);
     }
 
@@ -4739,6 +5105,19 @@ kmigmgrCreateComputeInstances_VF
                     kgraphicsCreateGoldenImageChannel(pGpu, pKernelGraphics),
                     cleanup_created_instances);
             }
+            KernelCcu *pKernelCcu = GPU_GET_KERNEL_CCU(pGpu);
+            VGPU_STATIC_INFO *pVSI = GPU_GET_STATIC_INFO(pGpu);
+            NV_ASSERT_OR_RETURN(pVSI != NULL, NV_ERR_INVALID_ARGUMENT);
+            if (pKernelCcu != NULL)
+            {
+                //GPM Support Check 
+                if (FLD_TEST_DRF(A080, _CTRL_CMD_VGPU_GET_CONFIG,
+                                 _PARAMS_VGPU_DEV_CAPS_GPM_ENABLED,
+                                 _TRUE, pVSI->vgpuConfig.vgpuDeviceCapsBits))
+                {
+                    NV_ASSERT_OK(kccuInitVgpuMigSharedBuffer(pGpu, pKernelCcu, swizzId, pMIGComputeInstance->id));
+                }
+            }
         }
     }
 
@@ -4865,7 +5244,7 @@ kmigmgrCreateComputeInstances_FWCLIENT
     bitVectorFromRaw(&pComputeResourceAllocation->engines, info.enginesMask, sizeof(info.enginesMask));
 
     // Cache the local engine mask for this CI
-    kmigmgrGetLocalEngineMask(&pComputeResourceAllocation->engines, &pComputeResourceAllocation->localEngines);
+    kmigmgrGetLocalEngineMask(pGpu, &pComputeResourceAllocation->engines, &pComputeResourceAllocation->localEngines);
 
     pMIGComputeInstance->bValid = NV_TRUE;
     pMIGComputeInstance->id = CIIdx;
@@ -5186,6 +5565,23 @@ kmigmgrDeleteComputeInstance_IMPL
 
     // Release this compute instance's engines
     kmigmgrReleaseComputeInstanceEngines(pGpu, pKernelMIGManager, pKernelMIGGpuInstance, pMIGComputeInstance);
+
+    if (IS_VIRTUAL(pGpu))
+    {
+        KernelCcu *pKernelCcu = GPU_GET_KERNEL_CCU(pGpu);
+        VGPU_STATIC_INFO *pVSI = GPU_GET_STATIC_INFO(pGpu);
+        NV_ASSERT_OR_RETURN(pVSI != NULL, NV_ERR_INVALID_ARGUMENT);
+        if (pKernelCcu != NULL)
+        {
+            //GPM Support Check 
+            if (FLD_TEST_DRF(A080, _CTRL_CMD_VGPU_GET_CONFIG,
+                             _PARAMS_VGPU_DEV_CAPS_GPM_ENABLED,
+                             _TRUE, pVSI->vgpuConfig.vgpuDeviceCapsBits))
+            {
+                NV_ASSERT_OK(kccuDeInitVgpuMigSharedBuffer(pGpu, pKernelCcu, swizzId, pMIGComputeInstance->id));
+            }
+        }
+    }
 
     // Now that we no longer need it, clear the shared engine flag
     pMIGComputeInstance->sharedEngFlag = 0x0;
@@ -5716,6 +6112,12 @@ kmigmgrInvalidateGPUInstance_IMPL
     // Destroy gpu instance pool for page table mem
     kmigmgrDestroyGPUInstancePool(pGpu, pKernelMIGManager, pKernelMIGGpuInstance);
 
+    // Clear vgpu placement info
+    if (kvgpumgrIsMigTimeslicingModeEnabled(pGpu))
+    {
+        NV_ASSERT_OK_OR_CAPTURE_FIRST_ERROR(rmStatus,
+            kvgpuMgrClearVgpuPlacementInfoPerGI(pGpu, swizzId));
+    }
     // Delete gpu instance engine runlists
     NV_ASSERT_OK_OR_CAPTURE_FIRST_ERROR(rmStatus,
         kmigmgrDeleteGPUInstanceRunlists_HAL(pGpu, pKernelMIGManager, pKernelMIGGpuInstance));
@@ -5742,20 +6144,12 @@ kmigmgrInvalidateGPUInstance_IMPL
     //
     if (IS_GSP_CLIENT(pGpu) && gpuIsSriovEnabled(pGpu))
     {
-        Intr *pIntr = GPU_GET_INTR(pGpu);
-
         //
         // When running in GSP offload mode, KernelRM must re-fetch the
         // interrupt table on every change to the MIG partitioning layout.
         //
         NV_ASSERT_OK_OR_CAPTURE_FIRST_ERROR(rmStatus,
-            intrStateUnload_HAL(pGpu, pIntr, GPU_STATE_FLAGS_PRESERVING));
-
-        NV_ASSERT_OK_OR_CAPTURE_FIRST_ERROR(rmStatus,
-            intrInitInterruptTable_HAL(pGpu, pIntr));
-
-        NV_ASSERT_OK_OR_CAPTURE_FIRST_ERROR(rmStatus,
-            intrStateLoad_HAL(pGpu, pIntr, GPU_STATE_FLAGS_PRESERVING));
+            intrRefetchInterruptTable_HAL(pGpu, GPU_GET_INTR(pGpu)));
     }
 
     return rmStatus;
@@ -6089,17 +6483,17 @@ kmigmgrSetMIGState_FWCLIENT
                 //TODO: Remove below code once a more robust SRT is available to test for this condition
                 FOR_EACH_INDEX_IN_MASK(32, linkId, knvlinkGetEnabledLinkMask(pGpu, pKernelNvlink))
                 {
-                    NV2080_CTRL_NVLINK_CORE_CALLBACK_PARAMS params;
+                    NV2080_CTRL_INTERNAL_NVLINK_CORE_CALLBACK_PARAMS params;
 
                     params.linkId = linkId;
-                    params.callbackType.type = NV2080_CTRL_NVLINK_CALLBACK_TYPE_GET_DL_LINK_MODE;
+                    params.callbackType.type = NV2080_CTRL_INTERNAL_NVLINK_CALLBACK_TYPE_GET_DL_LINK_MODE;
                     NV_CHECK_OK(rmStatus, LEVEL_ERROR,
                         knvlinkExecGspRmRpc(pGpu, pKernelNvlink,
-                                            NV2080_CTRL_CMD_NVLINK_CORE_CALLBACK,
+                                            NV2080_CTRL_CMD_INTERNAL_NVLINK_CORE_CALLBACK,
                                             (void *)&params, sizeof(params)));
 
-                    if ((params.callbackType.callbackParams.getDlLinkMode.mode != NV2080_NVLINK_CORE_LINK_STATE_SLEEP) ||
-                        (params.callbackType.callbackParams.getDlLinkMode.mode != NV2080_NVLINK_CORE_LINK_STATE_OFF))
+                    if ((params.callbackType.callbackParams.getDlLinkMode.mode != NV2080_INTERNAL_NVLINK_CORE_LINK_STATE_SLEEP) ||
+                        (params.callbackType.callbackParams.getDlLinkMode.mode != NV2080_INTERNAL_NVLINK_CORE_LINK_STATE_OFF))
                     {
                         NV_PRINTF(LEVEL_ERROR, "Nvlink %d is not asleep upon enteing MIG mode!\n", linkId);
                     }
@@ -6114,10 +6508,7 @@ kmigmgrSetMIGState_FWCLIENT
         }
 
         // Enable ctx buf pool before allocating any resources that uses it.
-        if (bMemoryPartitioningNeeded)
-        {
-            pGpu->setProperty(pGpu, PDB_PROP_GPU_MOVE_CTX_BUFFERS_TO_PMA, NV_TRUE);
-        }
+        pGpu->setProperty(pGpu, PDB_PROP_GPU_MOVE_CTX_BUFFERS_TO_PMA, bMemoryPartitioningNeeded);
 
         // Add the MIG-specific classes
         NV_ASSERT_OK_OR_CAPTURE_FIRST_ERROR(rmStatus,
@@ -6247,6 +6638,8 @@ cleanup_destroyInternalChannels:
                 kgraphicsLoadStaticInfo(pGpu, pKGr, KMIGMGR_SWIZZID_INVALID));
             NV_ASSERT_OK(
                 kmigmgrRestoreWatchdog(pGpu, pKernelMIGManager));
+            NV_ASSERT_OK_OR_CAPTURE_FIRST_ERROR(rmStatus,
+                kgraphicsCreateGoldenImageChannel(pGpu, pKGr));
         }
 
         //
@@ -6381,14 +6774,18 @@ kmigmgrCreateGPUInstance_IMPL
         NV_CHECK_OK_OR_GOTO(rmStatus, LEVEL_ERROR,
             kmigmgrInitGPUInstanceScrubber(pGpu, pKernelMIGManager, pKernelMIGGpuInstance), invalidate);
 
+        // Set vgpu placement info
+        if (kvgpumgrIsMigTimeslicingModeEnabled(pGpu))
+        {
+            NV_CHECK_OK_OR_GOTO(rmStatus, LEVEL_ERROR,
+                kvgpuMgrReserveVgpuPlacementInfoPerGI(pGpu, swizzId), invalidate);
+        }
         //
         // Only partitions in which VGPU guests are booted require changing
         // engine interrupt vectors to deterministic values for migration.
         //
         if (IS_GSP_CLIENT(pGpu) && gpuIsSriovEnabled(pGpu))
         {
-            Intr *pIntr = GPU_GET_INTR(pGpu);
-
             //
             // Making changes to MIG partition structure reassigns engine interrupts
             // of the engines assigned to a partition. This is done so that a guest
@@ -6406,15 +6803,7 @@ kmigmgrCreateGPUInstance_IMPL
             // NV2080_CTRL_CMD_VGPU_MGR_INTERNAL_BOOTLOAD_GSP_VGPU_PLUGIN_TASK.
             //
             NV_CHECK_OK_OR_GOTO(rmStatus, LEVEL_ERROR,
-                intrStateUnload_HAL(pGpu, pIntr, GPU_STATE_FLAGS_PRESERVING),
-                invalidate);
-
-            NV_CHECK_OK_OR_GOTO(rmStatus, LEVEL_ERROR,
-                intrInitInterruptTable_HAL(pGpu, pIntr),
-                invalidate);
-
-            NV_CHECK_OK_OR_GOTO(rmStatus, LEVEL_ERROR,
-                intrStateLoad_HAL(pGpu, pIntr, GPU_STATE_FLAGS_PRESERVING),
+                intrRefetchInterruptTable_HAL(pGpu, GPU_GET_INTR(pGpu)),
                 invalidate);
         }
 
@@ -6646,7 +7035,13 @@ kmigmgrInitGPUInstanceGrBufPools_IMPL
     bufCount = 0;
     FOR_EACH_IN_ENUM(GR_GLOBALCTX_BUFFER, bufId)
     {
-        if (kgrmgrIsGlobalCtxBufSupported(bufId, NV_FALSE))
+        //
+        // In Blackwell, syspipe can support Graphics in MIG mode, but we have no
+        // idea whether Graphics will be enabled or not at GI creation time, so
+        // always reserve the buffers as Graphics enabled so we will always have
+        // enough space
+        //
+        if (kgrmgrIsGlobalCtxBufSupported(bufId, NV_TRUE))
         {
             const CTX_BUF_INFO *pBufInfo = kgrmgrGetGlobalCtxBufInfo(pGpu, pKernelGraphicsManager, bufId);
             NV_ASSERT_OR_RETURN(pBufInfo != NULL, NV_ERR_INVALID_STATE);
@@ -6908,7 +7303,8 @@ subdeviceCtrlCmdGpuGetActivePartitionIds_IMPL
 
     ct_assert(NV2080_CTRL_GPU_MAX_PARTITIONS == KMIGMGR_MAX_GPU_INSTANCES);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmDeviceGpuLockIsOwner(pGpu->gpuInstance));
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmDeviceGpuLockIsOwner(pGpu->gpuInstance),
+        NV_ERR_INVALID_LOCK_STATE);
 
     if ((pKernelMIGManager == NULL) || !pGpu->getProperty(pGpu, PDB_PROP_GPU_MIG_SUPPORTED))
     {
@@ -6954,9 +7350,11 @@ subdeviceCtrlCmdGpuGetPartitionCapacity_IMPL
     NV_STATUS         status = NV_OK;
     OBJGPU           *pGpu = GPU_RES_GET_GPU(pSubdevice);
     KernelMIGManager *pKernelMIGManager = GPU_GET_KERNEL_MIG_MANAGER(pGpu);
-    NvHandle          hClient = RES_GET_CLIENT_HANDLE(pSubdevice);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    RmClient *pRmClient = dynamicCast(RES_GET_CLIENT(pSubdevice), RmClient);
+    NV_ASSERT_OR_RETURN(NULL != pRmClient, NV_ERR_INVALID_CLIENT);
+
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     NV_CHECK_OR_RETURN(LEVEL_INFO, kmigmgrIsMIGSupported(pGpu, pKernelMIGManager), NV_ERR_NOT_SUPPORTED);
 
@@ -6973,9 +7371,9 @@ subdeviceCtrlCmdGpuGetPartitionCapacity_IMPL
             NV_ASSERT_OR_RETURN(pCallContext != NULL, NV_ERR_INVALID_STATE);
 
             // Only expose current capacity to admins or capable clients.
-            if (!rmclientIsCapableOrAdminByHandle(hClient,
-                                                  NV_RM_CAP_SYS_SMC_CONFIG,
-                                                  pCallContext->secInfo.privLevel))
+            if (!rmclientIsCapableOrAdmin(pRmClient,
+                                          NV_RM_CAP_SYS_SMC_CONFIG,
+                                          pCallContext->secInfo.privLevel))
             {
                 return NV_ERR_INSUFFICIENT_PERMISSIONS;
             }
@@ -7039,7 +7437,7 @@ subdeviceCtrlCmdGpuDescribePartitions_IMPL
     OBJGPU *pGpu = GPU_RES_GET_GPU(pSubdevice);
     KernelMIGManager *pKernelMIGManager = GPU_GET_KERNEL_MIG_MANAGER(pGpu);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     if (!pGpu->getProperty(pGpu, PDB_PROP_GPU_MIG_SUPPORTED))
     {
@@ -7066,7 +7464,7 @@ subdeviceCtrlCmdGpuSetPartitioningMode_IMPL
     KernelMIGManager *pKernelMIGManager = GPU_GET_KERNEL_MIG_MANAGER(pGpu);
     RM_API *pRmApi = GPU_GET_PHYSICAL_RMAPI(pGpu);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     if (IS_VIRTUAL(pGpu))
     {
@@ -7249,17 +7647,18 @@ subdeviceCtrlCmdGpuSetPartitions_IMPL
     NvU32             i;
     NvU32             j;
     OBJGPU           *pGpu = GPU_RES_GET_GPU(pSubdevice);
-    NvHandle          hClient = RES_GET_CLIENT_HANDLE(pSubdevice);
     KernelMIGManager *pKernelMIGManager = GPU_GET_KERNEL_MIG_MANAGER(pGpu);
     CALL_CONTEXT     *pCallContext = resservGetTlsCallContext();
+    RmClient *pRmClient = dynamicCast(RES_GET_CLIENT(pSubdevice), RmClient);
+    NV_ASSERT_OR_RETURN(NULL != pRmClient, NV_ERR_INVALID_CLIENT);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     NV_ASSERT_OR_RETURN(pCallContext != NULL, NV_ERR_INVALID_STATE);
 
-    if (!rmclientIsCapableOrAdminByHandle(hClient,
-                                          NV_RM_CAP_SYS_SMC_CONFIG,
-                                          pCallContext->secInfo.privLevel))
+    if (!rmclientIsCapableOrAdmin(pRmClient,
+                                  NV_RM_CAP_SYS_SMC_CONFIG,
+                                  pCallContext->secInfo.privLevel))
     {
         NV_PRINTF(LEVEL_ERROR, "Non-privileged context issued privileged cmd\n");
         return NV_ERR_INSUFFICIENT_PERMISSIONS;
@@ -7337,13 +7736,17 @@ subdeviceCtrlCmdGpuGetPartitions_IMPL
     KernelMIGManager                     *pKernelMIGManager = GPU_GET_KERNEL_MIG_MANAGER(pGpu);
     MIG_INSTANCE_REF                      ref;
     NvU64                                 validSwizzIdMask;
-    NvHandle                              hClient = RES_GET_CLIENT_HANDLE(pSubdevice);
+    RmClient                             *pRmClient = dynamicCast(RES_GET_CLIENT(pSubdevice), RmClient);
+
+    NV_ASSERT_OR_RETURN(NULL != pRmClient, NV_ERR_INVALID_CLIENT);
+
     NV2080_CTRL_GPU_GET_PARTITIONS_PARAMS *pRpcParams = NULL;
 
     ct_assert(NV2080_CTRL_GPU_MAX_PARTITIONS == KMIGMGR_MAX_GPU_INSTANCES);
     ct_assert(NV2080_CTRL_GPU_MAX_GPC_PER_SMC == KGRMGR_MAX_GPC);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmDeviceGpuLockIsOwner(pGpu->gpuInstance));
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmDeviceGpuLockIsOwner(pGpu->gpuInstance),
+        NV_ERR_INVALID_LOCK_STATE);
 
     pRpcParams = portMemAllocNonPaged(sizeof(*pRpcParams));
     NV_CHECK_OR_RETURN(LEVEL_INFO, pRpcParams != NULL, NV_ERR_NO_MEMORY);
@@ -7392,9 +7795,9 @@ subdeviceCtrlCmdGpuGetPartitions_IMPL
         NV_ASSERT_OR_ELSE(pCallContext != NULL,
                           rmStatus = NV_ERR_INVALID_STATE; goto done);
 
-        if (!rmclientIsCapableOrAdminByHandle(hClient,
-                                              NV_RM_CAP_SYS_SMC_CONFIG,
-                                              pCallContext->secInfo.privLevel))
+        if (!rmclientIsCapableOrAdmin(pRmClient,
+                                      NV_RM_CAP_SYS_SMC_CONFIG,
+                                      pCallContext->secInfo.privLevel))
         {
             NV_PRINTF(LEVEL_ERROR,
                       "Non privileged client requesting global gpu instance info\n");
@@ -7445,8 +7848,22 @@ subdeviceCtrlCmdGpuGetPartitions_IMPL
             kmigmgrCountEnginesOfType(&pResourceAllocation->engines, RM_ENGINE_TYPE_GR(0));
         pParams->queryPartitionInfo[i].smCount = ref.pKernelMIGGpuInstance->pProfile->smCount;
         pParams->queryPartitionInfo[i].veidCount = pResourceAllocation->veidCount;
-        pParams->queryPartitionInfo[i].ceCount =
-            kmigmgrCountEnginesOfType(&pResourceAllocation->engines, RM_ENGINE_TYPE_COPY(0));
+
+        if (pGpu->getProperty(pGpu, PDB_PROP_GPU_MIG_SUPPORTS_SPLIT_CE_RANGES))
+        {
+            //
+            // ceCount here will reflect the Async CEs
+            // GRCE count will be always equal to GFX GR Count in SMG instances.
+            //
+            pParams->queryPartitionInfo[i].ceCount = kmigmgrCountEnginesInRange(&pResourceAllocation->engines,
+                                                        kmigmgrGetAsyncCERange_HAL(pGpu, pKernelMIGManager));
+        }
+        else
+        {
+            pParams->queryPartitionInfo[i].ceCount =
+                kmigmgrCountEnginesOfType(&pResourceAllocation->engines, RM_ENGINE_TYPE_COPY(0));
+        }
+
         pParams->queryPartitionInfo[i].gpcCount = pResourceAllocation->gpcCount;
         pParams->queryPartitionInfo[i].gfxGpcCount = pResourceAllocation->gfxGpcCount;
         pParams->queryPartitionInfo[i].virtualGpcCount = pResourceAllocation->virtualGpcCount;
@@ -7545,15 +7962,17 @@ subdeviceCtrlCmdInternalKMIGmgrExportGPUInstance_IMPL
     OBJGPU *pGpu = GPU_RES_GET_GPU(pSubdevice);
     CALL_CONTEXT *pCallContext = resservGetTlsCallContext();
     RM_API *pRmApi = GPU_GET_PHYSICAL_RMAPI(pGpu);
+    RmClient *pRmClient = dynamicCast(RES_GET_CLIENT(pSubdevice), RmClient);
+    NV_ASSERT_OR_RETURN(NULL != pRmClient, NV_ERR_INVALID_CLIENT);
 
     // No gpu instances to export
     if (!IS_MIG_IN_USE(pGpu))
         return NV_ERR_NOT_SUPPORTED;
 
     // An unprivileged client has no use case for import/export
-    if (!rmclientIsCapableOrAdminByHandle(RES_GET_CLIENT_HANDLE(pSubdevice),
-                                          NV_RM_CAP_SYS_SMC_CONFIG,
-                                          pCallContext->secInfo.privLevel))
+    if (!rmclientIsCapableOrAdmin(pRmClient,
+                                  NV_RM_CAP_SYS_SMC_CONFIG,
+                                  pCallContext->secInfo.privLevel))
     {
         return NV_ERR_INSUFFICIENT_PERMISSIONS;
     }
@@ -7587,6 +8006,8 @@ subdeviceCtrlCmdInternalKMIGmgrImportGPUInstance_IMPL
     KernelMIGManager *pKernelMIGManager = GPU_GET_KERNEL_MIG_MANAGER(pGpu);
     CALL_CONTEXT *pCallContext = resservGetTlsCallContext();
     RM_API *pRmApi = GPU_GET_PHYSICAL_RMAPI(pGpu);
+    RmClient *pRmClient = dynamicCast(RES_GET_CLIENT(pSubdevice), RmClient);
+    NV_ASSERT_OR_RETURN(NULL != pRmClient, NV_ERR_INVALID_CLIENT);
 
     if (!pGpu->getProperty(pGpu, PDB_PROP_GPU_MIG_SUPPORTED))
         return NV_ERR_NOT_SUPPORTED;
@@ -7594,9 +8015,9 @@ subdeviceCtrlCmdInternalKMIGmgrImportGPUInstance_IMPL
     NV_ASSERT_OR_RETURN(pCallContext != NULL, NV_ERR_INVALID_STATE);
 
     // An unprivileged client has no use case for import/export
-    if (!rmclientIsCapableOrAdminByHandle(RES_GET_CLIENT_HANDLE(pSubdevice),
-                                          NV_RM_CAP_SYS_SMC_CONFIG,
-                                          pCallContext->secInfo.privLevel))
+    if (!rmclientIsCapableOrAdmin(pRmClient,
+                                  NV_RM_CAP_SYS_SMC_CONFIG,
+                                  pCallContext->secInfo.privLevel))
     {
         return NV_ERR_INSUFFICIENT_PERMISSIONS;
     }
@@ -7682,6 +8103,36 @@ cleanup_mig_state:
 }
 
 NV_STATUS
+kmigmgrGetGpuProfileFromFlag_IMPL
+(
+    OBJGPU *pGpu,
+    KernelMIGManager *pKernelMIGManager,
+    NvU32 partitionFlag,
+    NV2080_CTRL_INTERNAL_MIGMGR_PROFILE_INFO *pProfile
+)
+{
+    NvU32 i;
+    NV2080_CTRL_INTERNAL_MIGMGR_PROFILE_INFO *pProf;
+    const KERNEL_MIG_MANAGER_STATIC_INFO *pStaticInfo = kmigmgrGetStaticInfo(pGpu, pKernelMIGManager);
+
+    NV_CHECK_OR_RETURN(LEVEL_ERROR, pStaticInfo != NULL, NV_ERR_INVALID_STATE);
+
+    for (i = 0; i < pStaticInfo->pProfiles->count; i++)
+    {
+        pProf = &pStaticInfo->pProfiles->table[i];
+
+        if (pProf->partitionFlag == partitionFlag)
+        {
+            portMemCopy(pProfile, sizeof(*pProfile), pProf, sizeof(*pProf));
+
+            return NV_OK;
+        }
+    }
+
+    return NV_ERR_OBJECT_NOT_FOUND;
+}
+
+NV_STATUS
 subdeviceCtrlCmdGpuGetComputeProfiles_IMPL
 (
     Subdevice *pSubdevice,
@@ -7693,9 +8144,11 @@ subdeviceCtrlCmdGpuGetComputeProfiles_IMPL
     const KERNEL_MIG_MANAGER_STATIC_INFO *pStaticInfo = kmigmgrGetStaticInfo(pGpu, pKernelMIGManager);
     Device *pDevice = GPU_RES_GET_DEVICE(pSubdevice);
     NvU32 maxSmCount = NV_U32_MAX;
+    NvU32 maxPhysicalSlotCount = NV_U32_MAX;
     MIG_INSTANCE_REF ref;
     NvU32 entryCount;
     NvU32 i;
+    NV2080_CTRL_INTERNAL_MIGMGR_PROFILE_INFO giProfile;
 
     if (!IS_MIG_ENABLED(pGpu))
         return NV_ERR_INVALID_STATE;
@@ -7705,10 +8158,23 @@ subdeviceCtrlCmdGpuGetComputeProfiles_IMPL
     // to filter out compute profiles which wouldn't fit on the GI anyway. This
     // is not fatal as we still want to allow compute profiles for entire GPU view
     // to be queried without a specific GPU instance.
+    // If GPU partition is not avaiable, fall back to control provided partitionFlag
+    // to determine host GPU instance properties.
     //
     if (kmigmgrGetInstanceRefFromDevice(pGpu, pKernelMIGManager, pDevice, &ref) == NV_OK)
     {
         maxSmCount = ref.pKernelMIGGpuInstance->pProfile->smCount;
+        maxPhysicalSlotCount = ref.pKernelMIGGpuInstance->pProfile->virtualGpcCount;
+        portMemCopy(&giProfile, sizeof(giProfile), ref.pKernelMIGGpuInstance->pProfile, sizeof(giProfile));
+    }
+    else
+    {
+
+        NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
+            kmigmgrGetGpuProfileFromFlag(pGpu, pKernelMIGManager, pParams->partitionFlag, &giProfile));
+
+        maxSmCount = giProfile.smCount;
+        maxPhysicalSlotCount = giProfile.virtualGpcCount;
     }
 
     NV_CHECK_OR_RETURN(LEVEL_ERROR, pStaticInfo != NULL, NV_ERR_INVALID_STATE);
@@ -7718,8 +8184,13 @@ subdeviceCtrlCmdGpuGetComputeProfiles_IMPL
     entryCount = 0;
     for (i = 0; i < pStaticInfo->pCIProfiles->profileCount; i++)
     {
-        if (pStaticInfo->pCIProfiles->profiles[i].smCount > maxSmCount)
+        NVC637_CTRL_EXEC_PARTITIONS_GET_PROFILE_CAPACITY_PARAMS params = {0};
+
+        if ((pStaticInfo->pCIProfiles->profiles[i].smCount > maxSmCount) ||
+            (pStaticInfo->pCIProfiles->profiles[i].physicalSlots > maxPhysicalSlotCount))
+        {
             continue;
+        }
 
         // If there are any duplicate compute profiles (i.e. same GPC and SM counts), skip broadcasting the
         // profile out.
@@ -7728,7 +8199,15 @@ subdeviceCtrlCmdGpuGetComputeProfiles_IMPL
             (pParams->profiles[entryCount - 1].gpcCount == pStaticInfo->pCIProfiles->profiles[i].gpcCount) &&
             (pParams->profiles[entryCount - 1].smCount == pStaticInfo->pCIProfiles->profiles[i].smCount))
         {
-           continue;
+            continue;
+        }
+
+        params.computeSize = pStaticInfo->pCIProfiles->profiles[i].computeSize;
+        NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
+            kmigmgrComputeProfileGetCapacity(pGpu, pKernelMIGManager, &giProfile, NULL, &params));
+        if (params.totalProfileCount == 0)
+        {
+            continue;
         }
 
         pParams->profiles[entryCount].computeSize = pStaticInfo->pCIProfiles->profiles[i].computeSize;
@@ -7739,6 +8218,38 @@ subdeviceCtrlCmdGpuGetComputeProfiles_IMPL
         entryCount++;
     }
     pParams->profileCount = entryCount;
+    return NV_OK;
+}
+
+/*
+ *  Query compute profile capacity
+ *
+ */
+NV_STATUS
+subdeviceCtrlCmdGpuGetComputeProfileCapacity_IMPL
+(
+    Subdevice *pSubdevice,
+    NV2080_CTRL_GPU_GET_COMPUTE_PROFILE_CAPACITY_PARAMS *pParams
+)
+{
+    OBJGPU *pGpu = GPU_RES_GET_GPU(pSubdevice);
+    KernelMIGManager *pKernelMIGManager = GPU_GET_KERNEL_MIG_MANAGER(pGpu);
+    NVC637_CTRL_EXEC_PARTITIONS_GET_PROFILE_CAPACITY_PARAMS params = {0};
+    NV2080_CTRL_INTERNAL_MIGMGR_PROFILE_INFO profile;
+
+    NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
+        kmigmgrGetGpuProfileFromFlag(pGpu, pKernelMIGManager, pParams->partitionFlag, &profile));
+
+    params.computeSize = pParams->computeSize;
+
+    NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
+        kmigmgrComputeProfileGetCapacity(pGpu, pKernelMIGManager, &profile, NULL, &params));
+
+    pParams->totalProfileCount = params.totalProfileCount;
+    pParams->totalSpansCount = params.totalSpansCount;
+    portMemCopy(pParams->totalSpans, sizeof(pParams->totalSpans),
+                params.totalSpans, sizeof(params.totalSpans));
+
     return NV_OK;
 }
 
@@ -7759,6 +8270,8 @@ subdeviceCtrlCmdGpuGetComputeProfiles_IMPL
 NvU32
 kmigmgrGetNextComputeSize_IMPL
 (
+    OBJGPU *pGpu,
+    KernelMIGManager *pKernelMIGManager,
     NvBool bGetNextSmallest,
     NvU32 computeSize
 )
@@ -7887,22 +8400,56 @@ kmigmgrGetComputeProfileFromSmCount_IMPL
 )
 {
     const KERNEL_MIG_MANAGER_STATIC_INFO *pStaticInfo = kmigmgrGetStaticInfo(pGpu, pKernelMIGManager);
+    NvU32 indexMask;
+    NvU32 index;
     NvU32 i;
 
+    NV_CHECK_OR_RETURN(LEVEL_WARNING, smCount != 0, NV_ERR_OBJECT_NOT_FOUND);
     NV_ASSERT_OR_RETURN(pProfile != NULL, NV_ERR_INVALID_ARGUMENT);
     NV_CHECK_OR_RETURN(LEVEL_ERROR, pStaticInfo != NULL, NV_ERR_OBJECT_NOT_FOUND);
     NV_CHECK_OR_RETURN(LEVEL_WARNING, pStaticInfo->pCIProfiles != NULL, NV_ERR_OBJECT_NOT_FOUND);
 
+    // Assertion for catching overflow of bitmask early
+    NV_ASSERT_OR_RETURN(pStaticInfo->pCIProfiles->profileCount < 32, NV_ERR_INVALID_STATE);
+
+    indexMask = 0x0;
     for (i = 0; i < pStaticInfo->pCIProfiles->profileCount; i++)
     {
         if (pStaticInfo->pCIProfiles->profiles[i].smCount == smCount)
         {
-            portMemCopy(pProfile, sizeof(*pProfile), &pStaticInfo->pCIProfiles->profiles[i], sizeof(pStaticInfo->pCIProfiles->profiles[i]));
-            return NV_OK;
+            indexMask |= NVBIT32(i);
         }
     }
-    NV_PRINTF(LEVEL_ERROR, "Found no Compute Profile for smCount=%d\n", smCount);
-    return NV_ERR_OBJECT_NOT_FOUND;
+
+    index = portUtilCountTrailingZeros32(indexMask);
+    if (indexMask == 0x0)
+    {
+        NV_PRINTF(LEVEL_ERROR, "Found no Compute Profile for smCount=%d\n", smCount);
+        return NV_ERR_OBJECT_NOT_FOUND;
+    }
+    else if (nvPopCount32(indexMask) > 1)
+    {
+        NvU32 prevSlots = pStaticInfo->pCIProfiles->profiles[index].physicalSlots;
+
+        //
+        // In the event there are multiple profiles with the same SM count, check to see if
+        // the profiles have matching physical slots. If they don't, then just return and
+        // let caller handle it.
+        //
+        FOR_EACH_INDEX_IN_MASK(32, i, indexMask)
+        {
+            if (prevSlots != pStaticInfo->pCIProfiles->profiles[i].physicalSlots)
+            {
+                NV_PRINTF(LEVEL_WARNING, "Profiles aliased. Falling back to GPC look-up\n");
+                return NV_ERR_OBJECT_NOT_FOUND;
+            }
+        }
+        FOR_EACH_INDEX_IN_MASK_END
+    }
+
+    // If all the aliased profiles share physical slots, take the first index (i.e. the smallest) profile.
+    portMemCopy(pProfile, sizeof(*pProfile), &pStaticInfo->pCIProfiles->profiles[index], sizeof(pStaticInfo->pCIProfiles->profiles[index]));
+    return NV_OK;
 }
 
 
@@ -7996,7 +8543,7 @@ kmigmgrGetComputeProfileFromCTSId_IMPL
     NV_CHECK_OR_RETURN(LEVEL_ERROR, pStaticInfo != NULL, NV_ERR_OBJECT_NOT_FOUND);
     NV_CHECK_OR_RETURN(LEVEL_WARNING, pStaticInfo->pCIProfiles != NULL, NV_ERR_OBJECT_NOT_FOUND);
 
-    computeSize = kmigmgrGetComputeSizeFromCTSId(ctsId);
+    computeSize = kmigmgrGetComputeSizeFromCTSId(pGpu, ctsId);
     return kmigmgrGetComputeProfileFromSize(pGpu, pKernelMIGManager, computeSize, pProfile);
 }
 
@@ -8089,6 +8636,7 @@ kmigmgrComputeProfileSizeToCTSIdRange_IMPL
             return rangeMake(9,12);
 
         case NV2080_CTRL_GPU_PARTITION_FLAG_COMPUTE_SIZE_EIGHTH:
+
             return rangeMake(13,20);
 
         default:
@@ -8244,28 +8792,69 @@ kmigmgrGetFreeCTSId_IMPL
     shadowValidCTSIdMask = validMask;
     validMask &= DRF_SHIFTMASK64(ctsRange.hi:ctsRange.lo);
 
+    if (bRestrictWithGfx)
+    {
+        if (bGfxRequested)
+        {
+            // For GFX request, override the CTS ID pool to GFX-capable only.
+            validMask &= globalValidGfxCtsMask;
+        }
+        else if ((validMask & ~globalValidGfxCtsMask)!= 0)
+        {
+            //
+            // For non-GFX request, override the CTS ID pool to non-GFX-capable only. We don't
+            // override the pool if we run out of non-GFX CTS ID, and the default pool which has
+            // all available CTS ID will be used.
+            //
+            validMask &= ~globalValidGfxCtsMask;
+        }
+    }
+
     // If there are no valid, open ctsIds, then bail here
     NV_CHECK_OR_RETURN(LEVEL_SILENT, validMask != 0x0, NV_ERR_INSUFFICIENT_RESOURCES);
 
-    // Determine which available CTS ids will reduce the remaining capacity the least
-    maxRemainingCapacity = 0;
-    idealCTSId = portUtilCountTrailingZeros64(validMask);
-    FOR_EACH_INDEX_IN_MASK(64, ctsId, validMask)
+    KernelGraphicsManager *pKernelGraphicsManager = GPU_GET_KERNEL_GRAPHICS_MANAGER(pGpu);
+    NvU32 gfxGrCount;
+
+    NV_ASSERT_OR_RETURN(kgrmgrGetLegacyKGraphicsStaticInfo(pGpu, pKernelGraphicsManager)->bInitialized, NV_ERR_INVALID_STATE);
+    NV_ASSERT_OR_RETURN(kgrmgrGetLegacyKGraphicsStaticInfo(pGpu, pKernelGraphicsManager)->pGrInfo != NULL, NV_ERR_INVALID_STATE);
+
+    gfxGrCount = kgrmgrGetLegacyKGraphicsStaticInfo(pGpu, pKernelGraphicsManager)->pGrInfo->infoList[NV2080_CTRL_GR_INFO_INDEX_LITTER_NUM_GFXC_SMC_ENGINES].data;
+
+    //
+    // Like swizzId allocation and only during actual allocation rather than querying,
+    // use the right-most one to keep the GFX capable CTS IDs available.
+    //
+    // Always select the highest available ctsId to keep GFX ctsId available as
+    // possible as we can (GFX ctsId should always be in lower part of available ctsIds)
+    // (This resriction is only needed for 1-way SMG)
+    //
+    if (bRestrictWithGfx && (gfxGrCount == 1) && kmigmgrIsSmgEnabled(pGpu, pKernelMIGManager))
     {
-        NvU64 invalidMask;
-        NV_ASSERT_OK(kmigmgrGetInvalidCTSIdMask(pGpu, pKernelMIGManager, ctsId, &invalidMask));
-
-        NvU32 remainingCapacity = nvPopCount64(shadowValidCTSIdMask & ~invalidMask);
-
-        if (remainingCapacity > maxRemainingCapacity)
-        {
-            maxRemainingCapacity = remainingCapacity;
-            idealCTSId = ctsId;
-        }
+        *pCtsId = 64 - portUtilCountLeadingZeros64(validMask) - 1;
     }
-    FOR_EACH_INDEX_IN_MASK_END;
+    else
+    {
+        // Determine which available CTS ids will reduce the remaining capacity the least
+        maxRemainingCapacity = 0;
+        idealCTSId = portUtilCountTrailingZeros64(validMask);
+        FOR_EACH_INDEX_IN_MASK(64, ctsId, validMask)
+        {
+            NvU64 invalidMask;
+            NV_ASSERT_OK(kmigmgrGetInvalidCTSIdMask(pGpu, pKernelMIGManager, ctsId, &invalidMask));
 
-    *pCtsId = idealCTSId;
+            NvU32 remainingCapacity = nvPopCount64(shadowValidCTSIdMask & ~invalidMask);
+
+            if (remainingCapacity > maxRemainingCapacity)
+            {
+                maxRemainingCapacity = remainingCapacity;
+                idealCTSId = ctsId;
+            }
+        }
+        FOR_EACH_INDEX_IN_MASK_END;
+
+        *pCtsId = idealCTSId;
+    }
 
     return NV_OK;
 }
@@ -8310,17 +8899,19 @@ kmigmgrIsCTSAlignmentRequired_VF
 NvU32
 kmigmgrGetComputeSizeFromCTSId_IMPL
 (
+    OBJGPU *pGpu,
     NvU32 ctsId
 )
 {
-    NvU32 computeSize = kmigmgrGetNextComputeSize(NV_TRUE, KMIGMGR_COMPUTE_SIZE_INVALID);
+    KernelMIGManager *pKernelMIGManager = GPU_GET_KERNEL_MIG_MANAGER(pGpu);
+    NvU32 computeSize = kmigmgrGetNextComputeSize_HAL(pGpu, pKernelMIGManager, NV_TRUE, KMIGMGR_COMPUTE_SIZE_INVALID);
 
     while (computeSize != KMIGMGR_COMPUTE_SIZE_INVALID)
     {
         NV_RANGE range = kmigmgrComputeProfileSizeToCTSIdRange(computeSize);
         if ((range.lo <= ctsId) && (ctsId <= range.hi))
             break;
-        computeSize = kmigmgrGetNextComputeSize(NV_TRUE, computeSize);
+        computeSize = kmigmgrGetNextComputeSize_HAL(pGpu, pKernelMIGManager, NV_TRUE, computeSize);
     }
 
     return computeSize;
@@ -8336,14 +8927,14 @@ kmigmgrSmallestComputeProfileSize_IMPL
     KernelMIGManager *pKernelMIGManager
 )
 {
-    NvU32 computeSize = kmigmgrGetNextComputeSize(NV_FALSE, KMIGMGR_COMPUTE_SIZE_INVALID);
+    NvU32 computeSize = kmigmgrGetNextComputeSize_HAL(pGpu, pKernelMIGManager, NV_FALSE, KMIGMGR_COMPUTE_SIZE_INVALID);
 
     while (computeSize != KMIGMGR_COMPUTE_SIZE_INVALID)
     {
         NV2080_CTRL_INTERNAL_MIGMGR_COMPUTE_PROFILE unused;
         if (kmigmgrGetComputeProfileFromSize(pGpu, pKernelMIGManager, computeSize, &unused) == NV_OK)
             break;
-        computeSize = kmigmgrGetNextComputeSize(NV_FALSE, computeSize);
+        computeSize = kmigmgrGetNextComputeSize_HAL(pGpu, pKernelMIGManager, NV_FALSE, computeSize);
     }
 
     return computeSize;
@@ -8505,7 +9096,7 @@ kmigmgrGetSpanStartFromCTSId_IMPL
     NvU32 ctsId
 )
 {
-    NvU32 computeSize = kmigmgrGetComputeSizeFromCTSId(ctsId);
+    NvU32 computeSize = kmigmgrGetComputeSizeFromCTSId(pGpu, ctsId);
     NV_RANGE computeSizeIdRange;
     NvU64 computeSizeIdMask;
     NvU64 slotBasisMask;
@@ -8780,6 +9371,8 @@ kmigmgrRestoreFromBootConfig_PF
         createParams.execPartCount                  = 1;
         createParams.flags                          = DRF_DEF(C637_CTRL, _DMA_EXEC_PARTITIONS_CREATE_REQUEST, _AT_SPAN, _TRUE);
         createParams.execPartInfo[0].gpcCount       = computeProfileInfo.gpcCount;
+        createParams.execPartInfo[0].gfxGpcCount    = (DRF_VAL(2080_CTRL_GPU, _PARTITION_FLAG, _GFX_SIZE, partitionInfo[bootConfig.CIs[CIIdx].GIIdx].partitionFlag) == NV2080_CTRL_GPU_PARTITION_FLAG_GFX_SIZE_NONE)
+                                                      ? 0 : computeProfileInfo.gfxGpcCount;
         createParams.execPartInfo[0].smCount        = computeProfileInfo.smCount;
         createParams.execPartInfo[0].computeSize    = computeProfileInfo.computeSize;
         createParams.execPartInfo[0].ceCount        = bootConfig.CIs[CIIdx].ceCount;
@@ -8884,6 +9477,12 @@ kmigmgrGetSmallestGpuInstanceSize_IMPL
         case 8:
             *pSmallestComputeSize = NV2080_CTRL_GPU_PARTITION_FLAG_COMPUTE_SIZE_EIGHTH;
             break;
+        case 4:
+            *pSmallestComputeSize = NV2080_CTRL_GPU_PARTITION_FLAG_COMPUTE_SIZE_QUARTER;
+            break;
+        case 2:
+            *pSmallestComputeSize = NV2080_CTRL_GPU_PARTITION_FLAG_COMPUTE_SIZE_HALF;
+            break;
         case 1:
             *pSmallestComputeSize = NV2080_CTRL_GPU_PARTITION_FLAG_COMPUTE_SIZE_FULL;
             break;
@@ -8936,7 +9535,8 @@ kmigmgrGetComputeProfileForRequest_IMPL
             return NV_OK;
     }
 
-    if (kmigmgrGetComputeProfileFromSmCount(pGpu, pKernelMIGManager, smCountRequest, pProfile) == NV_OK)
+    if ((smCountRequest != 0) &&
+        kmigmgrGetComputeProfileFromSmCount(pGpu, pKernelMIGManager, smCountRequest, pProfile) == NV_OK)
     {
         return NV_OK;
     }
@@ -9001,3 +9601,174 @@ kmigmgrIsPartitionVeidAllocationContiguous_IMPL
     //
     return ONEBITSET(tempMask + 1);
 }
+
+/*!
+ * @brief   Provides capacity and placement information for specified compute instance profile.
+ *          If pKernelMIGGpuInstance is NULL, only totalSpans/totalCounts are meaningful.
+ */
+NV_STATUS
+kmigmgrComputeProfileGetCapacity_IMPL
+(
+    OBJGPU *pGpu,
+    KernelMIGManager *pKernelMIGManager,
+    const NV2080_CTRL_INTERNAL_MIGMGR_PROFILE_INFO *pProfile,
+    KERNEL_MIG_GPU_INSTANCE *pKernelMIGGpuInstance,
+    NVC637_CTRL_EXEC_PARTITIONS_GET_PROFILE_CAPACITY_PARAMS *pParams
+)
+{
+    NvBool bCtsRequired = kmigmgrIsCTSAlignmentRequired(pGpu, pKernelMIGManager);
+
+    NV_CHECK_OR_RETURN(LEVEL_ERROR,
+        pParams->computeSize < NV2080_CTRL_GPU_PARTITION_FLAG_COMPUTE_SIZE__SIZE,
+        NV_ERR_INVALID_ARGUMENT);
+
+    if (bCtsRequired)
+    {
+        NV_RANGE totalRange = kmigmgrComputeProfileSizeToCTSIdRange(pParams->computeSize);
+        NvU32 slotBasisComputeSize = kmigmgrSmallestComputeProfileSize(pGpu, pKernelMIGManager);
+        NvU64 slotBasisMask;
+        NvU64 validQueryMask;
+        NvU64 inUseIdMask;
+        NvU64 ctsId;
+        NvU32 totalSpanCount;
+        NvU32 availableSpanCount;
+        NV_RANGE slotBasisIdRange;
+        NvU64 ctsIdsInUseMask = (pKernelMIGGpuInstance == NULL) ?
+                                0x0 : pKernelMIGGpuInstance->ctsIdsInUseMask;
+
+        NV_CHECK_OR_RETURN(LEVEL_ERROR, slotBasisComputeSize != KMIGMGR_COMPUTE_SIZE_INVALID, NV_ERR_INVALID_STATE);
+
+        slotBasisIdRange = kmigmgrComputeProfileSizeToCTSIdRange(slotBasisComputeSize);
+
+        NV_CHECK_OR_RETURN(LEVEL_ERROR, !rangeIsEmpty(totalRange), NV_ERR_INVALID_ARGUMENT);
+        NV_CHECK_OR_RETURN(LEVEL_ERROR, !rangeIsEmpty(slotBasisIdRange), NV_ERR_INVALID_ARGUMENT);
+
+        slotBasisMask = DRF_SHIFTMASK64(slotBasisIdRange.hi:slotBasisIdRange.lo);
+        validQueryMask = DRF_SHIFTMASK64(totalRange.hi:totalRange.lo) & pProfile->validCTSIdMask;
+
+        // Find mask of un-usable IDs due to current in-use CTS Ids
+        inUseIdMask = 0x0;
+        FOR_EACH_INDEX_IN_MASK(64, ctsId, ctsIdsInUseMask)
+        {
+            NvU64 invalidMask;
+
+            NV_ASSERT_OK(kmigmgrGetInvalidCTSIdMask(pGpu, pKernelMIGManager, ctsId, &invalidMask));
+
+            inUseIdMask |= invalidMask;
+        }
+        FOR_EACH_INDEX_IN_MASK_END;
+
+        //
+        // The slot basis defines the smallest divison of the GPU instance.
+        // CTS IDs from this range are used as a means to specify span placements
+        // for compute profiles.
+        //
+        totalSpanCount = 0;
+        availableSpanCount = 0;
+
+        FOR_EACH_INDEX_IN_MASK(64, ctsId, validQueryMask)
+        {
+            NvU64 invalidMask;
+
+            NV_ASSERT_OK(kmigmgrGetInvalidCTSIdMask(pGpu, pKernelMIGManager, ctsId, &invalidMask));
+
+            invalidMask &= slotBasisMask;
+            pParams->totalSpans[totalSpanCount].lo = portUtilCountTrailingZeros64(invalidMask) - slotBasisIdRange.lo;
+            pParams->totalSpans[totalSpanCount].hi = nvPopCount64(invalidMask) + pParams->totalSpans[totalSpanCount].lo - 1;
+
+            if (!(NVBIT64(ctsId) & inUseIdMask))
+            {
+                pParams->availableSpans[availableSpanCount].lo = pParams->totalSpans[totalSpanCount].lo;
+                pParams->availableSpans[availableSpanCount].hi = pParams->totalSpans[totalSpanCount].hi;
+                availableSpanCount++;
+            }
+            totalSpanCount++;
+        }
+        FOR_EACH_INDEX_IN_MASK_END;
+
+        pParams->totalSpansCount     = totalSpanCount;
+        pParams->totalProfileCount   = totalSpanCount;
+        pParams->availableSpansCount = availableSpanCount;
+        pParams->profileCount        = availableSpanCount;
+    }
+    else
+    {
+        KernelGraphicsManager *pKernelGraphicsManager = GPU_GET_KERNEL_GRAPHICS_MANAGER(pGpu);
+        NV2080_CTRL_INTERNAL_MIGMGR_COMPUTE_PROFILE profile;
+        NvU64 veidMask;
+        NvU32 GPUInstanceVeidEnd;
+        NvU64 GPUInstanceVeidMask;
+        NvU64 GPUInstanceFreeVeidMask;
+        NvU64 GPUInstancePseudoMask;
+        NvU32 availableSpanCount;
+        NvU32 totalSpanCount;
+        NvU32 veidSizePerSpan;
+        NvU32 veidSlotCount;
+        NvU32 veidOffset;
+        NvU32 count;
+        NvU32 i;
+
+        NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
+            kmigmgrGetComputeProfileFromSize(pGpu, pKernelMIGManager, pParams->computeSize, &profile));
+        NV_ASSERT_OK_OR_RETURN(
+            kgrmgrGetVeidSizePerSpan(pGpu, pKernelGraphicsManager, &veidSizePerSpan));
+
+        // Create a mask for VEIDs associated with this GPU instance
+        veidMask = DRF_SHIFTMASK64(profile.veidCount - 1:0);
+
+        if (pKernelMIGGpuInstance != NULL)
+        {
+            veidOffset = pKernelMIGGpuInstance->resourceAllocation.veidOffset;
+            GPUInstanceVeidEnd = veidOffset + pKernelMIGGpuInstance->resourceAllocation.veidCount - 1;
+            GPUInstanceVeidMask = DRF_SHIFTMASK64(GPUInstanceVeidEnd:pKernelMIGGpuInstance->resourceAllocation.veidOffset);
+            GPUInstanceFreeVeidMask = GPUInstanceVeidMask &~ (kgrmgrGetVeidInUseMask(pGpu, pKernelGraphicsManager));
+        }
+        else
+        {
+            veidOffset = 0;
+            GPUInstanceVeidEnd = veidOffset + pProfile->veidCount - 1;
+            GPUInstanceVeidMask = DRF_SHIFTMASK64(GPUInstanceVeidEnd:veidOffset);
+            GPUInstanceFreeVeidMask = GPUInstanceVeidMask;
+        }
+
+        GPUInstancePseudoMask = GPUInstanceFreeVeidMask;
+        veidSlotCount = 0;
+        availableSpanCount = 0;
+        totalSpanCount = 0;
+        count = 0;
+        for (i = veidOffset; i < GPUInstanceVeidEnd; i += veidSizePerSpan)
+        {
+            // Determine max correctly sized VEID segments
+            if (((GPUInstanceFreeVeidMask >> i) & veidMask) == veidMask)
+            {
+                pParams->availableSpans[availableSpanCount].lo = count;
+                pParams->availableSpans[availableSpanCount].hi = count + (profile.veidCount / veidSizePerSpan) - 1;
+                availableSpanCount++;
+            }
+
+            // Determine max correctly sized VEID segments
+            if (((GPUInstanceVeidMask >> i) & veidMask) == veidMask)
+            {
+                pParams->totalSpans[totalSpanCount].lo = count;
+                pParams->totalSpans[totalSpanCount].hi = count + (profile.veidCount / veidSizePerSpan) - 1;
+                totalSpanCount++;
+            }
+
+            // Determine max correctly sized VEID segments
+            if (((GPUInstancePseudoMask >> i) & veidMask) == veidMask)
+            {
+                veidSlotCount++;
+                GPUInstancePseudoMask &= ~(veidMask << i);
+            }
+            count++;
+        }
+        pParams->totalProfileCount = NV_MIN(pProfile->virtualGpcCount / profile.gpcCount,
+                                            pProfile->veidCount / profile.veidCount);
+        pParams->totalSpansCount     = totalSpanCount;
+        pParams->profileCount        = veidSlotCount;
+        pParams->availableSpansCount = availableSpanCount;
+    }
+
+    return NV_OK;
+}
+

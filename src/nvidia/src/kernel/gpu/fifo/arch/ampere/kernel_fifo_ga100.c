@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -33,7 +33,8 @@
 #include "published/ampere/ga100/dev_fault.h"
 #include "published/ampere/ga100/dev_ram.h"
 #include "published/ampere/ga100/dev_ctrl.h"
-
+#include "published/ampere/ga100/dev_runlist.h"
+#include "published/ampere/ga100/dev_vm.h"
 
 NV_STATUS
 kfifoEngineInfoXlate_GA100
@@ -147,28 +148,18 @@ kfifoChannelGroupGetLocalMaxSubcontext_GA100
  * @param[in] pGpu
  * @param[in] pKernelFifo
  * @param[in] workSubmitToken Token to update the doorbell with
- * @param[in] runlistId       Runlist ID
  */
 NV_STATUS
 kfifoUpdateUsermodeDoorbell_GA100
 (
     OBJGPU     *pGpu,
     KernelFifo *pKernelFifo,
-    NvU32       workSubmitToken,
-    NvU32       runlistId
+    NvU32       workSubmitToken
 )
 {
-    //
-    // Updating the usermode doorbell is different for CPU vs. GSP.
-    //
-    if (!RMCFG_FEATURE_PLATFORM_GSP)
-    {
-        return kfifoUpdateUsermodeDoorbell_TU102(pGpu, pKernelFifo, workSubmitToken, runlistId);
-    }
-    else
-    {
-        return kfifoUpdateInternalDoorbellForUsermode_HAL(pGpu, pKernelFifo, workSubmitToken, runlistId);
-    }
+    NV_PRINTF(LEVEL_INFO, "Poking workSubmitToken 0x%x\n", workSubmitToken);
+
+    GPU_VREG_WR32(pGpu, NV_VIRTUAL_FUNCTION_DOORBELL, workSubmitToken);
 
     return NV_OK;
 }
@@ -184,7 +175,7 @@ kfifoUpdateUsermodeDoorbell_GA100
  *
  */
 NV_STATUS
-kfifoGenerateWorkSubmitToken_GA100
+kfifoGenerateWorkSubmitTokenHal_GA100
 (
     OBJGPU        *pGpu,
     KernelFifo    *pKernelFifo,
@@ -209,44 +200,35 @@ kfifoGenerateWorkSubmitToken_GA100
 
     NV_ASSERT_OK_OR_RETURN(vgpuGetCallingContextGfid(pGpu, &gfId));
 
-    if (!RMCFG_FEATURE_PLATFORM_GSP || (IS_VGPU_GSP_PLUGIN_OFFLOAD_ENABLED(pGpu) && IS_GFID_VF(gfId)))
+    // TODO: Remove check on Ampere. Bug 200606706.
+    if (!bUsedForHost && IS_GFID_VF(gfId))
     {
+        NvU32 vChId;
 
-        // TODO: Remove check on Ampere. Bug 200606706.
-        if (!bUsedForHost && IS_GFID_VF(gfId))
-        {
-            NvU32 vChId;
-
-            NV_ASSERT_OK_OR_RETURN(kfifoGetVChIdForSChId_HAL(pGpu, pKernelFifo,
-                                                             chId, gfId,
-                                                             kchannelGetEngineType(pKernelChannel),
-                                                             &vChId));
-            chId = vChId;
-        }
-
-        // TODO: Remove, on Ampere channels should be set to a valid runlist before allocation. Bug 200606706.
-        if (!kchannelIsRunlistSet(pGpu, pKernelChannel))
-        {
-            NV_PRINTF(LEVEL_NOTICE,
-                      "FAILED Channel 0x%x is not assigned to runlist yet\n",
-                      chId);
-            return NV_ERR_INVALID_STATE;
-        }
-
-        runlistId = kchannelGetRunlistId(pKernelChannel);
-
-        // Here we construct token to be a concatenation of runlist id and channel id
-        val = FLD_SET_DRF_NUM(_CTRL, _VF_DOORBELL, _RUNLIST_ID, runlistId, val);
-        val = FLD_SET_DRF_NUM(_CTRL, _VF_DOORBELL, _VECTOR,     chId,      val);
-
-        NV_PRINTF(LEVEL_INFO,
-                  "Generated workSubmitToken 0x%x for channel 0x%x runlist 0x%x\n",
-                  val, chId, runlistId);
+        NV_ASSERT_OK_OR_RETURN(kfifoGetVChIdForSChId_HAL(pGpu, pKernelFifo,
+                                                            chId, gfId,
+                                                            kchannelGetEngineType(pKernelChannel),
+                                                            &vChId));
+        chId = vChId;
     }
-    else // RMCFG_FEATURE_PLATFORM_GSP
+    // TODO: Remove, on Ampere channels should be set to a valid runlist before allocation. Bug 200606706.
+    if (!kchannelIsRunlistSet(pGpu, pKernelChannel))
     {
-        NV_ASSERT_OK_OR_RETURN(kfifoGenerateInternalWorkSubmitToken_HAL(pGpu, pKernelFifo, pKernelChannel));
+        NV_PRINTF(LEVEL_NOTICE,
+                    "FAILED Channel 0x%x is not assigned to runlist yet\n",
+                    chId);
+        return NV_ERR_INVALID_STATE;
     }
+
+    runlistId = kchannelGetRunlistId(pKernelChannel);
+
+    // Here we construct token to be a concatenation of runlist id and channel id
+    val = FLD_SET_DRF_NUM(_CTRL, _VF_DOORBELL, _RUNLIST_ID, runlistId, val);
+    val = FLD_SET_DRF_NUM(_CTRL, _VF_DOORBELL, _VECTOR,     chId,      val);
+
+    NV_PRINTF(LEVEL_INFO,
+                "Generated workSubmitToken 0x%x for channel 0x%x runlist 0x%x\n",
+                val, chId, runlistId);
 
     *pGeneratedToken = val;
 
@@ -394,35 +376,6 @@ kfifoGetNumPBDMAs_GA100
     return pEngineInfo->maxNumPbdmas;
 }
 
-/**
-* @brief Convert PBDMA ID to string
-* @param[in] pGpu
-* @param[in] pKernelFifo
-* @param[in] pbdmaId
-*
-* @return cont string
-*/
-const char*
-kfifoPrintPbdmaId_GA100
-(
-    OBJGPU     *pGpu,
-    KernelFifo *pKernelFifo,
-    NvU32       pbdmaId
-)
-{
-    NV_ASSERT_OR_RETURN(pbdmaId < kfifoGetNumPBDMAs_HAL(pGpu, pKernelFifo), "UNKNOWN");
-    static const char* pbdmaIdString[64] = { "HOST0" , "HOST1" , "HOST2" , "HOST3" , "HOST4" , "HOST5" , "HOST6" , "HOST7" ,
-                                             "HOST8" , "HOST9" , "HOST10", "HOST11", "HOST12", "HOST13", "HOST14", "HOST15",
-                                             "HOST16", "HOST17", "HOST18", "HOST19", "HOST20", "HOST21", "HOST22", "HOST23",
-                                             "HOST24", "HOST25", "HOST26", "HOST27", "HOST28", "HOST29", "HOST30", "HOST31",
-                                             "HOST32", "HOST33", "HOST34", "HOST35", "HOST36", "HOST37", "HOST38", "HOST39",
-                                             "HOST40", "HOST41", "HOST42", "HOST43", "HOST44", "HOST45", "HOST46", "HOST47",
-                                             "HOST48", "HOST49", "HOST50", "HOST51", "HOST52", "HOST53", "HOST54", "HOST55",
-                                             "HOST56", "HOST57", "HOST58", "HOST59", "HOST60", "HOST61", "HOST62", "HOST63"};
-
-    return pbdmaIdString[pbdmaId];
-}
-
 /*!
  * @brief Converts a mmu engine id (NV_PFAULT_MMU_ENG_ID_*) into a string.
  *
@@ -442,13 +395,11 @@ kfifoPrintInternalEngine_GA100
 {
     NV_STATUS   status = NV_OK;
     KernelGmmu *pKernelGmmu = GPU_GET_KERNEL_GMMU(pGpu);
-    NvU32       pbdmaId;
     NvU32       engTag;
 
     if (kfifoIsMmuFaultEngineIdPbdma(pGpu, pKernelFifo, engineID))
     {
-        NV_ASSERT_OR_RETURN(kfifoGetPbdmaIdFromMmuFaultId(pGpu, pKernelFifo, engineID, &pbdmaId) == NV_OK, "UNKNOWN");
-        return kfifoPrintPbdmaId_HAL(pGpu, pKernelFifo, pbdmaId);
+        return kfifoPrintFaultingPbdmaEngineName(pGpu, pKernelFifo, engineID);
     }
 
     if (kgmmuIsFaultEngineBar1_HAL(pKernelGmmu, engineID))
@@ -794,6 +745,10 @@ kfifoGetClientIdString_GA100
                 return "HUBCLIENT_PTP_X4";
             case NV_PFAULT_CLIENT_HUB_PTP_X5:
                 return "HUBCLIENT_PTP_X5";
+            case NV_PFAULT_CLIENT_HUB_PTP_X6:
+                return "HUBCLIENT_PTP_X6";
+            case NV_PFAULT_CLIENT_HUB_PTP_X7:
+                return "HUBCLIENT_PTP_X7";
             case NV_PFAULT_CLIENT_HUB_NVENC2:
                 return "HUBCLIENT_NVENC2";
             case NV_PFAULT_CLIENT_HUB_VPR_SCRUBBER0:
@@ -908,4 +863,133 @@ kfifoGetClientIdStringCheck_GA100
             return "UNRECOGNIZED_CLIENT";
 
     }
+}
+
+/**
+ * @brief Starts halting a channel. A start operation must be matched with a
+ * complete operation later to wait for the channel to be preempted.
+ *
+ * @param[in] pGpu           GPU object pointer
+ * @param[in] pKernelFifo    Kernel FIFO object pointer
+ * @param[in] pKernelChannel Pointer to the channel to be halted.
+ */
+void
+kfifoStartChannelHalt_GA100
+(
+    OBJGPU        *pGpu,
+    KernelFifo    *pKernelFifo,
+    KernelChannel *pKernelChannel
+)
+{
+    NvU32       chramPriBase;
+    NvU32       channelVal;
+    NvU32       runlistId;
+    NvU32       runlistPriBase;
+    NvU32       runlistVal = 0;
+
+    runlistId = kchannelGetRunlistId(pKernelChannel);
+    if (kfifoEngineInfoXlate_HAL(pGpu, pKernelFifo,
+            ENGINE_INFO_TYPE_RUNLIST,        runlistId,
+            ENGINE_INFO_TYPE_CHRAM_PRI_BASE, &chramPriBase) != NV_OK)
+    {
+        return;
+    }
+    if (kfifoEngineInfoXlate_HAL(pGpu, pKernelFifo,
+            ENGINE_INFO_TYPE_RUNLIST,          runlistId,
+            ENGINE_INFO_TYPE_RUNLIST_PRI_BASE, &runlistPriBase) != NV_OK)
+    {
+        return;
+    }
+
+    // Disable this channel.
+    channelVal = FLD_SET_DRF(_CHRAM, _CHANNEL, _WRITE_CONTROL, _ONES_CLEAR_BITS, 0);
+    channelVal = FLD_SET_DRF(_CHRAM, _CHANNEL, _ENABLE, _IN_USE, channelVal);
+    GPU_REG_WR32(pGpu, chramPriBase + NV_CHRAM_CHANNEL(pKernelChannel->ChID), channelVal);
+
+    // Preempt the channel.
+    runlistVal = FLD_SET_DRF(_RUNLIST, _PREEMPT, _TYPE, _RUNLIST, 0);
+    GPU_REG_WR32(pGpu, runlistPriBase + NV_RUNLIST_PREEMPT, runlistVal);
+}
+
+/**
+ * @brief Completes halting a channel, waiting the channel preemption to
+ * complete, up to the specified timeout.
+ *
+ * @param[in] pGpu           GPU object pointer
+ * @param[in] pKernelFifo    Kernel FIFO object pointer
+ * @param[in] pKernelChannel Pointer to the channel in process of being halted.
+ * @param[in] pTimeout       Specifies the timeout to wait for the channel
+ *                           preemption.
+ */
+void
+kfifoCompleteChannelHalt_GA100
+(
+    OBJGPU        *pGpu,
+    KernelFifo    *pKernelFifo,
+    KernelChannel *pKernelChannel,
+    RMTIMEOUT     *pTimeout
+)
+{
+    NvU32       runlistId;
+    NvU32       runlistPriBase;
+    NvU32       runlistVal = 0;
+
+    runlistId = kchannelGetRunlistId(pKernelChannel);
+    if (kfifoEngineInfoXlate_HAL(pGpu, pKernelFifo,
+            ENGINE_INFO_TYPE_RUNLIST,          runlistId,
+            ENGINE_INFO_TYPE_RUNLIST_PRI_BASE, &runlistPriBase) != NV_OK)
+    {
+        return;
+    }
+
+    // Wait for the preemption to complete.
+    do
+    {
+        if (gpuCheckTimeout(pGpu, pTimeout) == NV_ERR_TIMEOUT)
+        {
+            break;
+        }
+
+        runlistVal = GPU_REG_RD32(pGpu, runlistPriBase + NV_RUNLIST_PREEMPT);
+    } while (FLD_TEST_DRF(_RUNLIST, _PREEMPT, _RUNLIST_PREEMPT_PENDING, _TRUE, runlistVal));
+}
+
+/*!
+ * @brief Update the usermode doorbell register with work submit token to notify
+ *        host that work is available on this channel.
+ *
+ * @param[in] pGpu
+ * @param[in] pFifo
+ * @param[in] pKernelChannel  Channel to ring the doorbell for
+ */
+NV_STATUS
+kfifoRingChannelDoorBell_GA100
+(
+    OBJGPU          *pGpu,
+    KernelFifo      *pKernelFifo,
+    KernelChannel   *pKernelChannel
+)
+{
+    NvU32        workSubmitToken;
+
+    // Updating the usermode doorbell is different for CPU vs. GSP.
+    //
+    if (!RMCFG_FEATURE_PLATFORM_GSP)
+    {
+        NV_ASSERT_OK_OR_RETURN(kfifoGenerateWorkSubmitToken(pGpu, pKernelFifo,
+                                                            pKernelChannel, &workSubmitToken,
+                                                            NV_TRUE));
+        NV_ASSERT_OK_OR_RETURN(kfifoUpdateUsermodeDoorbell_HAL(pGpu, pKernelFifo,
+                                                               workSubmitToken));
+    }
+    else
+    {
+        NV_ASSERT_OK_OR_RETURN(kfifoGenerateInternalWorkSubmitToken_HAL(pGpu, pKernelFifo,
+                                                                        pKernelChannel, &workSubmitToken));
+
+        NV_ASSERT_OK_OR_RETURN(kfifoUpdateInternalDoorbellForUsermode_HAL(pGpu, pKernelFifo,
+                                                                          workSubmitToken,
+                                                                          kchannelGetRunlistId(pKernelChannel)));
+    }
+    return NV_OK;
 }

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -62,14 +62,33 @@ subdeviceCtrlCmdBusGetNvlinkCaps_IMPL
     return nvlinkCtrlCmdBusGetNvlinkCaps(pGpu, pParams);
 }
 
+NV_STATUS
+subdeviceCtrlCmdBusGetNvlinkCaps_VF
+(
+    Subdevice *pSubdevice,
+    NV2080_CTRL_CMD_NVLINK_GET_NVLINK_CAPS_PARAMS *pParams
+)
+{
+    OBJGPU *pGpu = GPU_RES_GET_GPU(pSubdevice);
+    VGPU_STATIC_INFO *pVSI = GPU_GET_STATIC_INFO(pGpu);
+
+    NV_ASSERT_OR_RETURN(pVSI != NULL, NV_ERR_INVALID_STATE);
+
+    portMemCopy(pParams, sizeof(*pParams),
+                &pVSI->nvlinkCaps, sizeof(pVSI->nvlinkCaps));
+
+    return NV_OK;
+}
+
 static void _calculateNvlinkCaps
 (
     OBJGPU *pGpu,
-    NvU32   bridgeSensableLinks,
+    NvU64   bridgeSensableLinks,
     NvU32   bridgedLinks,
     NvU32   ipVerNvlink,
     NvBool  bMIGNvLinkP2PSupported,
     NvBool  bNvlinkEnabled,
+    NvBool  bIsUncontainedErrorRecoveryCapable,
     NV2080_CTRL_CMD_NVLINK_GET_NVLINK_CAPS_PARAMS *pParams
 )
 {
@@ -104,10 +123,28 @@ static void _calculateNvlinkCaps
         {
             RMCTRL_SET_CAP(tempCaps, NV2080_CTRL_NVLINK_CAPS, _SYSMEM_ATOMICS);
         }
+
+        if (bNvlinkEnabled && bIsUncontainedErrorRecoveryCapable)
+        {
+            RMCTRL_SET_CAP(tempCaps, NV2080_CTRL_NVLINK_CAPS, _UNCONTAINED_ERROR_RECOVERY);
+        }
     }
 
     switch (ipVerNvlink)
     {
+        case NV2080_CTRL_NVLINK_CAPS_NVLINK_VERSION_5_0:
+        {
+            pParams->lowestNvlinkVersion  = NV2080_CTRL_NVLINK_CAPS_NVLINK_VERSION_5_0;
+            pParams->highestNvlinkVersion = NV2080_CTRL_NVLINK_CAPS_NVLINK_VERSION_5_0;
+            pParams->lowestNciVersion     = NV2080_CTRL_NVLINK_CAPS_NCI_VERSION_5_0;
+            pParams->highestNciVersion    = NV2080_CTRL_NVLINK_CAPS_NCI_VERSION_5_0;
+
+            // Supported power states
+            RMCTRL_SET_CAP(tempCaps, NV2080_CTRL_NVLINK_CAPS, _POWER_STATE_L0);
+            RMCTRL_SET_CAP(tempCaps, NV2080_CTRL_NVLINK_CAPS, _POWER_STATE_L1);
+            RMCTRL_SET_CAP(tempCaps, NV2080_CTRL_NVLINK_CAPS, _POWER_STATE_L2);
+            break;
+        }
         case NV2080_CTRL_NVLINK_CAPS_NVLINK_VERSION_4_0:
         {
             pParams->lowestNvlinkVersion  = NV2080_CTRL_NVLINK_CAPS_NVLINK_VERSION_4_0;
@@ -233,10 +270,13 @@ nvlinkCtrlCmdBusGetNvlinkCaps
         _calculateNvlinkCaps(pGpu, pKernelNvlink->bridgeSensableLinks, pKernelNvlink->bridgedLinks,
                              pKernelNvlink->ipVerNvlink, bMIGNvLinkP2PSupported,
                              pKernelNvlink->getProperty(pNvlink, PDB_PROP_KNVLINK_ENABLED),
+                             pKernelNvlink->getProperty(pKernelNvlink, PDB_PROP_KNVLINK_UNCONTAINED_ERROR_RECOVERY_SUPPORTED),
                              pParams);
 
-        pParams->discoveredLinkMask = knvlinkGetDiscoveredLinkMask(pGpu, pKernelNvlink);
-        pParams->enabledLinkMask    = knvlinkGetEnabledLinkMask(pGpu, pKernelNvlink);
+        pParams->discoveredLinkMask = KNVLINK_GET_MASK(pKernelNvlink, discoveredLinks, 32);
+        pParams->discoveredLinks    = knvlinkGetDiscoveredLinkMask(pGpu, pKernelNvlink);
+        pParams->enabledLinkMask    = KNVLINK_GET_MASK(pKernelNvlink, enabledLinks, 32);
+        pParams->enabledLinks       = knvlinkGetEnabledLinkMask(pGpu, pKernelNvlink);
     }
 
     return NV_OK;
@@ -246,14 +286,17 @@ void
 static _getNvlinkStatus
 (
     OBJGPU *pGpu,
-    NV2080_CTRL_NVLINK_GET_LINK_AND_CLOCK_INFO_PARAMS *nvlinkLinkAndClockInfoParams,
-    NvU32 bridgeSensableLinks,
+    NV2080_CTRL_INTERNAL_NVLINK_GET_LINK_AND_CLOCK_INFO_PARAMS *nvlinkLinkAndClockInfoParams,
+    NvU64 bridgeSensableLinks,
     NvU32 bridgedLinks,
     NvU32 ipVerNvlink,
     NvlinkLinkStatus nvlinkLinks[NVLINK_MAX_LINKS_SW],
     NvBool bNvlinkEnabled,
     NvBool bL2PowerStateEnabled,
     NvBool bForcedConfig,
+    NvBool bIsUncontainedErrorRecoveryCapable,
+    NvBool bIsGpuDegraded,
+    NvBool bIsUncontainedErrorRecoveryActive,
     NV2080_CTRL_CMD_NVLINK_GET_NVLINK_STATUS_PARAMS *pParams
 )
 {
@@ -273,7 +316,7 @@ static _getNvlinkStatus
         bPeerLink   = NV_FALSE;
         bSysmemLink = NV_FALSE;
         bSwitchLink = NV_FALSE;
-        NV2080_CTRL_NVLINK_GET_LINK_AND_CLOCK_VALUES *pLinkAndClockValues;
+        NV2080_CTRL_INTERNAL_NVLINK_GET_LINK_AND_CLOCK_VALUES *pLinkAndClockValues;
 
         pLinkAndClockValues = &nvlinkLinkAndClockInfoParams->linkInfo[i];
 
@@ -319,13 +362,18 @@ static _getNvlinkStatus
             RMCTRL_SET_CAP(tempCaps, NV2080_CTRL_NVLINK_CAPS, _SLI_BRIDGE);
         }
 
+        if (bNvlinkEnabled && bIsUncontainedErrorRecoveryCapable)
+        {
+            RMCTRL_SET_CAP(tempCaps, NV2080_CTRL_NVLINK_CAPS, _UNCONTAINED_ERROR_RECOVERY);
+        }
+
         // Set the power states caps
         switch (ipVerNvlink)
         {
             case NV2080_CTRL_NVLINK_CAPS_NVLINK_VERSION_2_0:
                 RMCTRL_SET_CAP(tempCaps, NV2080_CTRL_NVLINK_CAPS, _POWER_STATE_L0);
                 break;
-
+            case NV2080_CTRL_NVLINK_CAPS_NVLINK_VERSION_5_0:
             case NV2080_CTRL_NVLINK_CAPS_NVLINK_VERSION_4_0:
             case NV2080_CTRL_NVLINK_CAPS_NVLINK_VERSION_3_1:
             case NV2080_CTRL_NVLINK_CAPS_NVLINK_VERSION_3_0:
@@ -355,6 +403,10 @@ static _getNvlinkStatus
 
         switch (ipVerNvlink)
         {
+            case NV2080_CTRL_NVLINK_CAPS_NVLINK_VERSION_5_0:
+                pParams->linkInfo[i].nvlinkVersion = NV2080_CTRL_NVLINK_STATUS_NVLINK_VERSION_5_0;
+                pParams->linkInfo[i].nciVersion    = NV2080_CTRL_NVLINK_STATUS_NCI_VERSION_5_0;
+                break;
             case NV2080_CTRL_NVLINK_CAPS_NVLINK_VERSION_4_0:
                 pParams->linkInfo[i].nvlinkVersion = NV2080_CTRL_NVLINK_STATUS_NVLINK_VERSION_4_0;
                 pParams->linkInfo[i].nciVersion    = NV2080_CTRL_NVLINK_STATUS_NCI_VERSION_4_0;
@@ -405,6 +457,20 @@ static _getNvlinkStatus
                         pParams->linkInfo[i].localDeviceInfo.deviceIdFlags);
         }
 
+        pParams->linkInfo[i].localDeviceInfo.fabricRecoveryStatusMask = 0x0;
+        if (bIsGpuDegraded)
+        {
+            pParams->linkInfo[i].localDeviceInfo.fabricRecoveryStatusMask =
+                FLD_SET_DRF(2080_CTRL_NVLINK_DEVICE_INFO, _FABRIC_RECOVERY_STATUS_MASK, _GPU_DEGRADED, _TRUE,
+                            pParams->linkInfo[i].localDeviceInfo.fabricRecoveryStatusMask);
+        }
+        else if (bIsUncontainedErrorRecoveryActive)
+        {
+            pParams->linkInfo[i].localDeviceInfo.fabricRecoveryStatusMask =
+                FLD_SET_DRF(2080_CTRL_NVLINK_DEVICE_INFO, _FABRIC_RECOVERY_STATUS_MASK, _UNCONTAINED_ERROR_RECOVERY, _ACTIVE,
+                            pParams->linkInfo[i].localDeviceInfo.fabricRecoveryStatusMask);
+        }
+
         //
         // Get clock related state
         // NOTE: to be depricated HW terminology conforming versions
@@ -421,6 +487,10 @@ static _getNvlinkStatus
         pParams->linkInfo[i].nvlinkLinkDataRateKiBps = pLinkAndClockValues->nvlinkLinkDataRateKiBps;
         pParams->linkInfo[i].nvlinkRefClkType        = pLinkAndClockValues->nvlinkRefClkType;
         pParams->linkInfo[i].nvlinkRefClkSpeedMhz    = pLinkAndClockValues->nvlinkReqLinkClockMhz;
+
+        pParams->linkInfo[i].nvlinkMinL1Threshold    = pLinkAndClockValues->nvlinkMinL1Threshold;
+        pParams->linkInfo[i].nvlinkMaxL1Threshold    = pLinkAndClockValues->nvlinkMaxL1Threshold;
+        pParams->linkInfo[i].nvlinkL1ThresholdUnits  = pLinkAndClockValues->nvlinkL1ThresholdUnits;
 
         if (nvlinkLinks[i].bConnected)
         {
@@ -587,7 +657,7 @@ subdeviceCtrlCmdBusGetNvlinkStatus_IMPL
     NvU8 i = 0;
     struct
     {
-        NV2080_CTRL_NVLINK_GET_LINK_AND_CLOCK_INFO_PARAMS nvlinkLinkAndClockInfoParams;
+        NV2080_CTRL_INTERNAL_NVLINK_GET_LINK_AND_CLOCK_INFO_PARAMS nvlinkLinkAndClockInfoParams;
         NvlinkLinkStatus nvlinkLinks[NVLINK_MAX_LINKS_SW];
     } *pTmpData = NULL;
 
@@ -713,13 +783,13 @@ subdeviceCtrlCmdBusGetNvlinkStatus_IMPL
         knvlinkFilterBridgeLinks_HAL(pGpu, pKernelNvlink);
 
         // If nvlink is not ready don't report back any links as being enabled
-        pParams->enabledLinkMask = (bIsNvlinkReady) ? pKernelNvlink->enabledLinks : 0x0;
+        pParams->enabledLinkMask = (bIsNvlinkReady) ? KNVLINK_GET_MASK(pKernelNvlink, enabledLinks, 32) : 0x0;
 
         pTmpData->nvlinkLinkAndClockInfoParams.linkMask = pParams->enabledLinkMask;
-        pTmpData->nvlinkLinkAndClockInfoParams.bSublinkStateInst = pParams->bSublinkStateInst;
+        pTmpData->nvlinkLinkAndClockInfoParams.bSublinkStateInst = NV_TRUE;
 
         status = knvlinkExecGspRmRpc(pGpu, pKernelNvlink,
-                                     NV2080_CTRL_CMD_NVLINK_GET_LINK_AND_CLOCK_INFO,
+                                     NV2080_CTRL_CMD_INTERNAL_NVLINK_GET_LINK_AND_CLOCK_INFO,
                                      (void *)&pTmpData->nvlinkLinkAndClockInfoParams,
                                      sizeof(pTmpData->nvlinkLinkAndClockInfoParams));
         if (status != NV_OK)
@@ -761,6 +831,9 @@ subdeviceCtrlCmdBusGetNvlinkStatus_IMPL
                          pKernelNvlink->getProperty(pKernelNvlink, PDB_PROP_KNVLINK_ENABLED),
                          pKernelNvlink->getProperty(pKernelNvlink, PDB_PROP_KNVLINK_L2_POWER_STATE_ENABLED),
                          knvlinkIsForcedConfig(pGpu, pKernelNvlink),
+                         pKernelNvlink->getProperty(pKernelNvlink, PDB_PROP_KNVLINK_UNCONTAINED_ERROR_RECOVERY_SUPPORTED),
+                         knvlinkGetDegradedMode(pGpu, pKernelNvlink),
+                         knvlinkIsUncontainedErrorRecoveryActive(pGpu, pKernelNvlink),
                          pParams);
     }
 done:

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2012-2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2012-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -26,7 +26,7 @@
 #include "gpu/uvm/uvm.h"
 #include "gpu/uvm/access_cntr_buffer.h"
 #include "gpu/mem_sys/kern_mem_sys.h"
-#include "nvRmReg.h"
+#include "nvrm_registry.h"
 #include "rmapi/control.h"
 #include "rmapi/rmapi_utils.h"
 #include "kernel/gpu/intr/engine_idx.h"
@@ -129,11 +129,16 @@ uvmStateInitUnlocked_IMPL(OBJGPU *pGpu, OBJUVM *pUvm)
     status = rmapiutilAllocClientAndDeviceHandles(pUvm->pRmApi, pGpu, &pUvm->hClient,
                                                   NULL, &pUvm->hSubdevice);
 
-    pUvm->accessCounterBufferCount = 1;
-
-    pUvm->pAccessCounterBuffers = portMemAllocNonPaged(sizeof (*pUvm->pAccessCounterBuffers) * pUvm->accessCounterBufferCount);
-    NV_ASSERT_OR_RETURN(pUvm->pAccessCounterBuffers != NULL, NV_ERR_NO_MEMORY);
-    portMemSet(pUvm->pAccessCounterBuffers, 0, sizeof (*pUvm->pAccessCounterBuffers) * pUvm->accessCounterBufferCount);
+    if (pUvm->accessCounterBufferCount > 0)
+    {
+        pUvm->pAccessCounterBuffers = portMemAllocNonPaged(sizeof (*pUvm->pAccessCounterBuffers) * pUvm->accessCounterBufferCount);
+        NV_ASSERT_OR_RETURN(pUvm->pAccessCounterBuffers != NULL, NV_ERR_NO_MEMORY);
+        portMemSet(pUvm->pAccessCounterBuffers, 0, sizeof (*pUvm->pAccessCounterBuffers) * pUvm->accessCounterBufferCount);
+    }
+    else
+    {
+        pUvm->pAccessCounterBuffers = NULL;
+    }
 
     return status;
 }
@@ -239,6 +244,11 @@ uvmAccessCntrBufferRegister_IMPL
     NvU32 addrSpace = ADDR_SYSMEM;
     NvU32 attr      = NV_MEMORY_CACHED;
 
+    if (pUvm->pAccessCounterBuffers == NULL)
+    {
+        return NV_ERR_INVALID_STATE;
+    }
+
     memdescOverrideInstLoc(DRF_VAL(_REG_STR_RM, _INST_LOC_4, _UVM_FAULT_BUFFER_REPLAYABLE, pGpu->instLocOverrides4),
                            "UVM access counter", &addrSpace, &attr);
 
@@ -290,6 +300,11 @@ uvmAccessCntrBufferUnregister_IMPL
 )
 {
     NV_STATUS status;
+
+    if (pUvm->pAccessCounterBuffers == NULL)
+    {
+        return NV_ERR_INVALID_STATE;
+    }
 
     status = uvmUnloadAccessCntrBuffer_HAL(pGpu, pUvm, accessCounterIndex);
     if (status != NV_OK)

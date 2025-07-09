@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2020-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2020-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -25,8 +25,11 @@
 
 #include "kernel/gpu/nvlink/kernel_nvlink.h"
 #include "kernel/gpu/nvlink/kernel_ioctrl.h"
-#include "nvRmReg.h"
+#include "nvrm_registry.h"
 #include "os/os.h"
+
+#include "gpu/conf_compute/conf_compute.h"
+#include "gsp/gsp_proxy_reg.h"
 
 /*!
  * @brief Apply NVLink overrides from Registry
@@ -205,10 +208,11 @@ knvlinkApplyRegkeyOverrides_IMPL
     // NOTE: This is used only on Pascal. Volta and beyond, this should not be used
     //
     if (NV_OK == osReadRegistryDword(pGpu,
-                NV_REG_STR_RM_NVLINK_ENABLE, &pKernelNvlink->registryLinkMask))
+                NV_REG_STR_RM_NVLINK_ENABLE, &regdata))
     {
+        pKernelNvlink->registryLinkMask = regdata;
         pKernelNvlink->bRegistryLinkOverride = NV_TRUE;
-        NV_PRINTF(LEVEL_INFO, "Enable NvLinks 0x%x via regkey\n",
+        NV_PRINTF(LEVEL_INFO, "Enable NvLinks 0x%llx via regkey\n",
                   pKernelNvlink->registryLinkMask);
     }
 
@@ -272,6 +276,36 @@ knvlinkApplyRegkeyOverrides_IMPL
             NV_PRINTF(LEVEL_INFO,
                       "Forced Loopback on switch is enabled\n");
         }        
+    }
+
+    // Registry override to enable nvlink encryption
+    if (NV_OK == osReadRegistryDword(pGpu,
+                 NV_REG_STR_RM_NVLINK_ENCRYPTION, &regdata))
+    {
+        if (FLD_TEST_DRF(_REG_STR_RM, _NVLINK_ENCRYPTION, _MODE, _ENABLE, regdata))
+        {
+            if (RMCFG_FEATURE_MODS_FEATURES)
+            {
+                pKernelNvlink->setProperty(pKernelNvlink, PDB_PROP_KNVLINK_ENCRYPTION_ENABLED, NV_TRUE);
+                pKernelNvlink->gspProxyRegkeys = DRF_DEF(GSP, _PROXY_REG, _NVLINK_ENCRYPTION, _ENABLE);
+                NV_PRINTF(LEVEL_INFO,
+                          "Nvlink Encryption is enabled via regkey\n");
+                return NV_OK;
+            }
+            else
+            {
+                ConfidentialCompute *pCC = GPU_GET_CONF_COMPUTE(pGpu);
+                NvBool bCCFeatureEnabled = (pCC != NULL) && pCC->getProperty(pCC, PDB_PROP_CONFCOMPUTE_ENABLED);
+                if (bCCFeatureEnabled)
+                {
+                    pKernelNvlink->bNvleModeRegkey = NV_TRUE;
+                    pKernelNvlink->gspProxyRegkeys = DRF_DEF(GSP, _PROXY_REG, _NVLINK_ENCRYPTION, _ENABLE);
+                    NV_PRINTF(LEVEL_INFO,
+                              "Nvlink Encryption is enabled via regkey\n");
+                    return NV_OK;
+                }
+            }
+        }
     }
     return NV_OK;
 }

@@ -72,7 +72,7 @@ typedef NV_STATUS      RpcEccNotifierWriteAck(POBJGPU, POBJRPC);
 typedef NV_STATUS      RpcAllocMemory(POBJGPU, POBJRPC, NvHandle, NvHandle, NvHandle,
                                     NvU32, NvU32, MEMORY_DESCRIPTOR*);
 typedef NV_STATUS      RpcCtrlDbgReadSingleSmErrorState(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
-typedef NV_STATUS      RpcDisableChannels(POBJGPU, POBJRPC, NvU32);
+typedef NV_STATUS      RpcDisableChannels(POBJGPU, POBJRPC, void *);
 typedef NV_STATUS      RpcGpuExecRegOps(POBJGPU, POBJRPC, NvHandle, NvHandle,
                                     NV2080_CTRL_GPU_EXEC_REG_OPS_PARAMS*, NV2080_CTRL_GPU_REG_OP*);
 typedef NV_STATUS      RpcCtrlGpuPromoteCtx(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
@@ -92,24 +92,32 @@ typedef NV_STATUS      RpcCtrlSetZbcDepthClear(POBJGPU, POBJRPC, NvHandle, NvHan
 typedef NV_STATUS      RpcCtrlResetIsolatedChannel(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
 typedef NV_STATUS      RpcCtrlDmaSetDefaultVaspace(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
 typedef NV_STATUS      RpcAllocSubdevice(POBJGPU, POBJRPC, NvHandle, NvHandle, NvHandle, NvU32, NvU32);
+typedef NV_STATUS      RpcCtrlExecPartitionsExport(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
 typedef NV_STATUS      RpcFree(POBJGPU, POBJRPC, NvHandle, NvHandle, NvHandle);
 typedef NV_STATUS      RpcDmaControl(POBJGPU, POBJRPC, NvHandle, NvHandle, NvU32, void*, NvU32);
 typedef NV_STATUS      RpcCtrlDbgClearSingleSmErrorState(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
 typedef NV_STATUS      RpcUnsetPageDirectory(POBJGPU, POBJRPC, NvHandle, NvHandle,
                                     NV0080_CTRL_DMA_UNSET_PAGE_DIRECTORY_PARAMS*);
+typedef NV_STATUS      RpcCtrlReserveCcuProf(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
 typedef NV_STATUS      RpcGetGspStaticInfo(POBJGPU, POBJRPC);
 typedef NV_STATUS      RpcSaveHibernationData(POBJGPU, POBJRPC);
 typedef NV_STATUS      RpcDupObject(POBJGPU, POBJRPC, NvHandle, NvHandle, NvHandle,
                                     NvHandle, NvHandle, NvU32);
 typedef NV_STATUS      RpcGspSetSystemInfo(POBJGPU, POBJRPC);
 typedef NV_STATUS      RpcCtrlPmAreaPcSampler(POBJGPU, POBJRPC, NvHandle, NvHandle, NvU32, void*);
+typedef NV_STATUS      RpcCtrlSubdeviceGetLibosHeapStats(POBJGPU, POBJRPC, void*);
 typedef NV_STATUS      RpcCtrlDbgSetExceptionMask(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
+typedef NV_STATUS      RpcCtrlSetZbcStencilClear(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
 typedef NV_STATUS      RpcCtrlVaspaceCopyServerReservedPdes(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
+typedef NV_STATUS      RpcCtrlCmdGetChipletHsCreditPool(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
 typedef NV_STATUS      RpcCtrlGrCtxswPreemptionBind(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
 typedef NV_STATUS      RpcCtrlAllocPmaStream(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
+typedef NV_STATUS      RpcCtrlCmdGetHsCreditsMapping(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
+typedef NV_STATUS      RpcCtrlReleaseHes(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
 typedef NV_STATUS      RpcCtrlReserveHwpmLegacy(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
-typedef NV_STATUS      RpcCtrlInternalQuiescePmaChannel(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
 typedef NV_STATUS      RpcCtrlPerfRatedTdpGetStatus(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
+typedef NV_STATUS      RpcCtrlInternalQuiescePmaChannel(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
+typedef NV_STATUS      RpcCtrlSubdeviceGetVgpuHeapStats(POBJGPU, POBJRPC, void*);
 typedef NV_STATUS      RpcCtrlBusSetP2pMapping(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
 typedef NV_STATUS      RpcCtrlGpuGetInfoV2(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
 typedef NV_STATUS      RpcCtrlGetHsCredits(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
@@ -134,7 +142,6 @@ typedef NV_STATUS      RpcSetPageDirectory(POBJGPU, POBJRPC, NvHandle, NvHandle,
 typedef NV_STATUS      RpcCtrlGetP2pCapsV2(POBJGPU, POBJRPC, void*);
 typedef NV_STATUS      RpcCtrlNvlinkGetInbandReceivedData(POBJGPU, POBJRPC, NV2080_CTRL_NVLINK_INBAND_RECEIVED_DATA_PARAMS*, NvU16, NvBool*);
 typedef NV_STATUS      RpcCtrlGetCePceMask(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
-typedef NV_STATUS      RpcCtrlGetNvlinkPeerIdMask(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
 typedef NV_STATUS      RpcCtrlGpuEvictCtx(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
 typedef NV_STATUS      RpcCtrlGetMmuDebugMode(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
 typedef NV_STATUS      RpcInvalidateTlb(POBJGPU, POBJRPC, NvU64, NvU32);
@@ -146,15 +153,18 @@ typedef NV_STATUS      RpcSwitchToVga(POBJGPU, POBJRPC);
 typedef NV_STATUS      RpcCtrlResetChannel(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
 typedef NV_STATUS      RpcCtrlGpfifoSchedule(POBJGPU, POBJRPC, NvHandle, NvHandle, NvU32, void*);
 typedef NV_STATUS      RpcSetRegistry(POBJGPU, POBJRPC);
+typedef NV_STATUS      RpcCtrlDbgSetModeMmuGccDebug(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
 typedef NV_STATUS      RpcCtrlGetNvlinkStatus(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
 typedef NV_STATUS      RpcGetStaticData(POBJGPU, POBJRPC);
 typedef NV_STATUS      RpcCtrlGrGetTpcPartitionMode(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
 typedef NV_STATUS      RpcCtrlStopChannel(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
+typedef NV_STATUS      RpcCtrlCmdInternalControlGspTrace(POBJGPU, POBJRPC, NV2080_CTRL_CMD_INTERNAL_CONTROL_GSP_TRACE_PARAMS*);
 typedef NV_STATUS      RpcSetSurfaceProperties(POBJGPU, POBJRPC, NvHandle,
                                     NVA080_CTRL_VGPU_DISPLAY_SET_SURFACE_PROPERTIES*,
                                     NvBool);
-typedef NV_STATUS      RpcCtrlGpfifoSetWorkSubmitTokenNotifIndex(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
+typedef NV_STATUS      RpcCtrlReleaseCcuProf(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
 typedef NV_STATUS      RpcCtrlTimerSetGrTickFreq(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
+typedef NV_STATUS      RpcCtrlGpfifoSetWorkSubmitTokenNotifIndex(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
 typedef NV_STATUS      RpcAllocEvent(POBJGPU, POBJRPC, NvHandle, NvHandle, NvHandle,
                                     NvHandle, NvHandle, NvU32, NvU32);
 typedef NV_STATUS      RpcCtrlGrPcSamplingMode(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
@@ -170,8 +180,10 @@ typedef NV_STATUS      RpcAllocObject(POBJGPU, POBJRPC, NvHandle, NvHandle, NvHa
 typedef NV_STATUS      RpcCtrlGpuHandleVfPriFault(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
 typedef NV_STATUS      RpcRmApiControl(POBJGPU, POBJRPC, NvHandle, NvHandle, NvU32, void*, NvU32);
 typedef NV_STATUS      RpcCtrlFabricMemStats(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
+typedef NV_STATUS      RpcCtrlCmdNvlinkInbandSendData(POBJGPU, POBJRPC, NV2080_CTRL_NVLINK_INBAND_SEND_DATA_PARAMS*);
 typedef NV_STATUS      RpcCtrlGrCtxswZcullBind(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
 typedef NV_STATUS      RpcCtrlInternalMemsysSetZbcReferenced(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
+typedef NV_STATUS      RpcSetupHibernationBuffer(POBJGPU, POBJRPC);
 typedef NV_STATUS      RpcCtrlPerfRatedTdpSetControl(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
 typedef NV_STATUS      RpcCtrlExecPartitionsCreate(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
 typedef NV_STATUS      RpcCtrlGpfifoGetWorkSubmitToken(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
@@ -199,7 +211,9 @@ typedef NV_STATUS      RpcCtrlDbgExecRegOps(POBJGPU, POBJRPC, NvHandle, NvHandle
 typedef NV_STATUS      RpcCtrlFreePmaStream(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
 typedef NV_STATUS      RpcCtrlSetTsgInterleaveLevel(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
 typedef NV_STATUS      RpcCtrlMasterGetVirtualFunctionErrorContIntrMask(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
+typedef NV_STATUS      RpcCtrlReserveHes(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
 typedef NV_STATUS      RpcLog(POBJGPU, POBJRPC, const char*, NvU32);
+typedef NV_STATUS      RpcCtrlDbgGetModeMmuGccDebug(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
 typedef NV_STATUS      RpcCtrlExecPartitionsDelete(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
 typedef NV_STATUS      RpcCtrlPerfBoost(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
 typedef NV_STATUS      RpcCtrlDbgSetModeMmuDebug(POBJGPU, POBJRPC, NvHandle, NvHandle, void*);
@@ -209,6 +223,7 @@ typedef NV_STATUS      RpcUpdateBarPde(POBJGPU, POBJRPC, NV_RPC_UPDATE_PDE_BAR_T
 typedef NV_STATUS      RpcCtrlBindPmResources(POBJGPU, POBJRPC, NvHandle, NvHandle);
 typedef NV_STATUS      RpcMapMemoryDma(POBJGPU, POBJRPC, NvHandle, NvHandle, NvHandle,
                                     NvHandle, NvU64, NvU64, NvU32, NvU64*);
+typedef NV_STATUS      RpcUpdateGpmGuestBufferInfo(POBJGPU, POBJRPC, NvU64, NvU32, NvU32, NvU32, NvBool);
 typedef NV_STATUS      RpcCtrlSetVgpuFbUsage(POBJGPU, POBJRPC, void*);
 typedef NV_STATUS      RpcUnmapMemoryDma(POBJGPU, POBJRPC, NvHandle, NvHandle, NvHandle, NvHandle, NvU32, NvU64);
 typedef NV_STATUS      RpcSetGuestSystemInfoExt(POBJGPU, POBJRPC);
@@ -244,22 +259,30 @@ typedef struct RPC_HAL_IFACES {
     RpcCtrlResetIsolatedChannel  *rpcCtrlResetIsolatedChannel; /* CTRL_RESET_ISOLATED_CHANNEL */
     RpcCtrlDmaSetDefaultVaspace  *rpcCtrlDmaSetDefaultVaspace; /* CTRL_DMA_SET_DEFAULT_VASPACE */
     RpcAllocSubdevice           *rpcAllocSubdevice;           /* ALLOC_SUBDEVICE */
+    RpcCtrlExecPartitionsExport  *rpcCtrlExecPartitionsExport; /* CTRL_EXEC_PARTITIONS_EXPORT */
     RpcFree                     *rpcFree;                     /* FREE */
     RpcDmaControl               *rpcDmaControl;               /* DMA_CONTROL */
     RpcCtrlDbgClearSingleSmErrorState  *rpcCtrlDbgClearSingleSmErrorState; /* CTRL_DBG_CLEAR_SINGLE_SM_ERROR_STATE */
     RpcUnsetPageDirectory       *rpcUnsetPageDirectory;       /* UNSET_PAGE_DIRECTORY */
+    RpcCtrlReserveCcuProf       *rpcCtrlReserveCcuProf;       /* RESERVE_CCU_PROF */
     RpcGetGspStaticInfo         *rpcGetGspStaticInfo;         /* Get static info from GSP RM. */
     RpcSaveHibernationData      *rpcSaveHibernationData;      /* SAVE_HIBERNATION_DATA */
     RpcDupObject                *rpcDupObject;                /* DUP_OBJECT */
     RpcGspSetSystemInfo         *rpcGspSetSystemInfo;         /* Tells GSP-RM about the overall system environment */
     RpcCtrlPmAreaPcSampler      *rpcCtrlPmAreaPcSampler;      /* CTRL_PM_AREA_PC_SAMPLER */
+    RpcCtrlSubdeviceGetLibosHeapStats  *rpcCtrlSubdeviceGetLibosHeapStats; /* CTRL_SUBDEVICE_GET_LIBOS_HEAP_STATS */
     RpcCtrlDbgSetExceptionMask  *rpcCtrlDbgSetExceptionMask;  /* CTRL_DBG_SET_EXCEPTION_MASK */
+    RpcCtrlSetZbcStencilClear   *rpcCtrlSetZbcStencilClear;   /* CTRL_SET_ZBC_STENCIL_CLEAR */
     RpcCtrlVaspaceCopyServerReservedPdes  *rpcCtrlVaspaceCopyServerReservedPdes; /* CTRL_VASPACE_COPY_SERVER_RESERVED_PDES */
+    RpcCtrlCmdGetChipletHsCreditPool  *rpcCtrlCmdGetChipletHsCreditPool; /* GET_CHIPLET_HS_CREDIT_POOL */
     RpcCtrlGrCtxswPreemptionBind  *rpcCtrlGrCtxswPreemptionBind; /* CTRL_GR_CTXSW_PREEMPTION_BIND */
     RpcCtrlAllocPmaStream       *rpcCtrlAllocPmaStream;       /* CTRL_ALLOC_PMA_STREAM */
+    RpcCtrlCmdGetHsCreditsMapping  *rpcCtrlCmdGetHsCreditsMapping; /* GET_HS_CREDITS_MAPPING */
+    RpcCtrlReleaseHes           *rpcCtrlReleaseHes;           /* RELEASE_HES */
     RpcCtrlReserveHwpmLegacy    *rpcCtrlReserveHwpmLegacy;    /* CTRL_RESERVE_HWPM_LEGACY */
-    RpcCtrlInternalQuiescePmaChannel  *rpcCtrlInternalQuiescePmaChannel; /* CTRL_INTERNAL_QUIESCE_PMA_CHANNEL */
     RpcCtrlPerfRatedTdpGetStatus  *rpcCtrlPerfRatedTdpGetStatus; /* CTRL_PERF_RATED_TDP_GET_STATUS */
+    RpcCtrlInternalQuiescePmaChannel  *rpcCtrlInternalQuiescePmaChannel; /* CTRL_INTERNAL_QUIESCE_PMA_CHANNEL */
+    RpcCtrlSubdeviceGetVgpuHeapStats  *rpcCtrlSubdeviceGetVgpuHeapStats; /* CTRL_SUBDEVICE_GET_VGPU_HEAP_STATS */
     RpcCtrlBusSetP2pMapping     *rpcCtrlBusSetP2pMapping;     /* CTRL_BUS_SET_P2P_MAPPING */
     RpcCtrlGpuGetInfoV2         *rpcCtrlGpuGetInfoV2;         /* CTRL_GPU_GET_INFO_V2 */
     RpcCtrlGetHsCredits         *rpcCtrlGetHsCredits;         /* CTRL_GET_HS_CREDITS */
@@ -282,7 +305,6 @@ typedef struct RPC_HAL_IFACES {
     RpcCtrlGetP2pCapsV2         *rpcCtrlGetP2pCapsV2;         /* CTRL_GET_P2P_CAPS_V2 */
     RpcCtrlNvlinkGetInbandReceivedData  *rpcCtrlNvlinkGetInbandReceivedData; /* CTRL_NVLINK_GET_INBAND_RECEIVED_DATA */
     RpcCtrlGetCePceMask         *rpcCtrlGetCePceMask;         /* CTRL_GET_CE_PCE_MASK */
-    RpcCtrlGetNvlinkPeerIdMask  *rpcCtrlGetNvlinkPeerIdMask;  /* CTRL_GET_NVLINK_PEER_ID_MASK */
     RpcCtrlGpuEvictCtx          *rpcCtrlGpuEvictCtx;          /* CTRL_GPU_EVICT_CTX */
     RpcCtrlGetMmuDebugMode      *rpcCtrlGetMmuDebugMode;      /* CTRL_GET_MMU_DEBUG_MODE */
     RpcInvalidateTlb            *rpcInvalidateTlb;            /* INVALIDATE_TLB */
@@ -294,13 +316,16 @@ typedef struct RPC_HAL_IFACES {
     RpcCtrlResetChannel         *rpcCtrlResetChannel;         /* CTRL_RESET_CHANNEL */
     RpcCtrlGpfifoSchedule       *rpcCtrlGpfifoSchedule;       /* CTRL_GPFIFO_SCHEDULE */
     RpcSetRegistry              *rpcSetRegistry;              /* GSP Init Set registry values */
+    RpcCtrlDbgSetModeMmuGccDebug  *rpcCtrlDbgSetModeMmuGccDebug; /* CTRL_DBG_SET_MODE_MMU_GCC_DEBUG */
     RpcCtrlGetNvlinkStatus      *rpcCtrlGetNvlinkStatus;      /* CTRL_NVLINK_GET_NVLINK_STATUS */
     RpcGetStaticData            *rpcGetStaticData;            /* GET_STATIC_DATA published for OpenRM */
     RpcCtrlGrGetTpcPartitionMode  *rpcCtrlGrGetTpcPartitionMode; /* CTRL_GR_GET_TPC_PARTITION_MODE */
     RpcCtrlStopChannel          *rpcCtrlStopChannel;          /* CTRL_STOP_CHANNEL */
+    RpcCtrlCmdInternalControlGspTrace  *rpcCtrlCmdInternalControlGspTrace; /* CTRL_CMD_INTERNAL_CONTROL_GSP_TRACE */
     RpcSetSurfaceProperties     *rpcSetSurfaceProperties;     /* SET_SURFACE_PROPERTIES */
-    RpcCtrlGpfifoSetWorkSubmitTokenNotifIndex  *rpcCtrlGpfifoSetWorkSubmitTokenNotifIndex; /* CTRL_GPFIFO_SET_WORK_SUBMIT_TOKEN_NOTIF_INDEX */
+    RpcCtrlReleaseCcuProf       *rpcCtrlReleaseCcuProf;       /* RELEASE_CCU_PROF */
     RpcCtrlTimerSetGrTickFreq   *rpcCtrlTimerSetGrTickFreq;   /* CTRL_TIMER_SET_GR_TICK_FREQ */
+    RpcCtrlGpfifoSetWorkSubmitTokenNotifIndex  *rpcCtrlGpfifoSetWorkSubmitTokenNotifIndex; /* CTRL_GPFIFO_SET_WORK_SUBMIT_TOKEN_NOTIF_INDEX */
     RpcAllocEvent               *rpcAllocEvent;               /* ALLOC_EVENT */
     RpcCtrlGrPcSamplingMode     *rpcCtrlGrPcSamplingMode;     /* CTRL_GR_PC_SAMPLING_MODE */
     RpcCtrlMcServiceInterrupts  *rpcCtrlMcServiceInterrupts;  /* CTRL_MC_SERVICE_INTERRUPTS */
@@ -313,8 +338,10 @@ typedef struct RPC_HAL_IFACES {
     RpcCtrlGpuHandleVfPriFault  *rpcCtrlGpuHandleVfPriFault;  /* CTRL_GPU_HANDLE_VF_PRI_FAULT */
     RpcRmApiControl             *rpcRmApiControl;             /* RM_API_CONTROL */
     RpcCtrlFabricMemStats       *rpcCtrlFabricMemStats;       /* CTRL_FABRIC_MEM_STATS */
+    RpcCtrlCmdNvlinkInbandSendData  *rpcCtrlCmdNvlinkInbandSendData; /* CTRL_CMD_NVLINK_INBAND_SEND_DATA */
     RpcCtrlGrCtxswZcullBind     *rpcCtrlGrCtxswZcullBind;     /* CTRL_GR_CTXSW_ZCULL_BIND */
     RpcCtrlInternalMemsysSetZbcReferenced  *rpcCtrlInternalMemsysSetZbcReferenced; /* CTRL_INTERNAL_MEMSYS_SET_ZBC_REFERENCED */
+    RpcSetupHibernationBuffer   *rpcSetupHibernationBuffer;   /* SETUP_HIBERNATION_BUFFER */
     RpcCtrlPerfRatedTdpSetControl  *rpcCtrlPerfRatedTdpSetControl; /* CTRL_PERF_RATED_TDP_SET_CONTROL */
     RpcCtrlExecPartitionsCreate  *rpcCtrlExecPartitionsCreate; /* CTRL_EXEC_PARTITIONS_CREATE */
     RpcCtrlGpfifoGetWorkSubmitToken  *rpcCtrlGpfifoGetWorkSubmitToken; /* CTRL_GPFIFO_GET_WORK_SUBMIT_TOKEN */
@@ -339,7 +366,9 @@ typedef struct RPC_HAL_IFACES {
     RpcCtrlFreePmaStream        *rpcCtrlFreePmaStream;        /* CTRL_FREE_PMA_STREAM */
     RpcCtrlSetTsgInterleaveLevel  *rpcCtrlSetTsgInterleaveLevel; /* CTRL_SET_TSG_INTERLEAVE_LEVEL */
     RpcCtrlMasterGetVirtualFunctionErrorContIntrMask  *rpcCtrlMasterGetVirtualFunctionErrorContIntrMask; /* CTRL_MASTER_GET_VIRTUAL_FUNCTION_ERROR_CONT_INTR_MASK */
+    RpcCtrlReserveHes           *rpcCtrlReserveHes;           /* RESERVE_HES */
     RpcLog                      *rpcLog;                      /* LOG */
+    RpcCtrlDbgGetModeMmuGccDebug  *rpcCtrlDbgGetModeMmuGccDebug; /* CTRL_DBG_GET_MODE_MMU_GCC_DEBUG */
     RpcCtrlExecPartitionsDelete  *rpcCtrlExecPartitionsDelete; /* CTRL_EXEC_PARTITIONS_DELETE */
     RpcCtrlPerfBoost            *rpcCtrlPerfBoost;            /* CTRL_PERF_BOOST */
     RpcCtrlDbgSetModeMmuDebug   *rpcCtrlDbgSetModeMmuDebug;   /* CTRL_DBG_SET_MODE_MMU_DEBUG */
@@ -348,6 +377,7 @@ typedef struct RPC_HAL_IFACES {
     RpcUpdateBarPde             *rpcUpdateBarPde;             /* Update the value of BAR1/BAR2 PDE */
     RpcCtrlBindPmResources      *rpcCtrlBindPmResources;      /* CTRL_BIND_PM_RESOURCES */
     RpcMapMemoryDma             *rpcMapMemoryDma;             /* MAP_MEMORY_DMA */
+    RpcUpdateGpmGuestBufferInfo  *rpcUpdateGpmGuestBufferInfo; /* CTRL_UPDATE_GPM_GUEST_BUFFER_INFO */
     RpcCtrlSetVgpuFbUsage       *rpcCtrlSetVgpuFbUsage;       /* CTRL_SET_VGPU_FB_USAGE */
     RpcUnmapMemoryDma           *rpcUnmapMemoryDma;           /* UNMAP_MEMORY_DMA */
     RpcSetGuestSystemInfoExt    *rpcSetGuestSystemInfoExt;    /* SET_GUEST_SYSTEM_INFO_EXT */
@@ -374,8 +404,8 @@ typedef struct RPC_HAL_IFACES {
         (_pRpc)->_hal.rpcAllocMemory(_pGpu, _pRpc, _arg0, _arg1, _arg2, _arg3, _arg4, _pArg5)
 #define rpcCtrlDbgReadSingleSmErrorState_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
         (_pRpc)->_hal.rpcCtrlDbgReadSingleSmErrorState(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
-#define rpcDisableChannels_HAL(_pGpu, _pRpc, _arg0)  \
-        (_pRpc)->_hal.rpcDisableChannels(_pGpu, _pRpc, _arg0)
+#define rpcDisableChannels_HAL(_pGpu, _pRpc, _pArg0)  \
+        (_pRpc)->_hal.rpcDisableChannels(_pGpu, _pRpc, _pArg0)
 #define rpcGpuExecRegOps_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2, _pArg3)  \
         (_pRpc)->_hal.rpcGpuExecRegOps(_pGpu, _pRpc, _arg0, _arg1, _pArg2, _pArg3)
 #define rpcCtrlGpuPromoteCtx_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
@@ -408,6 +438,8 @@ typedef struct RPC_HAL_IFACES {
         (_pRpc)->_hal.rpcCtrlDmaSetDefaultVaspace(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
 #define rpcAllocSubdevice_HAL(_pGpu, _pRpc, _arg0, _arg1, _arg2, _arg3, _arg4)  \
         (_pRpc)->_hal.rpcAllocSubdevice(_pGpu, _pRpc, _arg0, _arg1, _arg2, _arg3, _arg4)
+#define rpcCtrlExecPartitionsExport_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
+        (_pRpc)->_hal.rpcCtrlExecPartitionsExport(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
 #define rpcFree_HAL(_pGpu, _pRpc, _arg0, _arg1, _arg2)  \
         (_pRpc)->_hal.rpcFree(_pGpu, _pRpc, _arg0, _arg1, _arg2)
 #define rpcDmaControl_HAL(_pGpu, _pRpc, _arg0, _arg1, _arg2, _pArg3, _arg4)  \
@@ -416,6 +448,8 @@ typedef struct RPC_HAL_IFACES {
         (_pRpc)->_hal.rpcCtrlDbgClearSingleSmErrorState(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
 #define rpcUnsetPageDirectory_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
         (_pRpc)->_hal.rpcUnsetPageDirectory(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
+#define rpcCtrlReserveCcuProf_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
+        (_pRpc)->_hal.rpcCtrlReserveCcuProf(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
 #define rpcGetGspStaticInfo_HAL(_pGpu, _pRpc)  \
         (_pRpc)->_hal.rpcGetGspStaticInfo(_pGpu, _pRpc)
 #define rpcSaveHibernationData_HAL(_pGpu, _pRpc)  \
@@ -426,20 +460,32 @@ typedef struct RPC_HAL_IFACES {
         (_pRpc)->_hal.rpcGspSetSystemInfo(_pGpu, _pRpc)
 #define rpcCtrlPmAreaPcSampler_HAL(_pGpu, _pRpc, _arg0, _arg1, _arg2, _pArg3)  \
         (_pRpc)->_hal.rpcCtrlPmAreaPcSampler(_pGpu, _pRpc, _arg0, _arg1, _arg2, _pArg3)
+#define rpcCtrlSubdeviceGetLibosHeapStats_HAL(_pGpu, _pRpc, _pArg0)  \
+        (_pRpc)->_hal.rpcCtrlSubdeviceGetLibosHeapStats(_pGpu, _pRpc, _pArg0)
 #define rpcCtrlDbgSetExceptionMask_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
         (_pRpc)->_hal.rpcCtrlDbgSetExceptionMask(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
+#define rpcCtrlSetZbcStencilClear_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
+        (_pRpc)->_hal.rpcCtrlSetZbcStencilClear(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
 #define rpcCtrlVaspaceCopyServerReservedPdes_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
         (_pRpc)->_hal.rpcCtrlVaspaceCopyServerReservedPdes(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
+#define rpcCtrlCmdGetChipletHsCreditPool_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
+        (_pRpc)->_hal.rpcCtrlCmdGetChipletHsCreditPool(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
 #define rpcCtrlGrCtxswPreemptionBind_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
         (_pRpc)->_hal.rpcCtrlGrCtxswPreemptionBind(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
 #define rpcCtrlAllocPmaStream_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
         (_pRpc)->_hal.rpcCtrlAllocPmaStream(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
+#define rpcCtrlCmdGetHsCreditsMapping_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
+        (_pRpc)->_hal.rpcCtrlCmdGetHsCreditsMapping(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
+#define rpcCtrlReleaseHes_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
+        (_pRpc)->_hal.rpcCtrlReleaseHes(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
 #define rpcCtrlReserveHwpmLegacy_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
         (_pRpc)->_hal.rpcCtrlReserveHwpmLegacy(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
-#define rpcCtrlInternalQuiescePmaChannel_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
-        (_pRpc)->_hal.rpcCtrlInternalQuiescePmaChannel(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
 #define rpcCtrlPerfRatedTdpGetStatus_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
         (_pRpc)->_hal.rpcCtrlPerfRatedTdpGetStatus(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
+#define rpcCtrlInternalQuiescePmaChannel_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
+        (_pRpc)->_hal.rpcCtrlInternalQuiescePmaChannel(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
+#define rpcCtrlSubdeviceGetVgpuHeapStats_HAL(_pGpu, _pRpc, _pArg0)  \
+        (_pRpc)->_hal.rpcCtrlSubdeviceGetVgpuHeapStats(_pGpu, _pRpc, _pArg0)
 #define rpcCtrlBusSetP2pMapping_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
         (_pRpc)->_hal.rpcCtrlBusSetP2pMapping(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
 #define rpcCtrlGpuGetInfoV2_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
@@ -484,8 +530,6 @@ typedef struct RPC_HAL_IFACES {
         (_pRpc)->_hal.rpcCtrlNvlinkGetInbandReceivedData(_pGpu, _pRpc, _pArg0, _arg1, _pArg2)
 #define rpcCtrlGetCePceMask_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
         (_pRpc)->_hal.rpcCtrlGetCePceMask(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
-#define rpcCtrlGetNvlinkPeerIdMask_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
-        (_pRpc)->_hal.rpcCtrlGetNvlinkPeerIdMask(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
 #define rpcCtrlGpuEvictCtx_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
         (_pRpc)->_hal.rpcCtrlGpuEvictCtx(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
 #define rpcCtrlGetMmuDebugMode_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
@@ -508,6 +552,8 @@ typedef struct RPC_HAL_IFACES {
         (_pRpc)->_hal.rpcCtrlGpfifoSchedule(_pGpu, _pRpc, _arg0, _arg1, _arg2, _pArg3)
 #define rpcSetRegistry_HAL(_pGpu, _pRpc)  \
         (_pRpc)->_hal.rpcSetRegistry(_pGpu, _pRpc)
+#define rpcCtrlDbgSetModeMmuGccDebug_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
+        (_pRpc)->_hal.rpcCtrlDbgSetModeMmuGccDebug(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
 #define rpcCtrlGetNvlinkStatus_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
         (_pRpc)->_hal.rpcCtrlGetNvlinkStatus(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
 #define rpcGetStaticData_HAL(_pGpu, _pRpc)  \
@@ -516,12 +562,16 @@ typedef struct RPC_HAL_IFACES {
         (_pRpc)->_hal.rpcCtrlGrGetTpcPartitionMode(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
 #define rpcCtrlStopChannel_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
         (_pRpc)->_hal.rpcCtrlStopChannel(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
+#define rpcCtrlCmdInternalControlGspTrace_HAL(_pGpu, _pRpc, _pArg0)  \
+        (_pRpc)->_hal.rpcCtrlCmdInternalControlGspTrace(_pGpu, _pRpc, _pArg0)
 #define rpcSetSurfaceProperties_HAL(_pGpu, _pRpc, _arg0, _pArg1, _arg2)  \
         (_pRpc)->_hal.rpcSetSurfaceProperties(_pGpu, _pRpc, _arg0, _pArg1, _arg2)
-#define rpcCtrlGpfifoSetWorkSubmitTokenNotifIndex_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
-        (_pRpc)->_hal.rpcCtrlGpfifoSetWorkSubmitTokenNotifIndex(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
+#define rpcCtrlReleaseCcuProf_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
+        (_pRpc)->_hal.rpcCtrlReleaseCcuProf(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
 #define rpcCtrlTimerSetGrTickFreq_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
         (_pRpc)->_hal.rpcCtrlTimerSetGrTickFreq(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
+#define rpcCtrlGpfifoSetWorkSubmitTokenNotifIndex_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
+        (_pRpc)->_hal.rpcCtrlGpfifoSetWorkSubmitTokenNotifIndex(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
 #define rpcAllocEvent_HAL(_pGpu, _pRpc, _arg0, _arg1, _arg2, _arg3, _arg4, _arg5, _arg6)  \
         (_pRpc)->_hal.rpcAllocEvent(_pGpu, _pRpc, _arg0, _arg1, _arg2, _arg3, _arg4, _arg5, _arg6)
 #define rpcCtrlGrPcSamplingMode_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
@@ -546,10 +596,14 @@ typedef struct RPC_HAL_IFACES {
         (_pRpc)->_hal.rpcRmApiControl(_pGpu, _pRpc, _arg0, _arg1, _arg2, _pArg3, _arg4)
 #define rpcCtrlFabricMemStats_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
         (_pRpc)->_hal.rpcCtrlFabricMemStats(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
+#define rpcCtrlCmdNvlinkInbandSendData_HAL(_pGpu, _pRpc, _pArg0)  \
+        (_pRpc)->_hal.rpcCtrlCmdNvlinkInbandSendData(_pGpu, _pRpc, _pArg0)
 #define rpcCtrlGrCtxswZcullBind_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
         (_pRpc)->_hal.rpcCtrlGrCtxswZcullBind(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
 #define rpcCtrlInternalMemsysSetZbcReferenced_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
         (_pRpc)->_hal.rpcCtrlInternalMemsysSetZbcReferenced(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
+#define rpcSetupHibernationBuffer_HAL(_pGpu, _pRpc)  \
+        (_pRpc)->_hal.rpcSetupHibernationBuffer(_pGpu, _pRpc)
 #define rpcCtrlPerfRatedTdpSetControl_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
         (_pRpc)->_hal.rpcCtrlPerfRatedTdpSetControl(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
 #define rpcCtrlExecPartitionsCreate_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
@@ -598,8 +652,12 @@ typedef struct RPC_HAL_IFACES {
         (_pRpc)->_hal.rpcCtrlSetTsgInterleaveLevel(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
 #define rpcCtrlMasterGetVirtualFunctionErrorContIntrMask_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
         (_pRpc)->_hal.rpcCtrlMasterGetVirtualFunctionErrorContIntrMask(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
+#define rpcCtrlReserveHes_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
+        (_pRpc)->_hal.rpcCtrlReserveHes(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
 #define rpcLog_HAL(_pGpu, _pRpc, _pChar, _arg0)  \
         (_pRpc)->_hal.rpcLog(_pGpu, _pRpc, _pChar, _arg0)
+#define rpcCtrlDbgGetModeMmuGccDebug_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
+        (_pRpc)->_hal.rpcCtrlDbgGetModeMmuGccDebug(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
 #define rpcCtrlExecPartitionsDelete_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
         (_pRpc)->_hal.rpcCtrlExecPartitionsDelete(_pGpu, _pRpc, _arg0, _arg1, _pArg2)
 #define rpcCtrlPerfBoost_HAL(_pGpu, _pRpc, _arg0, _arg1, _pArg2)  \
@@ -616,6 +674,8 @@ typedef struct RPC_HAL_IFACES {
         (_pRpc)->_hal.rpcCtrlBindPmResources(_pGpu, _pRpc, _arg0, _arg1)
 #define rpcMapMemoryDma_HAL(_pGpu, _pRpc, _arg0, _arg1, _arg2, _arg3, _arg4, _arg5, _arg6, _pArg7)  \
         (_pRpc)->_hal.rpcMapMemoryDma(_pGpu, _pRpc, _arg0, _arg1, _arg2, _arg3, _arg4, _arg5, _arg6, _pArg7)
+#define rpcUpdateGpmGuestBufferInfo_HAL(_pGpu, _pRpc, _arg0, _arg1, _arg2, _arg3, _arg4)  \
+        (_pRpc)->_hal.rpcUpdateGpmGuestBufferInfo(_pGpu, _pRpc, _arg0, _arg1, _arg2, _arg3, _arg4)
 #define rpcCtrlSetVgpuFbUsage_HAL(_pGpu, _pRpc, _pArg0)  \
         (_pRpc)->_hal.rpcCtrlSetVgpuFbUsage(_pGpu, _pRpc, _pArg0)
 #define rpcUnmapMemoryDma_HAL(_pGpu, _pRpc, _arg0, _arg1, _arg2, _arg3, _arg4, _arg5)  \

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2018-2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2018-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -479,7 +479,7 @@ kceGetMappings_GA100
 
     // A. Start with assigning PCEs for "SYSMEM"
     status = kceMapPceLceForSysmemLinks_HAL(pGpu, pKCe,
-                                            pTopoParams->pceAvailableMaskPerHshub,
+                                            pTopoParams->pceAvailableMaskPerConnectingHub,
                                             pLocalPceLceMap,
                                             pExposeCeMask,
                                             pTopoParams->fbhubPceMask);
@@ -491,14 +491,14 @@ kceGetMappings_GA100
 
     // B. Assign PCEs to "PEER"s
     status = kceMapPceLceForNvlinkPeers_HAL(pGpu, pKCe,
-                                            pTopoParams->pceAvailableMaskPerHshub,
+                                            pTopoParams->pceAvailableMaskPerConnectingHub,
                                             pLocalPceLceMap,
                                             pExposeCeMask);
     if (status == NV_WARN_NOTHING_TO_DO)
     {
         // If there's no NVLink peers available, still expose an additional async LCE
         status = kceMapAsyncLceDefault_HAL(pGpu, pKCe,
-                                           pTopoParams->pceAvailableMaskPerHshub,
+                                           pTopoParams->pceAvailableMaskPerConnectingHub,
                                            pLocalPceLceMap,
                                            pExposeCeMask,
                                            NV_CE_NUM_DEFAULT_PCES);
@@ -537,7 +537,7 @@ kceGetMappings_GA100
             {
                 kceApplyGen4orHigherMapping_HAL(pGpu, pKCe,
                                                 &pLocalPceLceMap[0],
-                                                &pTopoParams->pceAvailableMaskPerHshub[0],
+                                                &pTopoParams->pceAvailableMaskPerConnectingHub[0],
                                                 lceIndex,
                                                 pceIndex);
             }
@@ -597,14 +597,14 @@ kceMapPceLceForSysmemLinks_GA100
 
     KernelNvlink *pKernelNvlink = GPU_GET_KERNEL_NVLINK(pGpu);
 
-    NV2080_CTRL_NVLINK_HSHUB_GET_SYSMEM_NVLINK_MASK_PARAMS paramsNvlinkMask;
+    NV2080_CTRL_INTERNAL_NVLINK_HSHUB_GET_SYSMEM_NVLINK_MASK_PARAMS paramsNvlinkMask;
     NV2080_CTRL_INTERNAL_HSHUB_GET_HSHUB_ID_FOR_LINKS_PARAMS *pParamsHshubId = NULL;
 
     NV_ASSERT_OR_RETURN(pKernelNvlink != NULL, NV_ERR_NOT_SUPPORTED);
 
     portMemSet(&paramsNvlinkMask, 0, sizeof(paramsNvlinkMask));
     status = knvlinkExecGspRmRpc(pGpu, pKernelNvlink,
-                                 NV2080_CTRL_CMD_NVLINK_HSHUB_GET_SYSMEM_NVLINK_MASK,
+                                 NV2080_CTRL_CMD_INTERNAL_NVLINK_HSHUB_GET_SYSMEM_NVLINK_MASK,
                                  (void *)&paramsNvlinkMask, sizeof(paramsNvlinkMask));
     if (status != NV_OK)
     {

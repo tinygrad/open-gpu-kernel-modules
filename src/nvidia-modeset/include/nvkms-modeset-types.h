@@ -41,23 +41,23 @@ typedef struct {
     NVDscInfoEvoRec dscInfo;
     NVDispHeadInfoFrameStateEvoRec infoFrame;
     enum NvKmsOutputTf tf;
-    enum NvKmsOutputColorimetry colorimetry;
     NvBool hdrInfoFrameOverride;
     NvU32 hdrStaticMetadataLayerMask;
     NvBool colorSpaceSpecified : 1;
+    NvBool colorBpcSpecified   : 1;
     NvBool colorRangeSpecified : 1;
     NvBool hs10bpcHint         : 1;
     NvBool changed             : 1;
 } NVProposedModeSetStateOneApiHead;
 
 typedef struct {
-    NvU8 tilePosition;
+    NvU8 mergeHeadSection;
     NVHwModeTimingsEvo timings;
     NVConnectorEvoRec *pConnectorEvo;
     HDMI_FRL_CONFIG hdmiFrlConfig;
-    NvU8 hdmiFrlBpc;
     NVDPLibModesetStatePtr pDpLibModesetState;
     NVDispHeadAudioStateEvoRec audio;
+    NVHwHeadMultiTileConfigRec multiTileConfig;
 } NVProposedModeSetHwStateOneHead;
 
 typedef struct {

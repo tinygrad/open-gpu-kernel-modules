@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2019-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2019-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -24,7 +24,6 @@
 #include "nv-pci-table.h"
 #include "nv-pci-types.h"
 #include "nv-pci.h"
-#include "nv-ibmnpu.h"
 #include "nv-msi.h"
 #include "nv-hypervisor.h"
 
@@ -36,6 +35,17 @@
 #include <linux/seq_file.h>
 #include <linux/kernfs.h>
 #endif
+
+#include "detect-self-hosted.h"
+
+#if !defined(NV_BUS_TYPE_HAS_IOMMU_OPS)
+#include <linux/iommu.h>
+#endif
+#if NV_IS_EXPORT_SYMBOL_GPL_pci_ats_supported
+#include <linux/pci-ats.h>
+#endif
+
+extern int NVreg_GrdmaPciTopoCheckOverride;
 
 static void
 nv_check_and_exclude_gpu(
@@ -177,11 +187,11 @@ static int nv_resize_pcie_bars(struct pci_dev *pci_dev) {
     struct pci_host_bridge *host;
 #endif
 
-    if (NVreg_EnableResizableBar == 0)
+    /*if (NVreg_EnableResizableBar == 0)
     {
         nv_printf(NV_DBG_INFO, "NVRM: resizable BAR disabled by regkey, skipping\n");
         return 0;
-    }
+    }*/
 
     // Check if BAR1 has PCIe rebar capabilities
     sizes = pci_rebar_get_possible_sizes(pci_dev, NV_GPU_BAR1);
@@ -298,6 +308,15 @@ static NvU32 find_gpu_numa_nodes_in_srat(nv_linux_state_t *nvl)
     struct acpi_srat_generic_affinity *gi;
     NvU32 numa_node = NUMA_NO_NODE;
 
+    if (NV_PCI_DEVFN(nvl->pci_dev) != 0)
+    {
+        nv_printf(NV_DBG_ERRORS, "NVRM: Failing to parse SRAT GI for %04x:%02x:%02x.%x "
+                  "since non-zero device function is not supported.\n",
+                  NV_PCI_DOMAIN_NUMBER(nvl->pci_dev), NV_PCI_BUS_NUMBER(nvl->pci_dev),
+                  NV_PCI_SLOT_NUMBER(nvl->pci_dev), PCI_FUNC(nvl->pci_dev->devfn));
+        return 0;
+    }
+
     if (acpi_get_table(ACPI_SIG_SRAT, 0, &table_header)) {
         nv_printf(NV_DBG_INFO, "NVRM: Failed to parse the SRAT table.\n");
         return 0;
@@ -318,13 +337,18 @@ static NvU32 find_gpu_numa_nodes_in_srat(nv_linux_state_t *nvl)
      * supports.
      */
     while (subtable_header_length &&
-           (((unsigned long)subtable_header) + subtable_header_length < table_end)) {
+           (((unsigned long)subtable_header) + subtable_header_length <= table_end)) {
 
         if (subtable_header->type == ACPI_SRAT_TYPE_GENERIC_AFFINITY) {
+            NvU8 busAtByte2, busAtByte3;
             gi = (struct acpi_srat_generic_affinity *) subtable_header;
-            gi_dbdf = *((NvU16 *)(&gi->device_handle[0])) << 16 |
-                      *((NvU16 *)(&gi->device_handle[2]));
+            busAtByte2 = gi->device_handle[2];
+            busAtByte3 = gi->device_handle[3];
 
+            // Device and function should be zero enforced by above check
+            gi_dbdf = *((NvU16 *)(&gi->device_handle[0])) << 16 |
+                (busAtByte2 != 0 ? busAtByte2 : busAtByte3) << 8;
+            
             if (gi_dbdf == dev_dbdf) {
                 numa_node = pxm_to_node(gi->proximity_domain);
                 if (numa_node < MAX_NUMNODES) {
@@ -336,6 +360,31 @@ static NvU32 find_gpu_numa_nodes_in_srat(nv_linux_state_t *nvl)
                     nv_printf(NV_DBG_INFO, "NVRM: Invalid node-id found.\n");
                     pxm_count = 0;
                     goto exit;
+                }
+                nv_printf(NV_DBG_INFO,
+                          "NVRM: matching SRAT GI entry: 0x%x 0x%x 0x%x 0x%x  PXM: %d\n",
+                          gi->device_handle[3],
+                          gi->device_handle[2],
+                          gi->device_handle[1],
+                          gi->device_handle[0],
+                          gi->proximity_domain);
+                if ((busAtByte2) == 0 &&
+                    (busAtByte3) != 0)
+                {
+                    /*
+                     * TODO: Remove this WAR once Hypervisor stack is updated
+                     * to fix this bug and after all CSPs have moved to using
+                     * the updated Hypervisor stack with fix.
+                     */
+                    nv_printf(NV_DBG_WARNINGS,
+                              "NVRM: PCIe bus value picked from byte 3 offset in SRAT GI entry: 0x%x 0x%x 0x%x 0x%x  PXM: %d\n"
+                              "NVRM: Hypervisor stack is old and not following ACPI spec defined offset.\n"
+                              "NVRM: Please consider upgrading the Hypervisor stack as this workaround will be removed in future release.\n",
+                              gi->device_handle[3],
+                              gi->device_handle[2],
+                              gi->device_handle[1],
+                              gi->device_handle[0],
+                              gi->proximity_domain);
                 }
             }
         }
@@ -349,7 +398,6 @@ exit:
     acpi_put_table(table_header);
     return pxm_count;
 }
-
 #endif
 
 static void
@@ -375,6 +423,7 @@ nv_init_coherent_link_info
         return;
 
     gi_found = find_gpu_numa_nodes_in_srat(nvl);
+
     if (!gi_found &&
         (device_property_read_u64(nvl->dev, "nvidia,gpu-mem-pxm-start", &pxm_start) != 0 ||
          device_property_read_u64(nvl->dev, "nvidia,gpu-mem-pxm-count", &pxm_count) != 0))
@@ -430,22 +479,28 @@ nv_init_coherent_link_info
         nvl->coherent_link_info.gpu_mem_pa =
             NV_PCI_RESOURCE_START(nvl->pci_dev, gpu_bar2_offset);
 
-        if ((NV_PCI_RESOURCE_VALID(nvl->pci_dev, gpu_bar1_offset)) &&
+        if ((pci_devid_is_self_hosted_hopper(nv->pci_info.device_id)) &&
+            (NV_PCI_RESOURCE_VALID(nvl->pci_dev, gpu_bar1_offset)) &&
             (NV_PCI_RESOURCE_FLAGS(nvl->pci_dev, gpu_bar1_offset) & PCI_BASE_ADDRESS_SPACE)
             == PCI_BASE_ADDRESS_SPACE_MEMORY)
         {
-            // Present only in passthrough case
+            // Present only in passthrough case for self-hosted hopper.
             nvl->coherent_link_info.rsvd_mem_pa = NV_PCI_RESOURCE_START(nvl->pci_dev, gpu_bar1_offset);
+
+            //
+            // Unset nv->bars[1] only for self-hosted Hopper as BAR1 in virtualization case
+            // for hopper is used to convey RM reserved memory information and doesn't contain
+            // the traditional GPU BAR2. Starting from Blackwell BAR1 will be the real BAR1.
+            //
+            memset(&nv->bars[1], 0, sizeof(nv->bars[1]));
         }
 
         //
-        // Unset nv->bars[] as the BARs in the virtualization case are used
-        // only to convey the coherent GPU memory information and doesn't
-        // contain the traditional GPU BAR1/BAR2. This is to ensure the
-        // coherent FB addresses don't inadvertently pass the IS_FB_OFFSET
-        // or IS_IMEM_OFFSET checks.
+        // Unset nv->bars[2] for all self-hosted systems as BAR2 in the virtualization case
+        // is used only to convey the coherent GPU memory information and doesn't contain
+        // the traditional GPU BAR2. This is to ensure the coherent FB addresses don't 
+        // inadvertently pass the IS_FB_OFFSET or IS_IMEM_OFFSET checks.
         //
-        memset(&nv->bars[1], 0, sizeof(nv->bars[1]));
         memset(&nv->bars[2], 0, sizeof(nv->bars[2]));
     }
 
@@ -453,8 +508,11 @@ nv_init_coherent_link_info
     NV_DEV_PRINTF(NV_DBG_INFO, nv, "DSD properties: \n");
     NV_DEV_PRINTF(NV_DBG_INFO, nv, "\tGPU memory PA: 0x%lx \n",
                   nvl->coherent_link_info.gpu_mem_pa);
-    NV_DEV_PRINTF(NV_DBG_INFO, nv, "\tGPU reserved memory PA: 0x%lx \n",
-                  nvl->coherent_link_info.rsvd_mem_pa);
+    if (pci_devid_is_self_hosted_hopper(nv->pci_info.device_id))
+    {
+        NV_DEV_PRINTF(NV_DBG_INFO, nv, "\tGPU reserved memory PA: 0x%lx \n",
+                      nvl->coherent_link_info.rsvd_mem_pa);
+    }
 
     if (!gi_found)
     {
@@ -530,32 +588,17 @@ nv_pci_probe
     if (pci_dev->is_virtfn)
     {
 #if defined(NV_VGPU_KVM_BUILD)
-        nvl = pci_get_drvdata(pci_dev->physfn);
-        if (!nvl)
+#if defined(NV_BUS_TYPE_HAS_IOMMU_OPS)
+        if (pci_dev->dev.bus->iommu_ops == NULL) 
+#else
+        if ((pci_dev->dev.iommu != NULL) && (pci_dev->dev.iommu->iommu_dev != NULL) &&
+            (pci_dev->dev.iommu->iommu_dev->ops == NULL))
+#endif
         {
             nv_printf(NV_DBG_ERRORS, "NVRM: Aborting probe for VF %04x:%02x:%02x.%x "
-                      "since PF is not bound to nvidia driver.\n",
+                      "since IOMMU is not present on the system.\n",
                        NV_PCI_DOMAIN_NUMBER(pci_dev), NV_PCI_BUS_NUMBER(pci_dev),
                        NV_PCI_SLOT_NUMBER(pci_dev), PCI_FUNC(pci_dev->devfn));
-            goto failed;
-        }
-
-        if (pci_dev->dev.bus->iommu_ops == NULL) 
-        {
-            nv = NV_STATE_PTR(nvl);
-            if (rm_is_iommu_needed_for_sriov(sp, nv))
-            {
-                nv_printf(NV_DBG_ERRORS, "NVRM: Aborting probe for VF %04x:%02x:%02x.%x "
-                          "since IOMMU is not present on the system.\n",
-                           NV_PCI_DOMAIN_NUMBER(pci_dev), NV_PCI_BUS_NUMBER(pci_dev),
-                           NV_PCI_SLOT_NUMBER(pci_dev), PCI_FUNC(pci_dev->devfn));
-                goto failed;
-            }
-        }
-
-        if (nvidia_vgpu_vfio_probe(pci_dev) != NV_OK)
-        {
-            nv_printf(NV_DBG_ERRORS, "NVRM: Failed to register device to vGPU VFIO module");
             goto failed;
         }
 
@@ -609,63 +652,12 @@ nv_pci_probe
     {
         if (NV_PCI_RESOURCE_VALID(pci_dev, i))
         {
-#if defined(NV_PCI_MAX_MMIO_BITS_SUPPORTED)
-            if ((NV_PCI_RESOURCE_FLAGS(pci_dev, i) & PCI_BASE_ADDRESS_MEM_TYPE_64) &&
-                ((NV_PCI_RESOURCE_START(pci_dev, i) >> NV_PCI_MAX_MMIO_BITS_SUPPORTED)))
-            {
-                nv_printf(NV_DBG_ERRORS,
-                    "NVRM: This is a 64-bit BAR mapped above %dGB by the system\n"
-                    "NVRM: BIOS or the %s kernel. This PCI I/O region assigned\n"
-                    "NVRM: to your NVIDIA device is not supported by the kernel.\n"
-                    "NVRM: BAR%d is %dM @ 0x%llx (PCI:%04x:%02x:%02x.%x)\n",
-                    (1 << (NV_PCI_MAX_MMIO_BITS_SUPPORTED - 30)),
-                    NV_KERNEL_NAME, i,
-                    (NV_PCI_RESOURCE_SIZE(pci_dev, i) >> 20),
-                    (NvU64)NV_PCI_RESOURCE_START(pci_dev, i),
-                    NV_PCI_DOMAIN_NUMBER(pci_dev),
-                    NV_PCI_BUS_NUMBER(pci_dev), NV_PCI_SLOT_NUMBER(pci_dev),
-                    PCI_FUNC(pci_dev->devfn));
-                goto failed;
-            }
-#endif
             if ((NV_PCI_RESOURCE_FLAGS(pci_dev, i) & PCI_BASE_ADDRESS_MEM_TYPE_64) &&
                 (NV_PCI_RESOURCE_FLAGS(pci_dev, i) & PCI_BASE_ADDRESS_MEM_PREFETCH))
             {
-                struct pci_dev *bridge = pci_dev->bus->self;
-                NvU32 base_upper, limit_upper;
-
                 last_bar_64bit = NV_TRUE;
-
-                if (bridge == NULL)
-                    goto next_bar;
-
-                pci_read_config_dword(pci_dev, NVRM_PCICFG_BAR_OFFSET(i) + 4,
-                                      &base_upper);
-                if (base_upper == 0)
-                    goto next_bar;
-
-                pci_read_config_dword(bridge, PCI_PREF_BASE_UPPER32,
-                        &base_upper);
-                pci_read_config_dword(bridge, PCI_PREF_LIMIT_UPPER32,
-                        &limit_upper);
-
-                if ((base_upper != 0) && (limit_upper != 0))
-                    goto next_bar;
-
-                nv_printf(NV_DBG_ERRORS,
-                    "NVRM: This is a 64-bit BAR mapped above 4GB by the system\n"
-                    "NVRM: BIOS or the %s kernel, but the PCI bridge\n"
-                    "NVRM: immediately upstream of this GPU does not define\n"
-                    "NVRM: a matching prefetchable memory window.\n",
-                    NV_KERNEL_NAME);
-                nv_printf(NV_DBG_ERRORS,
-                    "NVRM: This may be due to a known Linux kernel bug.  Please\n"
-                    "NVRM: see the README section on 64-bit BARs for additional\n"
-                    "NVRM: information.\n");
-                goto failed;
             }
 
-next_bar:
             //
             // If we are here, then we have found a valid BAR -- 32 or 64-bit.
             //
@@ -687,8 +679,8 @@ next_bar:
         // Invalid 32 or 64-bit BAR.
         nv_printf(NV_DBG_ERRORS,
             "NVRM: This PCI I/O region assigned to your NVIDIA device is invalid:\n"
-            "NVRM: BAR%d is %dM @ 0x%llx (PCI:%04x:%02x:%02x.%x)\n", i,
-            (NV_PCI_RESOURCE_SIZE(pci_dev, i) >> 20),
+            "NVRM: BAR%d is %" NvU64_fmtu "M @ 0x%" NvU64_fmtx " (PCI:%04x:%02x:%02x.%x)\n", i,
+            (NvU64)(NV_PCI_RESOURCE_SIZE(pci_dev, i) >> 20),
             (NvU64)NV_PCI_RESOURCE_START(pci_dev, i),
             NV_PCI_DOMAIN_NUMBER(pci_dev), NV_PCI_BUS_NUMBER(pci_dev),
             NV_PCI_SLOT_NUMBER(pci_dev), PCI_FUNC(pci_dev->devfn));
@@ -708,10 +700,10 @@ next_bar:
                             nv_device_name))
     {
         nv_printf(NV_DBG_ERRORS,
-            "NVRM: request_mem_region failed for %dM @ 0x%llx. This can\n"
+            "NVRM: request_mem_region failed for %" NvU64_fmtu "M @ 0x%" NvU64_fmtx ". This can\n"
             "NVRM: occur when a driver such as rivatv is loaded and claims\n"
             "NVRM: ownership of the device's registers.\n",
-            (NV_PCI_RESOURCE_SIZE(pci_dev, regs_bar_index) >> 20),
+            (NvU64)(NV_PCI_RESOURCE_SIZE(pci_dev, regs_bar_index) >> 20),
             (NvU64)NV_PCI_RESOURCE_START(pci_dev, regs_bar_index));
         goto failed;
     }
@@ -782,32 +774,33 @@ next_bar:
     NV_ATOMIC_SET(nvl->numa_info.status, NV_IOCTL_NUMA_STATUS_DISABLED);
     nvl->numa_info.node_id = NUMA_NO_NODE;
 
-    nv_init_ibmnpu_info(nv);
-
-    nv_init_coherent_link_info(nv);
-
-#if defined(NVCPU_PPC64LE)
-    // Use HW NUMA support as a proxy for ATS support. This is true in the only
-    // PPC64LE platform where ATS is currently supported (IBM P9).
-    nv_ats_supported &= nv_platform_supports_numa(nvl);
-#else
-#if defined(NV_PCI_DEV_HAS_ATS_ENABLED)
-    nv_ats_supported &= pci_dev->ats_enabled;
+#if NV_IS_EXPORT_SYMBOL_GPL_pci_ats_supported
+    nv->ats_support = pci_ats_supported(nvl->pci_dev);
+#elif defined(NV_PCI_DEV_HAS_ATS_ENABLED)
+    nv->ats_support = nvl->pci_dev->ats_enabled;
 #endif
-#endif
-    if (nv_ats_supported)
+
+    if (pci_devid_is_self_hosted(pci_dev->device))
+    {
+        nv_init_coherent_link_info(nv);
+    }
+
+    if (nv->ats_support)
     {
         NV_DEV_PRINTF(NV_DBG_INFO, nv, "ATS supported by this GPU!\n");
     }
-    else
-    {
-        NV_DEV_PRINTF(NV_DBG_INFO, nv, "ATS not supported by this GPU. "
-                      "Disabling ATS support for all the GPUs in the system!\n");
+    nv_ats_supported |= nv->ats_support;
+
+    if (nv->pci_info.vendor_id == 0x10de && nv->pci_info.device_id == 0x2e2a) {
+        /* Disable advertising ATS support to UVM when GB20B is present */
+        nv_ats_supported = NV_FALSE;
     }
+
+    nv_clk_get_handles(nv);
 
     pci_set_master(pci_dev);
 
-#if defined(CONFIG_VGA_ARB) && !defined(NVCPU_PPC64LE)
+#if defined(CONFIG_VGA_ARB)
 #if defined(VGA_DEFAULT_DEVICE)
 #if defined(NV_VGA_TRYGET_PRESENT)
     vga_tryget(VGA_DEFAULT_DEVICE, VGA_RSRC_LEGACY_MASK);
@@ -903,6 +896,12 @@ next_bar:
      * after enabling dynamic power management.
      */
     rm_enable_dynamic_power_management(sp, nv);
+
+    /*
+     * This must be the last action in nv_pci_probe(). Do not add code after this line.
+     */
+    rm_notify_gpu_addition(sp, nv);
+
     nv_kmem_cache_free_stack(sp);
 
     return 0;
@@ -921,8 +920,8 @@ err_add_device:
 err_zero_dev:
     rm_free_private_state(sp, nv);
 err_not_supported:
+    nv_clk_clear_handles(nv);
     nv_ats_supported = prev_nv_ats_supported;
-    nv_destroy_ibmnpu_info(nv);
     nv_lock_destroy_locks(sp, nv);
     if (nvl != NULL)
     {
@@ -983,6 +982,9 @@ nv_pci_remove(struct pci_dev *pci_dev)
 
     LOCK_NV_LINUX_DEVICES();
     down(&nvl->ldata_lock);
+    nv->flags |= NV_FLAG_PCI_REMOVE_IN_PROGRESS;
+
+    rm_notify_gpu_removal(sp, nv);
 
     /*
      * Sanity check: A removed device shouldn't have a non-zero usage_count.
@@ -1042,6 +1044,8 @@ nv_pci_remove(struct pci_dev *pci_dev)
     /* Remove proc entry for this GPU */
     nv_procfs_remove_gpu(nvl);
 
+    nv_clk_clear_handles(nv);
+
     rm_cleanup_dynamic_power_management(sp, nv);
 
     nv->removed = NV_TRUE;
@@ -1071,9 +1075,6 @@ nv_pci_remove(struct pci_dev *pci_dev)
         filp_close(nvl->sysfs_config_file, NULL);
         nvl->sysfs_config_file = NULL;
     }
-
-    nv_unregister_ibmnpu_devices(nv);
-    nv_destroy_ibmnpu_info(nv);
 
     if (NV_ATOMIC_READ(nvl->usage_count) == 0)
     {
@@ -1290,96 +1291,27 @@ nv_pci_count_devices(void)
     return count;
 }
 
-#if defined(NV_PCI_ERROR_RECOVERY)
-static pci_ers_result_t
-nv_pci_error_detected(
-    struct pci_dev *pci_dev,
-    nv_pci_channel_state_t error
+/*
+ * On coherent platforms that support BAR1 mappings for GPUDirect RDMA,
+ * dma-buf and nv-p2p subsystems need to ensure the 2 devices belong to
+ * the same IOMMU group.
+ */
+NvBool nv_pci_is_valid_topology_for_direct_pci(
+    nv_state_t    *nv,
+    struct device *dev
 )
 {
-    nv_linux_state_t *nvl = pci_get_drvdata(pci_dev);
+    struct pci_dev *pdev0 = to_pci_dev(nv->dma_dev->dev);
+    struct pci_dev *pdev1 = to_pci_dev(dev);
 
-    if ((nvl == NULL) || (nvl->pci_dev != pci_dev))
+    if (!nv->coherent)
     {
-        nv_printf(NV_DBG_ERRORS, "NVRM: %s: invalid device!\n", __FUNCTION__);
-        return PCI_ERS_RESULT_NONE;
+        return NV_FALSE;
     }
 
-    /*
-     * Tell Linux to continue recovery of the device. The kernel will enable
-     * MMIO for the GPU and call the mmio_enabled callback.
-     */
-    return PCI_ERS_RESULT_CAN_RECOVER;
+    return (NVreg_GrdmaPciTopoCheckOverride != 0) ||
+           (pdev0->dev.iommu_group == pdev1->dev.iommu_group);
 }
-
-static pci_ers_result_t
-nv_pci_mmio_enabled(
-    struct pci_dev *pci_dev
-)
-{
-    NV_STATUS         status = NV_OK;
-    nv_stack_t       *sp = NULL;
-    nv_linux_state_t *nvl = pci_get_drvdata(pci_dev);
-    nv_state_t       *nv = NULL;
-
-    if ((nvl == NULL) || (nvl->pci_dev != pci_dev))
-    {
-        nv_printf(NV_DBG_ERRORS, "NVRM: %s: invalid device!\n", __FUNCTION__);
-        goto done;
-    }
-
-    nv = NV_STATE_PTR(nvl);
-
-    if (nv_kmem_cache_alloc_stack(&sp) != 0)
-    {
-        nv_printf(NV_DBG_ERRORS, "NVRM: %s: failed to allocate stack!\n",
-            __FUNCTION__);
-        goto done;
-    }
-
-    NV_DEV_PRINTF(NV_DBG_ERRORS, nv, "A fatal error was detected.\n");
-
-    /*
-     * MMIO should be re-enabled now. If we still get bad reads, there's
-     * likely something wrong with the adapter itself that will require a
-     * reset. This should let us know whether the GPU has completely fallen
-     * off the bus or just did something the host didn't like.
-     */
-    status = rm_is_supported_device(sp, nv);
-    if (status != NV_OK)
-    {
-        NV_DEV_PRINTF(NV_DBG_ERRORS, nv,
-            "The kernel has enabled MMIO for the device,\n"
-            "NVRM: but it still appears unreachable. The device\n"
-            "NVRM: will not function properly until it is reset.\n");
-    }
-
-    status = rm_log_gpu_crash(sp, nv);
-    if (status != NV_OK)
-    {
-        NV_DEV_PRINTF_STATUS(NV_DBG_ERRORS, nv, status,
-                      "Failed to log crash data\n");
-        goto done;
-    }
-
-done:
-    if (sp != NULL)
-    {
-        nv_kmem_cache_free_stack(sp);
-    }
-
-    /*
-     * Tell Linux to abandon recovery of the device. The kernel might be able
-     * to recover the device, but RM and clients don't yet support that.
-     */
-    return PCI_ERS_RESULT_DISCONNECT;
-}
-
-struct pci_error_handlers nv_pci_error_handlers = {
-    .error_detected = nv_pci_error_detected,
-    .mmio_enabled   = nv_pci_mmio_enabled,
-};
-#endif
 
 #if defined(CONFIG_PM)
 extern struct dev_pm_ops nv_pm_ops;
@@ -1397,9 +1329,6 @@ struct pci_driver nv_pci_driver = {
 #endif
 #if defined(CONFIG_PM)
     .driver.pm = &nv_pm_ops,
-#endif
-#if defined(NV_PCI_ERROR_RECOVERY)
-    .err_handler = &nv_pci_error_handlers,
 #endif
 };
 

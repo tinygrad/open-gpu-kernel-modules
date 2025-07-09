@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -22,7 +22,7 @@
  */
 
 #include "core/core.h"
-#include "objtmr.h"
+#include "gpu/timer/objtmr.h"
 #include "os/os.h"
 #include "gpu/gpu.h"
 #include "class/cl0080.h"
@@ -41,7 +41,7 @@
  * @return       NV_OK if the GID if SHA1 GID is requested
  */
 NV_STATUS
-gpuGenGidData_VGPUSTUB
+gpuGenGidData_VF
 (
     OBJGPU *pGpu,
     NvU8   *pGidData,
@@ -66,7 +66,7 @@ gpuGenGidData_VGPUSTUB
  * @returns     FBIO Floorsweeping Mask - On is enabled
  *
  */
-NvU32 gpuGetActiveFBIOs_VGPUSTUB
+NvU64 gpuGetActiveFBIOs_VF
 (
     OBJGPU *pGpu
 )
@@ -83,7 +83,7 @@ NvU32 gpuGetActiveFBIOs_VGPUSTUB
 }
 
 NV_STATUS
-gpuCreateDefaultClientShare_VGPUSTUB
+gpuCreateDefaultClientShare_VF
 (
     OBJGPU *pGpu
 )
@@ -148,7 +148,7 @@ failed:
 }
 
 void
-gpuDestroyDefaultClientShare_VGPUSTUB
+gpuDestroyDefaultClientShare_VF
 (
     OBJGPU *pGpu
 )
@@ -177,7 +177,7 @@ gpuDestroyDefaultClientShare_VGPUSTUB
  */
 
 NvBool
-gpuCheckPageRetirementSupport_VGPUSTUB
+gpuCheckPageRetirementSupport_VF
 (
     OBJGPU *pGpu
 )
@@ -189,7 +189,7 @@ gpuCheckPageRetirementSupport_VGPUSTUB
 }
 
 NV_STATUS
-gpuInitSriov_VGPUSTUB
+gpuInitSriov_VF
 (
     OBJGPU *pGpu
 )
@@ -204,7 +204,7 @@ gpuInitSriov_VGPUSTUB
 }
 
 NV_STATUS
-gpuGetNameString_VGPUSTUB
+gpuGetNameString_VF
 (
     OBJGPU *pGpu,
     NvU32 type,
@@ -230,7 +230,7 @@ gpuGetNameString_VGPUSTUB
 }
 
 NV_STATUS
-gpuGetShortNameString_VGPUSTUB
+gpuGetShortNameString_VF
 (
     OBJGPU *pGpu,
     NvU8 *nameStringBuffer
@@ -247,17 +247,19 @@ gpuGetShortNameString_VGPUSTUB
 }
 
 NvBool
-gpuIsGlobalPoisonFuseEnabled_VGPUSTUB
+gpuIsGlobalPoisonFuseEnabled_VF
 (
     OBJGPU *pGpu
 )
 {
     VGPU_STATIC_INFO *pVSI = GPU_GET_STATIC_INFO(pGpu);
+    NV_ASSERT_OR_RETURN(pVSI != NULL, NV_FALSE);
+
     return pVSI->poisonFuseEnabled;
 }
 
 NV_STATUS
-gpuConstructDeviceInfoTable_VGPUSTUB
+gpuConstructDeviceInfoTable_VF
 (
     OBJGPU *pGpu
 )
@@ -281,10 +283,27 @@ gpuConstructDeviceInfoTable_VGPUSTUB
     NV_ASSERT_OR_RETURN(pGpu->pDeviceInfoTable != NULL, NV_ERR_NO_MEMORY);
 
     pGpu->numDeviceInfoEntries = pVSI->deviceInfoTable.numEntries;
-    portMemCopy(pGpu->pDeviceInfoTable,
-                pGpu->numDeviceInfoEntries * (sizeof *pGpu->pDeviceInfoTable),
-                pVSI->deviceInfoTable.deviceInfoTable,
-                pVSI->deviceInfoTable.numEntries * (sizeof pVSI->deviceInfoTable.deviceInfoTable[0]));
+    for (NvU32 i = 0; i < pGpu->numDeviceInfoEntries; i++)
+    {
+        NV2080_CTRL_INTERNAL_DEVICE_INFO *pSrc =
+            &pVSI->deviceInfoTable.deviceInfoTable[i];
+
+        pGpu->pDeviceInfoTable[i] = (DEVICE_INFO2_ENTRY){
+            .faultId                = pSrc->faultId,
+            .instanceId             = pSrc->instanceId,
+            .typeEnum               = pSrc->typeEnum,
+            .resetId                = pSrc->resetId,
+            .devicePriBase          = pSrc->devicePriBase,
+            .isEngine               = pSrc->isEngine,
+            .rlEngId                = pSrc->rlEngId,
+            .groupId                = pSrc->groupId,
+            .runlistPriBase         = pSrc->runlistPriBase,
+            .groupId                = pSrc->groupId,
+            .ginTargetId            = pSrc->ginTargetId,
+            .deviceBroadcastPriBase = pSrc->deviceBroadcastPriBase,
+            .groupLocalInstanceId   = pSrc->groupLocalInstanceId
+        };
+    }
 
     return NV_OK;
 }
@@ -292,7 +311,7 @@ gpuConstructDeviceInfoTable_VGPUSTUB
 /*!
  * @brief Initialize GPU branding properties
  */
-NV_STATUS gpuInitBranding_VGPUSTUB(OBJGPU *pGpu)
+NV_STATUS gpuInitBranding_VF(OBJGPU *pGpu)
 {
     OBJVGPU *pVGpu = GPU_GET_VGPU(pGpu);
 
@@ -311,7 +330,7 @@ NV_STATUS gpuInitBranding_VGPUSTUB(OBJGPU *pGpu)
 }
 
 NV_STATUS
-gpuGetSkuInfo_VGPUSTUB
+gpuGetSkuInfo_VF
 (
     OBJGPU *pGpu,
     NV2080_CTRL_BIOS_GET_SKU_INFO_PARAMS *pParams
@@ -327,4 +346,15 @@ gpuGetSkuInfo_VGPUSTUB
                 sizeof(NV2080_CTRL_BIOS_GET_SKU_INFO_PARAMS));
 
     return NV_OK;
+}
+
+NvBool
+gpuValidateMIGSupport_VF
+(
+    OBJGPU *pGpu
+)
+{
+    VGPU_STATIC_INFO *pVSI = GPU_GET_STATIC_INFO(pGpu);
+
+    return pVSI->gpuPartitionInfo.swizzId != KMIGMGR_SWIZZID_INVALID;
 }

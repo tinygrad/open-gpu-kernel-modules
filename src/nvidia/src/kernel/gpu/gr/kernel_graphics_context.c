@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2020-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2020-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -1161,6 +1161,9 @@ kgrctxAllocMainCtxBuffer_IMPL
                       pAttr->cpuAttr,
                       allocFlags | MEMDESC_FLAGS_OWNED_BY_CURRENT_DEVICE));
 
+    if (kgraphicsIsOverrideContextBuffersToGpuCached(pGpu, pKernelGraphics))
+        memdescSetGpuCacheAttrib(pGrCtxBufferMemDesc, NV_MEMORY_CACHED);
+
     //
     // Force page size to 4KB, we can change this later when RM access method
     // support 64k pages
@@ -1227,6 +1230,9 @@ kgrctxAllocPatchBuffer_IMPL
                       ADDR_UNKNOWN,
                       pAttr->cpuAttr,
                       flags));
+
+    if (kgraphicsIsOverrideContextBuffersToGpuCached(pGpu, pKernelGraphics))
+        memdescSetGpuCacheAttrib(*ppMemDesc, NV_MEMORY_CACHED);
 
     //
     // Force page size to 4KB we can change this later when RM access method
@@ -1312,6 +1318,9 @@ kgrctxAllocPmBuffer_IMPL
                       ADDR_UNKNOWN,
                       pAttr->cpuAttr,
                       flags));
+
+    if (kgraphicsIsOverrideContextBuffersToGpuCached(pGpu, pKernelGraphics))
+        memdescSetGpuCacheAttrib(*ppMemDesc, NV_MEMORY_CACHED);
 
     //
     // Force page size to 4KB we can change this later when RM access method
@@ -1688,7 +1697,7 @@ kgrctxPrepareInitializeCtxBuffer_IMPL
     NvBool *pbAddEntry
 )
 {
-    MEMORY_DESCRIPTOR *pMemDesc;
+    MEMORY_DESCRIPTOR *pMemDesc = NULL;
     KernelGraphicsContextUnicast *pKernelGraphicsContextUnicast;
     NvU32 physAttr;
 
@@ -1860,7 +1869,7 @@ kgrctxPreparePromoteCtxBuffer_IMPL
 )
 {
     KernelGraphicsContextUnicast *pKernelGraphicsContextUnicast;
-    VA_LIST *pVaList;
+    VA_LIST *pVaList = NULL;
     NvU64 vaddr;
     NvU64 refCount;
     OBJGVASPACE *pGVAS = dynamicCast(pKernelChannel->pVAS, OBJGVASPACE);
@@ -2331,6 +2340,9 @@ kgrctxUnmapCtxPreemptionBuffers_IMPL
     kgraphicsUnmapCtxBuffer(pGpu, pKernelGraphics, pVAS, &pKernelGraphicsContextUnicast->pagepoolCtxswBuffer.vAddrList);
 
     kgraphicsUnmapCtxBuffer(pGpu, pKernelGraphics, pVAS, &pKernelGraphicsContextUnicast->rtvCbCtxswBuffer.vAddrList);
+	
+    if (kgraphicsGetPeFiroBufferEnabled(pGpu, pKernelGraphics))
+        kgraphicsUnmapCtxBuffer(pGpu, pKernelGraphics, pVAS, &pKernelGraphicsContextUnicast->setupCtxswBuffer.vAddrList);
 }
 
 /**
@@ -2844,6 +2856,13 @@ kgrctxFreeCtxPreemptionBuffers_IMPL
     memdescFree(pKernelGraphicsContextUnicast->rtvCbCtxswBuffer.pMemDesc);
     memdescDestroy(pKernelGraphicsContextUnicast->rtvCbCtxswBuffer.pMemDesc);
     pKernelGraphicsContextUnicast->rtvCbCtxswBuffer.pMemDesc = NULL;
+
+    if (pKernelGraphicsContextUnicast->setupCtxswBuffer.pMemDesc != NULL)
+    {
+        memdescFree(pKernelGraphicsContextUnicast->setupCtxswBuffer.pMemDesc);
+        memdescDestroy(pKernelGraphicsContextUnicast->setupCtxswBuffer.pMemDesc);
+        pKernelGraphicsContextUnicast->setupCtxswBuffer.pMemDesc = NULL;
+    }
 }
 
 /*!
@@ -3260,19 +3279,16 @@ kgrctxDecObjectCount_IMPL
  * one VGPU configuration.
  */
 GR_GLOBALCTX_BUFFER
-kgrctxGetRegisterAccessMapId_PF
+kgrctxGetRegisterAccessMapId_IMPL
 (
     OBJGPU *pGpu,
     KernelGraphicsContext *pKernelGraphicsContext,
     KernelChannel *pKernelChannel
 )
 {
-    RmClient *pRmClient = dynamicCast(RES_GET_CLIENT(pKernelChannel), RmClient);
-    RS_PRIV_LEVEL privLevel = rmclientGetCachedPrivilege(pRmClient);
-
     // Using cached privilege because this function is called at a raised IRQL.
-    if ((privLevel >= RS_PRIV_LEVEL_USER_ROOT)
-            && !hypervisorIsVgxHyper() && IS_GFID_PF(kchannelGetGfid(pKernelChannel)))
+    if (kchannelCheckIsAdmin(pKernelChannel)
+        && !hypervisorIsVgxHyper() && IS_GFID_PF(kchannelGetGfid(pKernelChannel)))
     {
         return GR_GLOBALCTX_BUFFER_UNRESTRICTED_PRIV_ACCESS_MAP;
     }
@@ -3289,23 +3305,20 @@ kgrctxCtrlGetTpcPartitionMode_IMPL
 {
     OBJGPU *pGpu = GPU_RES_GET_GPU(pKernelGraphicsContext);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
-    if (IS_VIRTUAL(pGpu) || IS_GSP_CLIENT(pGpu))
+    if (IS_GSP_CLIENT(pGpu))
     {
+        RM_API *pRmApi = GPU_GET_PHYSICAL_RMAPI(pGpu);
         CALL_CONTEXT *pCallContext = resservGetTlsCallContext();
         RmCtrlParams *pRmCtrlParams = pCallContext->pControlParams;
-        NV_STATUS status = NV_OK;
 
-        NV_RM_RPC_CONTROL(pGpu,
-                          pRmCtrlParams->hClient,
-                          pRmCtrlParams->hObject,
-                          pRmCtrlParams->cmd,
-                          pRmCtrlParams->pParams,
-                          pRmCtrlParams->paramsSize,
-                          status);
-
-        return status;
+        return pRmApi->Control(pRmApi,
+                               pRmCtrlParams->hClient,
+                               pRmCtrlParams->hObject,
+                               pRmCtrlParams->cmd,
+                               pRmCtrlParams->pParams,
+                               pRmCtrlParams->paramsSize);
     }
 
     return gpuresInternalControlForward_IMPL(staticCast(pKernelGraphicsContext, GpuResource),
@@ -3323,29 +3336,57 @@ kgrctxCtrlSetTpcPartitionMode_IMPL
 {
     OBJGPU *pGpu = GPU_RES_GET_GPU(pKernelGraphicsContext);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
-    if (IS_VIRTUAL(pGpu) || IS_GSP_CLIENT(pGpu))
+    if (IS_GSP_CLIENT(pGpu))
     {
+        RM_API *pRmApi = GPU_GET_PHYSICAL_RMAPI(pGpu);
         CALL_CONTEXT *pCallContext = resservGetTlsCallContext();
         RmCtrlParams *pRmCtrlParams = pCallContext->pControlParams;
-        NV_STATUS status = NV_OK;
 
-        NV_RM_RPC_CONTROL(pGpu,
-                          pRmCtrlParams->hClient,
-                          pRmCtrlParams->hObject,
-                          pRmCtrlParams->cmd,
-                          pRmCtrlParams->pParams,
-                          pRmCtrlParams->paramsSize,
-                          status);
-
-        return status;
+        return pRmApi->Control(pRmApi,
+                               pRmCtrlParams->hClient,
+                               pRmCtrlParams->hObject,
+                               pRmCtrlParams->cmd,
+                               pRmCtrlParams->pParams,
+                               pRmCtrlParams->paramsSize);
     }
 
     return gpuresInternalControlForward_IMPL(staticCast(pKernelGraphicsContext, GpuResource),
                                              NV0090_CTRL_CMD_INTERNAL_SET_TPC_PARTITION_MODE,
                                              pParams,
                                              sizeof(*pParams));
+}
+
+NV_STATUS
+kgrctxCtrlSetLgSectorPromotion_IMPL
+(
+    KernelGraphicsContext* pKernelGraphicsContext,
+    NV0090_CTRL_SET_LG_SECTOR_PROMOTION_PARAMS* pParams
+)
+{
+    OBJGPU* pGpu = GPU_RES_GET_GPU(pKernelGraphicsContext);
+
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
+
+    if (IS_GSP_CLIENT(pGpu))
+    {
+        RM_API* pRmApi = GPU_GET_PHYSICAL_RMAPI(pGpu);
+        CALL_CONTEXT* pCallContext = resservGetTlsCallContext();
+        RmCtrlParams* pRmCtrlParams = pCallContext->pControlParams;
+
+        return pRmApi->Control(pRmApi,
+            pRmCtrlParams->hClient,
+            pRmCtrlParams->hObject,
+            pRmCtrlParams->cmd,
+            pRmCtrlParams->pParams,
+            pRmCtrlParams->paramsSize);
+    }
+
+    return gpuresInternalControlForward_IMPL(staticCast(pKernelGraphicsContext, GpuResource),
+        NV0090_CTRL_CMD_INTERNAL_SET_LG_SECTOR_PROMOTION,
+        pParams,
+        sizeof(*pParams));
 }
 
 NV_STATUS
@@ -3357,23 +3398,20 @@ kgrctxCtrlGetMMUDebugMode_IMPL
 {
     OBJGPU *pGpu = GPU_RES_GET_GPU(pKernelGraphicsContext);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
-    if (IS_VIRTUAL(pGpu) || IS_GSP_CLIENT(pGpu))
+    if (IS_GSP_CLIENT(pGpu))
     {
+        RM_API *pRmApi = GPU_GET_PHYSICAL_RMAPI(pGpu);
         CALL_CONTEXT *pCallContext = resservGetTlsCallContext();
         RmCtrlParams *pRmCtrlParams = pCallContext->pControlParams;
-        NV_STATUS status = NV_OK;
 
-        NV_RM_RPC_CONTROL(pGpu,
-                          pRmCtrlParams->hClient,
-                          pRmCtrlParams->hObject,
-                          pRmCtrlParams->cmd,
-                          pRmCtrlParams->pParams,
-                          pRmCtrlParams->paramsSize,
-                          status);
-
-        return status;
+        return pRmApi->Control(pRmApi,
+                               pRmCtrlParams->hClient,
+                               pRmCtrlParams->hObject,
+                               pRmCtrlParams->cmd,
+                               pRmCtrlParams->pParams,
+                               pRmCtrlParams->paramsSize);
     }
 
     return gpuresInternalControlForward_IMPL(staticCast(pKernelGraphicsContext, GpuResource),
@@ -3391,7 +3429,7 @@ kgrctxCtrlProgramVidmemPromote_IMPL
 {
     OBJGPU *pGpu = GPU_RES_GET_GPU(pKernelGraphicsContext);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     if (IS_VIRTUAL(pGpu) || IS_GSP_CLIENT(pGpu))
     {
@@ -3512,6 +3550,8 @@ shrkgrctxConstructUnicast_IMPL
     NV_ASSERT_OK_OR_RETURN(vaListInit(&pKernelGraphicsContextUnicast->betaCBCtxswBuffer.vAddrList));
     NV_ASSERT_OK_OR_RETURN(vaListInit(&pKernelGraphicsContextUnicast->pagepoolCtxswBuffer.vAddrList));
     NV_ASSERT_OK_OR_RETURN(vaListInit(&pKernelGraphicsContextUnicast->rtvCbCtxswBuffer.vAddrList));
+    if (kgraphicsGetPeFiroBufferEnabled(pGpu, pKernelGraphics))
+        NV_ASSERT_OK_OR_RETURN(vaListInit(&pKernelGraphicsContextUnicast->setupCtxswBuffer.vAddrList));
 
     pKernelGraphicsContextUnicast->bSupportsPerSubctxHeader =
         kgraphicsIsPerSubcontextContextHeaderSupported(pGpu, pKernelGraphics);
@@ -3584,6 +3624,7 @@ shrkgrctxDestructUnicast_IMPL
     vaListDestroy(&pKernelGraphicsContextUnicast->betaCBCtxswBuffer.vAddrList);
     vaListDestroy(&pKernelGraphicsContextUnicast->pagepoolCtxswBuffer.vAddrList);
     vaListDestroy(&pKernelGraphicsContextUnicast->rtvCbCtxswBuffer.vAddrList);
+    vaListDestroy(&pKernelGraphicsContextUnicast->setupCtxswBuffer.vAddrList);
 }
 
 /*!

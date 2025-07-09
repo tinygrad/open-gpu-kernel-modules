@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2017-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2017-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -41,7 +41,7 @@
 #include "gpu/gsp/gsp_trace_rats_macro.h"
 
 static NV_STATUS _allocAndMapMemory(CALL_CONTEXT *pCallContext, NvP64 pAddress, MEMORY_DESCRIPTOR** ppMemDesc, NvU64 size, NvBool bKernel,
-    NvP64* pKernelAddr, NvP64* pKernelPriv, NvP64* pUserAddr, NvP64* pUserPriv);
+    NvP64* pKernelAddr, NvP64* pKernelPriv, NvP64* pUserAddr, NvP64* pUserPriv, Subdevice *pSubdevice);
 
 static void _unmapAndFreeMemory(MEMORY_DESCRIPTOR *pMemDesc, NvBool bKernel, NvP64 kernelAddr,
     NvP64 kernelPriv, NvP64 userAddr, NvP64 userPriv);
@@ -60,8 +60,8 @@ eventbufferConstruct_IMPL
     EVENT_BUFFER_MAP_INFO            *pKernelMap     = &pEventBuffer->kernelMapInfo;
     EVENT_BUFFER_MAP_INFO            *pClientMap     = &pEventBuffer->clientMapInfo;
 
-    NvU32                             hClient        = pCallContext->pClient->hClient;
-    NvBool                            bKernel        = (rmclientGetCachedPrivilegeByHandle(hClient) >= RS_PRIV_LEVEL_KERNEL);
+    RmClient                         *pRmClient;
+    NvBool                            bKernel;
 
     NvU32                             recordBufferSize;
     NvP64                             kernelNotificationhandle;
@@ -75,6 +75,11 @@ eventbufferConstruct_IMPL
     RsResourceRef                    *pVardataRef    = NULL;
     NvHandle                          hMapperClient  = 0;
     NvHandle                          hMapperDevice  = 0;
+
+    pRmClient = dynamicCast(pCallContext->pClient, RmClient);
+    NV_ASSERT_OR_RETURN(pRmClient != NULL, NV_ERR_INVALID_CLIENT);
+
+    bKernel = (rmclientGetCachedPrivilege(pRmClient) >= RS_PRIV_LEVEL_KERNEL);
 
     pAllocParams->bufferHeader  = NvP64_NULL;
     pAllocParams->recordBuffer  = NvP64_NULL;
@@ -401,7 +406,8 @@ eventbufferConstruct_IMPL
                                     &pKernelMap->headerAddr,
                                     &pKernelMap->headerPriv,
                                     &pClientMap->headerAddr,
-                                    &pClientMap->headerPriv);
+                                    &pClientMap->headerPriv,
+                                    pSubdevice);
         if (status != NV_OK)
             goto cleanup;
 
@@ -413,7 +419,8 @@ eventbufferConstruct_IMPL
                                     &pKernelMap->recordBuffAddr,
                                     &pKernelMap->recordBuffPriv,
                                     &pClientMap->recordBuffAddr,
-                                    &pClientMap->recordBuffPriv);
+                                    &pClientMap->recordBuffPriv,
+                                    pSubdevice);
         if (status != NV_OK)
             goto cleanup;
     }
@@ -439,7 +446,8 @@ eventbufferConstruct_IMPL
                     &pKernelMap->vardataBuffAddr,
                     &pKernelMap->vardataBuffPriv,
                     &pClientMap->vardataBuffAddr,
-                    &pClientMap->vardataBuffPriv);
+                    &pClientMap->vardataBuffPriv,
+                    pSubdevice);
 
             if (status != NV_OK)
                 goto cleanup;
@@ -481,8 +489,13 @@ eventbufferDestruct_IMPL
     CALL_CONTEXT          *pCallContext;
     EVENT_BUFFER_MAP_INFO *pClientMap         = &pEventBuffer->clientMapInfo;
     EVENT_BUFFER_MAP_INFO *pKernelMap         = &pEventBuffer->kernelMapInfo;
-    NvBool                 bKernel            = rmclientGetCachedPrivilegeByHandle(pEventBuffer->hClient) >= RS_PRIV_LEVEL_KERNEL;
+    RmClient              *pRmClient          = dynamicCast(RES_GET_CLIENT(pEventBuffer), RmClient);
+    NvBool                 bKernel;
     void                  *notificationHandle = NvP64_VALUE(pEventBuffer->producerInfo.notificationHandle);
+
+    NV_ASSERT_OR_RETURN_VOID(pRmClient != NULL);
+
+    bKernel = (rmclientGetCachedPrivilege(pRmClient) >= RS_PRIV_LEVEL_KERNEL);
 
     resGetFreeParams(staticCast(pEventBuffer, RsResource), &pCallContext, NULL);
 
@@ -526,15 +539,22 @@ _allocAndMapMemory
     NvP64* pKernelAddr,
     NvP64* pKernelPriv,
     NvP64* pUserAddr,
-    NvP64* pUserPriv
+    NvP64* pUserPriv,
+    Subdevice *pSubdevice
 )
 {
     NV_STATUS           status;
     MEMORY_DESCRIPTOR*  pMemDesc = NULL;
+    OBJGPU*             pGpu     = NULL;
 
     NV_ASSERT_OR_RETURN(pAddress == NvP64_NULL, NV_ERR_NOT_SUPPORTED);
 
-    status = memdescCreate(ppMemDesc, NULL, size, 0, NV_MEMORY_CONTIGUOUS,
+    if (pSubdevice != NULL)
+        pGpu = GPU_RES_GET_GPU(pSubdevice);
+
+    NV_ASSERT_OR_RETURN(pSubdevice != NULL && pGpu != NULL, NV_ERR_INVALID_STATE);
+ 
+    status = memdescCreate(ppMemDesc, pGpu, size, 0, NV_MEMORY_CONTIGUOUS,
             ADDR_SYSMEM, NV_MEMORY_WRITECOMBINED, MEMDESC_FLAGS_CPU_ONLY);
     if (status != NV_OK)
         return status;

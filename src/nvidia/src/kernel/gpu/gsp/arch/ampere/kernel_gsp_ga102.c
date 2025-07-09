@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -74,6 +74,7 @@ kgspConfigureFalcon_GA102
         falconConfig.crashcatEngConfig.bEnable = NV_TRUE;
         falconConfig.crashcatEngConfig.pName = MAKE_NV_PRINTF_STR("GSP");
         falconConfig.crashcatEngConfig.errorId = GSP_ERROR;
+        falconConfig.crashcatEngConfig.allocQueueSize = kgspGetCrashcatSysmemBufferSize(pKernelGsp);
     }
 
     kflcnConfigureEngine(pGpu, staticCast(pKernelGsp, KernelFalcon), &falconConfig);
@@ -109,13 +110,13 @@ kgspGetGspRmBootUcodeStorage_GA102
 
     if (kgspIsDebugModeEnabled(pGpu, pKernelGsp))
     {
-        *ppBinStorageImage = (BINDATA_STORAGE *)bindataArchiveGetStorage(pBinArchive, "ucode_image_dbg");
-        *ppBinStorageDesc  = (BINDATA_STORAGE *)bindataArchiveGetStorage(pBinArchive, "ucode_desc_dbg");
+        *ppBinStorageImage = (BINDATA_STORAGE *)bindataArchiveGetStorage(pBinArchive, BINDATA_LABEL_UCODE_IMAGE_DBG);
+        *ppBinStorageDesc  = (BINDATA_STORAGE *)bindataArchiveGetStorage(pBinArchive, BINDATA_LABEL_UCODE_DESC_DBG);
     }
     else
     {
-        *ppBinStorageImage = (BINDATA_STORAGE *)bindataArchiveGetStorage(pBinArchive, "ucode_image_prod");
-        *ppBinStorageDesc  = (BINDATA_STORAGE *)bindataArchiveGetStorage(pBinArchive, "ucode_desc_prod");
+        *ppBinStorageImage = (BINDATA_STORAGE *)bindataArchiveGetStorage(pBinArchive, BINDATA_LABEL_UCODE_IMAGE_PROD);
+        *ppBinStorageDesc  = (BINDATA_STORAGE *)bindataArchiveGetStorage(pBinArchive, BINDATA_LABEL_UCODE_DESC_PROD);
     }
 }
 
@@ -157,7 +158,7 @@ kgspExecuteSequencerCommand_GA102
 
             pKernelGsp->bLibosLogsPollingEnabled = NV_FALSE;
 
-            kflcnResetIntoRiscv_HAL(pGpu, pKernelFalcon);
+            NV_ASSERT_OK_OR_RETURN(kflcnResetIntoRiscv_HAL(pGpu, pKernelFalcon));
             kgspProgramLibosBootArgsAddr_HAL(pGpu, pKernelGsp);
 
             NV_PRINTF(LEVEL_INFO, "---------------Starting SEC2 to resume GSP-RM------------\n");

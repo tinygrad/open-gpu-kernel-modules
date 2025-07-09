@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -29,7 +29,7 @@
 #include "gpu/bus/kern_bus.h"
 #include "gpu/mmu/kern_gmmu.h"
 #include "kernel/gpu/bif/kernel_bif.h"
-#include "nvRmReg.h"
+#include "nvrm_registry.h"
 #include "nv_ref.h"
 
 #include "lib/protobuf/prb_util.h"
@@ -81,28 +81,6 @@ subdeviceCtrlCmdMcGetManufacturer_IMPL
 
     pManufacturerParams->manufacturer = pGpu->idInfo.Manufacturer;
 
-    return NV_OK;
-}
-
-NV_STATUS
-subdeviceCtrlCmdMcQueryHostclkSlowdownStatus_IMPL
-(
-    Subdevice *pSubdevice,
-    NV2080_CTRL_MC_QUERY_HOSTCLK_SLOWDOWN_STATUS_PARAMS *pGetStatusParams
-)
-{
-    pGetStatusParams->bDisabled = NV_FALSE;
-
-    return NV_OK;
-}
-
-NV_STATUS
-subdeviceCtrlCmdMcSetHostclkSlowdownStatus_IMPL
-(
-    Subdevice *pSubdevice,
-    NV2080_CTRL_MC_SET_HOSTCLK_SLOWDOWN_STATUS_PARAMS *pParams
-)
-{
     return NV_OK;
 }
 

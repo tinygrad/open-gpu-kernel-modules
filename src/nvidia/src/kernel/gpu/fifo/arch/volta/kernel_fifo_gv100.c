@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -29,8 +29,9 @@
 #include "kernel/rmapi/rmapi.h"
 #include "kernel/gpu/gpu.h"
 #include "kernel/mem_mgr/mem.h"
+#include "containers/eheap_old.h"
 
-#include "nvRmReg.h"
+#include "nvrm_registry.h"
 
 #include "published/volta/gv100/dev_fault.h"
 #include "published/volta/gv100/dev_ram.h"
@@ -126,6 +127,9 @@ kfifoEngineInfoXlate_GV100
 
     return kfifoEngineInfoXlate_GM107(pGpu, pKernelFifo, inType, inVal, outType, pOutVal);
 }
+
+// compile time check to ensure RM ctrl call does not support more than what the HW can.
+ct_assert(NV2080_CTRL_CMD_FIFO_MAX_CHANNELS_PER_TSG == NV_RAMRL_ENTRY_TSG_LENGTH_MAX);
 
 /*
  * @brief Gives the maxinum number of channels allowed per channel group
@@ -250,7 +254,7 @@ kfifoGetSubctxType_GV100
 
     pKernelCtxShare = (KernelCtxShare *)pBlock->pData;
     subctxType = DRF_VAL(_CTXSHARE, _ALLOCATION_FLAGS, _SUBCONTEXT, pKernelCtxShare->flags);
-    if (subctxType == NV_CTXSHARE_ALLOCATION_FLAGS_SUBCONTEXT_SPECIFIED)
+    if (subctxType >= NV_CTXSHARE_ALLOCATION_FLAGS_SUBCONTEXT_SPECIFIED)
     {
         subctxType = NV_CTXSHARE_ALLOCATION_FLAGS_SUBCONTEXT_ASYNC;
     }
@@ -410,4 +414,30 @@ kfifoGetFaultAccessTypeString_GV100
         default:
             return "UNRECOGNIZED_ACCESS_TYPE";
     }
+}
+
+/*!
+ * @brief Update the usermode doorbell register with work submit token to notify
+ *        host that work is available on this channel.
+ *
+ * @param[in] pGpu
+ * @param[in] pFifo
+ * @param[in] pKernelChannel  Channel to ring the doorbell for
+ */
+NV_STATUS
+kfifoRingChannelDoorBell_GV100
+(
+    OBJGPU          *pGpu,
+    KernelFifo      *pKernelFifo,
+    KernelChannel   *pKernelChannel
+)
+{
+    NvU32        workSubmitToken;
+
+    NV_ASSERT_OK_OR_RETURN(kfifoGenerateWorkSubmitToken(pGpu, pKernelFifo,
+                                                        pKernelChannel, &workSubmitToken,
+                                                        NV_TRUE));
+    NV_ASSERT_OK_OR_RETURN(kfifoUpdateUsermodeDoorbell_HAL(pGpu, pKernelFifo,
+                                                            workSubmitToken));
+    return NV_OK;
 }

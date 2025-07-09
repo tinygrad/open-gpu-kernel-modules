@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -29,7 +29,7 @@
 
 #include "gpu/gpu.h"
 #include "gpu/ce/kernel_ce.h"
-#include "nvRmReg.h"
+#include "nvrm_registry.h"
 
 //
 // NVLINK Override Configuration
@@ -44,7 +44,7 @@ knvlinkOverrideConfig_GP100
 {
     NV_STATUS status = NV_OK;
 
-    NV2080_CTRL_NVLINK_PROCESS_FORCED_CONFIGS_PARAMS forcedConfigParams;
+    NV2080_CTRL_INTERNAL_NVLINK_PROCESS_FORCED_CONFIGS_PARAMS forcedConfigParams;
     portMemSet(&forcedConfigParams, 0, sizeof(forcedConfigParams));
 
     forcedConfigParams.bLegacyForcedConfig = NV_TRUE;
@@ -52,7 +52,7 @@ knvlinkOverrideConfig_GP100
 
     // RPC to GSP-RM to for GSP-RM to process the forced NVLink configurations.
     status = knvlinkExecGspRmRpc(pGpu, pKernelNvlink,
-                                 NV2080_CTRL_CMD_NVLINK_PROCESS_FORCED_CONFIGS,
+                                 NV2080_CTRL_CMD_INTERNAL_NVLINK_PROCESS_FORCED_CONFIGS,
                                  (void *)&forcedConfigParams,
                                  sizeof(forcedConfigParams));
     if (status != NV_OK)
@@ -90,7 +90,7 @@ knvlinkGetUniquePeerIdMask_GP100
 
     for (i = 0; i < NV_ARRAY_ELEMENTS(pKernelNvlink->peerLinkMasks); i++)
     {
-        NvU32 peerLinkMask = pKernelNvlink->peerLinkMasks[i];
+        NvU32 peerLinkMask = KNVLINK_GET_MASK(pKernelNvlink, peerLinkMasks[i], 32);
         if (peerLinkMask != 0)
         {
             uniqueIdMask |= LOWESTBIT(peerLinkMask);
@@ -125,7 +125,7 @@ knvlinkGetUniquePeerId_GP100
 {
     NvU32 peerLinkMask;
 
-    peerLinkMask = pKernelNvlink->peerLinkMasks[gpuGetInstance(pRemoteGpu)];
+    peerLinkMask = KNVLINK_GET_MASK(pKernelNvlink, peerLinkMasks[gpuGetInstance(pRemoteGpu)], 32);
     if (peerLinkMask == 0)
     {
         return BUS_INVALID_PEER;
@@ -159,25 +159,25 @@ knvlinkRemoveMapping_GP100
 {
     NV_STATUS status = NV_OK;
 
-    NV2080_CTRL_NVLINK_REMOVE_NVLINK_MAPPING_PARAMS params;
+    NV2080_CTRL_INTERNAL_NVLINK_REMOVE_NVLINK_MAPPING_PARAMS params;
     portMemSet(&params, 0, sizeof(params));
 
     params.bL2Entry = bL2Entry;
 
     if (bAllMapping)
     {
-        params.mapTypeMask = NV2080_CTRL_NVLINK_REMOVE_NVLINK_MAPPING_TYPE_SYSMEM |
-                             NV2080_CTRL_NVLINK_REMOVE_NVLINK_MAPPING_TYPE_PEER;
+        params.mapTypeMask = NV2080_CTRL_INTERNAL_NVLINK_REMOVE_NVLINK_MAPPING_TYPE_SYSMEM |
+                             NV2080_CTRL_INTERNAL_NVLINK_REMOVE_NVLINK_MAPPING_TYPE_PEER;
         params.peerMask    = (1 << NVLINK_MAX_PEERS_SW) - 1;
     }
     else
     {
-        params.mapTypeMask = NV2080_CTRL_NVLINK_REMOVE_NVLINK_MAPPING_TYPE_PEER;
+        params.mapTypeMask = NV2080_CTRL_INTERNAL_NVLINK_REMOVE_NVLINK_MAPPING_TYPE_PEER;
         params.peerMask    = peerMask;
     }
 
     status = knvlinkExecGspRmRpc(pGpu, pKernelNvlink,
-                                 NV2080_CTRL_CMD_NVLINK_REMOVE_NVLINK_MAPPING,
+                                 NV2080_CTRL_CMD_INTERNAL_NVLINK_REMOVE_NVLINK_MAPPING,
                                  (void *)&params, sizeof(params));
     return status;
 }
@@ -259,10 +259,10 @@ knvlinkSetupPeerMapping_GP100
 )
 {
     NV_STATUS status = NV_OK;
-    NvU32     peerLinkMask;
+    NvU64     peerLinkMask;
 
-    NV2080_CTRL_NVLINK_PRE_SETUP_NVLINK_PEER_PARAMS  preSetupNvlinkPeerParams;
-    NV2080_CTRL_NVLINK_POST_SETUP_NVLINK_PEER_PARAMS postSetupNvlinkPeerParams;
+    NV2080_CTRL_INTERNAL_NVLINK_PRE_SETUP_NVLINK_PEER_PARAMS  preSetupNvlinkPeerParams;
+    NV2080_CTRL_INTERNAL_NVLINK_POST_SETUP_NVLINK_PEER_PARAMS postSetupNvlinkPeerParams;
 
     // HSHUB registers are updated during driver load if nvlink topology is forced
     if (!knvlinkIsForcedConfig(pGpu, pKernelNvlink))
@@ -276,7 +276,7 @@ knvlinkSetupPeerMapping_GP100
             return;
         }
 
-        peerLinkMask = pKernelNvlink->peerLinkMasks[gpuGetInstance(pRemoteGpu)];
+        peerLinkMask = KNVLINK_GET_MASK(pKernelNvlink, peerLinkMasks[gpuGetInstance(pRemoteGpu)], 64);
         knvlinkGetEffectivePeerLinkMask_HAL(pGpu, pKernelNvlink, pRemoteGpu, &peerLinkMask);
 
         if (peerLinkMask != 0)
@@ -288,7 +288,7 @@ knvlinkSetupPeerMapping_GP100
             preSetupNvlinkPeerParams.bNvswitchConn = knvlinkIsGpuConnectedToNvswitch(pGpu, pKernelNvlink);
 
             status = knvlinkExecGspRmRpc(pGpu, pKernelNvlink,
-                                         NV2080_CTRL_CMD_NVLINK_PRE_SETUP_NVLINK_PEER,
+                                         NV2080_CTRL_CMD_INTERNAL_NVLINK_PRE_SETUP_NVLINK_PEER,
                                          (void *)&preSetupNvlinkPeerParams,
                                          sizeof(preSetupNvlinkPeerParams));
             NV_ASSERT(status == NV_OK);
@@ -300,7 +300,7 @@ knvlinkSetupPeerMapping_GP100
             postSetupNvlinkPeerParams.peerMask = NVBIT(peerId);
 
             status = knvlinkExecGspRmRpc(pGpu, pKernelNvlink,
-                                         NV2080_CTRL_CMD_NVLINK_POST_SETUP_NVLINK_PEER,
+                                         NV2080_CTRL_CMD_INTERNAL_NVLINK_POST_SETUP_NVLINK_PEER,
                                          (void *)&postSetupNvlinkPeerParams,
                                          sizeof(postSetupNvlinkPeerParams));
             NV_ASSERT(status == NV_OK);
@@ -343,7 +343,7 @@ knvlinkProgramLinkSpeed_GP100
 {
     NV_STATUS status = NV_OK;
 
-    NV2080_CTRL_NVLINK_PROGRAM_LINK_SPEED_PARAMS programLinkSpeedParams;
+    NV2080_CTRL_INTERNAL_NVLINK_PROGRAM_LINK_SPEED_PARAMS programLinkSpeedParams;
     portMemSet(&programLinkSpeedParams, 0, sizeof(programLinkSpeedParams));
 
     programLinkSpeedParams.bPlatformLinerateDefined = NV_FALSE;
@@ -351,7 +351,7 @@ knvlinkProgramLinkSpeed_GP100
                           NV_REG_STR_RM_NVLINK_SPEED_CONTROL_SPEED_DEFAULT;
 
     status = knvlinkExecGspRmRpc(pGpu, pKernelNvlink,
-                                 NV2080_CTRL_CMD_NVLINK_PROGRAM_LINK_SPEED,
+                                 NV2080_CTRL_CMD_INTERNAL_NVLINK_PROGRAM_LINK_SPEED,
                                  (void *)&programLinkSpeedParams,
                                  sizeof(programLinkSpeedParams));
     if (status != NV_OK)

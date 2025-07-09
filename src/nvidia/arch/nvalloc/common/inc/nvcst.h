@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2004-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2004-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -65,6 +65,8 @@ CHIPSET_SETUP_FUNC(Intel_0685_setupFunc)
 CHIPSET_SETUP_FUNC(Intel_4381_setupFunc)
 CHIPSET_SETUP_FUNC(Intel_7A82_setupFunc)
 CHIPSET_SETUP_FUNC(Intel_7A04_setupFunc)
+CHIPSET_SETUP_FUNC(Intel_5795_setupFunc)
+CHIPSET_SETUP_FUNC(Intel_1B81_setupFunc)
 CHIPSET_SETUP_FUNC(SiS_656_setupFunc)
 CHIPSET_SETUP_FUNC(ATI_RS400_setupFunc)
 CHIPSET_SETUP_FUNC(ATI_RS480_setupFunc)
@@ -188,10 +190,11 @@ CSINFO chipsetInfo[] =
     {PCI_VENDOR_ID_INTEL,       0x4385, CS_INTEL_4381,      "Intel-RocketLake",     Intel_4381_setupFunc},
     {PCI_VENDOR_ID_INTEL,       0x7A82, CS_INTEL_7A82,      "Intel-AlderLake",      Intel_7A82_setupFunc},
     {PCI_VENDOR_ID_INTEL,       0x7A84, CS_INTEL_7A82,      "Intel-AlderLake",      Intel_7A82_setupFunc},
-    {PCI_VENDOR_ID_INTEL,       0x1B81, CS_INTEL_1B81,      "Intel-SapphireRapids", NULL},
-    {PCI_VENDOR_ID_INTEL,       0x7A8A, CS_INTEL_1B81,      "Intel-SapphireRapids", NULL},
+    {PCI_VENDOR_ID_INTEL,       0x1B81, CS_INTEL_1B81,      "Intel-SapphireRapids", Intel_1B81_setupFunc},
+    {PCI_VENDOR_ID_INTEL,       0x7A8A, CS_INTEL_1B81,      "Intel-SapphireRapids", Intel_1B81_setupFunc},
     {PCI_VENDOR_ID_INTEL,       0x18DC, CS_INTEL_18DC,      "Intel-IceLake",        NULL},
     {PCI_VENDOR_ID_INTEL,       0x7A04, CS_INTEL_7A04,      "Intel-RaptorLake",     Intel_7A04_setupFunc},
+    {PCI_VENDOR_ID_INTEL,       0x5795, CS_INTEL_5795,      "Intel-GraniteRapids",  Intel_5795_setupFunc},
 
     {PCI_VENDOR_ID_NVIDIA,      0x0FAE, CS_NVIDIA_T210,      "T210",      Nvidia_T210_setupFunc},
     {PCI_VENDOR_ID_NVIDIA,      0x0FAF, CS_NVIDIA_T210,      "T210",      Nvidia_T210_setupFunc},
@@ -211,6 +214,10 @@ CSINFO chipsetInfo[] =
     {PCI_VENDOR_ID_NVIDIA,      0x22B4, CS_NVIDIA_TH500,     "TH500",     Nvidia_TH500_setupFunc},
     {PCI_VENDOR_ID_NVIDIA,      0x22B8, CS_NVIDIA_TH500,     "TH500",     Nvidia_TH500_setupFunc},
     {PCI_VENDOR_ID_NVIDIA,      0x22B9, CS_NVIDIA_TH500,     "TH500",     Nvidia_TH500_setupFunc},
+    {PCI_VENDOR_ID_NVIDIA,      0x22D6, CS_NVIDIA_T264,      "T264",      Nvidia_T194_setupFunc},
+    {PCI_VENDOR_ID_NVIDIA,      0x22D8, CS_NVIDIA_T264,      "T264",      Nvidia_T194_setupFunc},
+    {PCI_VENDOR_ID_NVIDIA,      0x22DA, CS_NVIDIA_T264,      "T264",      Nvidia_T194_setupFunc},
+    {PCI_VENDOR_ID_NVIDIA,      0x2B00, CS_NVIDIA_T264,      "T264",      Nvidia_T194_setupFunc},
 
     {PCI_VENDOR_ID_SIS,         0x0649, CS_SIS_649,          "649",          SiS_656_setupFunc},
     {PCI_VENDOR_ID_SIS,         0x0656, CS_SIS_656,          "656",          SiS_656_setupFunc},
@@ -249,7 +256,8 @@ CSINFO chipsetInfo[] =
     {PCI_VENDOR_ID_MELLANOX,    0xA2D0, CS_MELLANOX_BLUEFIELD, "Mellanox BlueField",  Mellanox_BlueField_setupFunc},
     {PCI_VENDOR_ID_MELLANOX,    0xA2D4, CS_MELLANOX_BLUEFIELD2, "Mellanox BlueField 2",  NULL},
     {PCI_VENDOR_ID_MELLANOX,    0xA2D5, CS_MELLANOX_BLUEFIELD2, "Mellanox BlueField 2 Crypto disabled",  NULL},
-    {PCI_VENDOR_ID_MELLANOX,    0xA2DB, CS_MELLANOX_BLUEFIELD3, "Mellanox BlueField 3",  Mellanox_BlueField3_setupFunc},
+    {PCI_VENDOR_ID_MELLANOX,    0xA2DA, CS_MELLANOX_BLUEFIELD3, "Mellanox BlueField 3 Crypto enabled",  Mellanox_BlueField3_setupFunc},
+    {PCI_VENDOR_ID_MELLANOX,    0xA2DB, CS_MELLANOX_BLUEFIELD3, "Mellanox BlueField 3 Crypto disabled",  Mellanox_BlueField3_setupFunc},
     {PCI_VENDOR_ID_AMAZON,      0x0200, CS_AMAZON_GRAVITRON2, "Amazon Gravitron2",  Amazon_Gravitron2_setupFunc},
     {PCI_VENDOR_ID_FUJITSU,     0x1952, CS_FUJITSU_A64FX,     "Fujitsu A64FX", Fujitsu_A64FX_setupFunc},
     {PCI_VENDOR_ID_CADENCE,     0xDC01, CS_PHYTIUM_S2500,  "Phytium S2500",  NULL},
@@ -270,14 +278,23 @@ CSINFO chipsetInfo[] =
     {PCI_VENDOR_ID_MARVELL,     0xA02D, CS_MARVELL_OCTEON_CN98XX, "Marvell Octeon CN98xx", ARMV8_generic_setupFunc},
     {PCI_VENDOR_ID_SIFIVE,      0x0000, CS_SIFIVE_FU740_C000, "SiFive FU740-000", Riscv_generic_setupFunc},
     {PCI_VENDOR_ID_PLDA,        0x1111, CS_PLDA_XPRESSRICH_AXI_REF, "XpressRich-AXI Ref Design", PLDA_XpressRichAXI_setupFunc},
-    {PCI_VENDOR_ID_AMPERE,      0xE200, CS_AMPERE_AMPEREONE, "Ampere AmpereOne", Ampere_AmpereOne_setupFunc},
-    {PCI_VENDOR_ID_AMPERE,      0xE201, CS_AMPERE_AMPEREONE, "Ampere AmpereOne", Ampere_AmpereOne_setupFunc},
-    {PCI_VENDOR_ID_AMPERE,      0xE202, CS_AMPERE_AMPEREONE, "Ampere AmpereOne", Ampere_AmpereOne_setupFunc},
-    {PCI_VENDOR_ID_AMPERE,      0xE203, CS_AMPERE_AMPEREONE, "Ampere AmpereOne", Ampere_AmpereOne_setupFunc},
-    {PCI_VENDOR_ID_AMPERE,      0xE204, CS_AMPERE_AMPEREONE, "Ampere AmpereOne", Ampere_AmpereOne_setupFunc},
-    {PCI_VENDOR_ID_AMPERE,      0xE205, CS_AMPERE_AMPEREONE, "Ampere AmpereOne", Ampere_AmpereOne_setupFunc},
-    {PCI_VENDOR_ID_AMPERE,      0xE206, CS_AMPERE_AMPEREONE, "Ampere AmpereOne", Ampere_AmpereOne_setupFunc},
-    {PCI_VENDOR_ID_AMPERE,      0xE207, CS_AMPERE_AMPEREONE, "Ampere AmpereOne", Ampere_AmpereOne_setupFunc},
+    {PCI_VENDOR_ID_AMPERE,      0xE200, CS_AMPERE_AMPEREONE160, "Ampere AmpereOne-160", Ampere_AmpereOne_setupFunc},
+    {PCI_VENDOR_ID_AMPERE,      0xE201, CS_AMPERE_AMPEREONE160, "Ampere AmpereOne-160", Ampere_AmpereOne_setupFunc},
+    {PCI_VENDOR_ID_AMPERE,      0xE202, CS_AMPERE_AMPEREONE160, "Ampere AmpereOne-160", Ampere_AmpereOne_setupFunc},
+    {PCI_VENDOR_ID_AMPERE,      0xE203, CS_AMPERE_AMPEREONE160, "Ampere AmpereOne-160", Ampere_AmpereOne_setupFunc},
+    {PCI_VENDOR_ID_AMPERE,      0xE204, CS_AMPERE_AMPEREONE160, "Ampere AmpereOne-160", Ampere_AmpereOne_setupFunc},
+    {PCI_VENDOR_ID_AMPERE,      0xE205, CS_AMPERE_AMPEREONE160, "Ampere AmpereOne-160", Ampere_AmpereOne_setupFunc},
+    {PCI_VENDOR_ID_AMPERE,      0xE206, CS_AMPERE_AMPEREONE160, "Ampere AmpereOne-160", Ampere_AmpereOne_setupFunc},
+    {PCI_VENDOR_ID_AMPERE,      0xE207, CS_AMPERE_AMPEREONE160, "Ampere AmpereOne-160", Ampere_AmpereOne_setupFunc},
+    {PCI_VENDOR_ID_PHYTIUM,     0x5C16, CS_PHYTIUM_S5000,    "Phytium S5000", NULL},
+    {PCI_VENDOR_ID_AMPERE,      0xE208, CS_AMPERE_AMPEREONE192, "Ampere AmpereOne-192", Ampere_AmpereOne_setupFunc},
+    {PCI_VENDOR_ID_AMPERE,      0xE209, CS_AMPERE_AMPEREONE192, "Ampere AmpereOne-192", Ampere_AmpereOne_setupFunc},
+    {PCI_VENDOR_ID_AMPERE,      0xE20A, CS_AMPERE_AMPEREONE192, "Ampere AmpereOne-192", Ampere_AmpereOne_setupFunc},
+    {PCI_VENDOR_ID_AMPERE,      0xE20B, CS_AMPERE_AMPEREONE192, "Ampere AmpereOne-192", Ampere_AmpereOne_setupFunc},
+    {PCI_VENDOR_ID_AMPERE,      0xE20C, CS_AMPERE_AMPEREONE192, "Ampere AmpereOne-192", Ampere_AmpereOne_setupFunc},
+    {PCI_VENDOR_ID_AMPERE,      0xE20D, CS_AMPERE_AMPEREONE192, "Ampere AmpereOne-192", Ampere_AmpereOne_setupFunc},
+    {PCI_VENDOR_ID_AMPERE,      0xE20E, CS_AMPERE_AMPEREONE192, "Ampere AmpereOne-192", Ampere_AmpereOne_setupFunc},
+    {PCI_VENDOR_ID_AMPERE,      0xE20F, CS_AMPERE_AMPEREONE192, "Ampere AmpereOne-192", Ampere_AmpereOne_setupFunc},
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -315,6 +332,7 @@ VENDORNAME vendorName[] =
     {PCI_VENDOR_ID_ALIBABA,     "Alibaba"},
     {PCI_VENDOR_ID_SIFIVE,      "SiFive"},
     {PCI_VENDOR_ID_PLDA,        "PLDA"},
+    {PCI_VENDOR_ID_PHYTIUM,     "Phytium"},
     {0,                         "Unknown"} // Indicates end of the table
 };
 
@@ -343,6 +361,10 @@ ARMCSALLOWLISTINFO armChipsetAllowListInfo[] =
     {PCI_VENDOR_ID_NVIDIA,      0x22B4, CS_NVIDIA_TH500},       // NVIDIA TH500 RP x1
     {PCI_VENDOR_ID_NVIDIA,      0x22B8, CS_NVIDIA_TH500},       // NVIDIA TH500 RP x8
     {PCI_VENDOR_ID_NVIDIA,      0x22B9, CS_NVIDIA_TH500},       // NVIDIA TH500 RP x2
+    {PCI_VENDOR_ID_NVIDIA,      0x22D6, CS_NVIDIA_T264},        // NVIDIA Tegra RP x8
+    {PCI_VENDOR_ID_NVIDIA,      0x22D8, CS_NVIDIA_T264},        // NVIDIA Tegra RP x4
+    {PCI_VENDOR_ID_NVIDIA,      0x22DA, CS_NVIDIA_T264},        // NVIDIA Tegra RP x2
+    {PCI_VENDOR_ID_NVIDIA,      0x2B00, CS_NVIDIA_T264},        // NVIDIA Tegra RP iGPU
 
     {PCI_VENDOR_ID_APM,         0xe004, CS_APM_STORM},          // Applied Micro X-Gene "Storm"
     {PCI_VENDOR_ID_MARVELL,     0xAF00, CS_MARVELL_THUNDERX2},  // Marvell ThunderX2
@@ -359,7 +381,8 @@ ARMCSALLOWLISTINFO armChipsetAllowListInfo[] =
     {PCI_VENDOR_ID_MELLANOX,    0xA2D0, CS_MELLANOX_BLUEFIELD}, // Mellanox BlueField
     {PCI_VENDOR_ID_MELLANOX,    0xA2D4, CS_MELLANOX_BLUEFIELD2},// Mellanox BlueField 2
     {PCI_VENDOR_ID_MELLANOX,    0xA2D5, CS_MELLANOX_BLUEFIELD2},// Mellanox BlueField 2 Crypto disabled
-    {PCI_VENDOR_ID_MELLANOX,    0xA2DB, CS_MELLANOX_BLUEFIELD3},// Mellanox BlueField 3
+    {PCI_VENDOR_ID_MELLANOX,    0xA2DB, CS_MELLANOX_BLUEFIELD3},// Mellanox BlueField 3 Crypto disabled
+    {PCI_VENDOR_ID_MELLANOX,    0xA2DA, CS_MELLANOX_BLUEFIELD3},// Mellanox BlueField 3 Crypto enabled
     {PCI_VENDOR_ID_AMAZON,      0x0200, CS_AMAZON_GRAVITRON2},  // Amazon Gravitron2
     {PCI_VENDOR_ID_FUJITSU,     0x1952, CS_FUJITSU_A64FX},      // Fujitsu A64FX
     {PCI_VENDOR_ID_CADENCE,     0xDC01, CS_PHYTIUM_S2500},      // Phytium S2500
@@ -378,14 +401,23 @@ ARMCSALLOWLISTINFO armChipsetAllowListInfo[] =
     {PCI_VENDOR_ID_MARVELL,     0xA02D, CS_MARVELL_OCTEON_CN96XX}, // Marvell OCTEON CN96xx
     {PCI_VENDOR_ID_MARVELL,     0xA02D, CS_MARVELL_OCTEON_CN98XX}, // Marvell OCTEON CN98xx
     {PCI_VENDOR_ID_ALIBABA,     0x8000, CS_ALIBABA_YITIAN},      // Alibaba Yitian
-    {PCI_VENDOR_ID_AMPERE,      0xE200, CS_AMPERE_AMPEREONE},   // Ampere AmpereOne
-    {PCI_VENDOR_ID_AMPERE,      0xE201, CS_AMPERE_AMPEREONE},   // Ampere AmpereOne
-    {PCI_VENDOR_ID_AMPERE,      0xE202, CS_AMPERE_AMPEREONE},   // Ampere AmpereOne
-    {PCI_VENDOR_ID_AMPERE,      0xE203, CS_AMPERE_AMPEREONE},   // Ampere AmpereOne
-    {PCI_VENDOR_ID_AMPERE,      0xE204, CS_AMPERE_AMPEREONE},   // Ampere AmpereOne
-    {PCI_VENDOR_ID_AMPERE,      0xE205, CS_AMPERE_AMPEREONE},   // Ampere AmpereOne
-    {PCI_VENDOR_ID_AMPERE,      0xE206, CS_AMPERE_AMPEREONE},   // Ampere AmpereOne
-    {PCI_VENDOR_ID_AMPERE,      0xE207, CS_AMPERE_AMPEREONE},   // Ampere AmpereOne
+    {PCI_VENDOR_ID_AMPERE,      0xE200, CS_AMPERE_AMPEREONE160},   // Ampere AmpereOne-160
+    {PCI_VENDOR_ID_AMPERE,      0xE201, CS_AMPERE_AMPEREONE160},   // Ampere AmpereOne-160
+    {PCI_VENDOR_ID_AMPERE,      0xE202, CS_AMPERE_AMPEREONE160},   // Ampere AmpereOne-160
+    {PCI_VENDOR_ID_AMPERE,      0xE203, CS_AMPERE_AMPEREONE160},   // Ampere AmpereOne-160
+    {PCI_VENDOR_ID_AMPERE,      0xE204, CS_AMPERE_AMPEREONE160},   // Ampere AmpereOne-160
+    {PCI_VENDOR_ID_AMPERE,      0xE205, CS_AMPERE_AMPEREONE160},   // Ampere AmpereOne-160
+    {PCI_VENDOR_ID_AMPERE,      0xE206, CS_AMPERE_AMPEREONE160},   // Ampere AmpereOne-160
+    {PCI_VENDOR_ID_AMPERE,      0xE207, CS_AMPERE_AMPEREONE160},   // Ampere AmpereOne-160
+    {PCI_VENDOR_ID_PHYTIUM,     0x5C16, CS_PHYTIUM_S5000},         // Phytium S5000
+    {PCI_VENDOR_ID_AMPERE,      0xE208, CS_AMPERE_AMPEREONE192},   // Ampere AmpereOne-192
+    {PCI_VENDOR_ID_AMPERE,      0xE209, CS_AMPERE_AMPEREONE192},   // Ampere AmpereOne-192
+    {PCI_VENDOR_ID_AMPERE,      0xE20A, CS_AMPERE_AMPEREONE192},   // Ampere AmpereOne-192
+    {PCI_VENDOR_ID_AMPERE,      0xE20B, CS_AMPERE_AMPEREONE192},   // Ampere AmpereOne-192
+    {PCI_VENDOR_ID_AMPERE,      0xE20C, CS_AMPERE_AMPEREONE192},   // Ampere AmpereOne-192
+    {PCI_VENDOR_ID_AMPERE,      0xE20D, CS_AMPERE_AMPEREONE192},   // Ampere AmpereOne-192
+    {PCI_VENDOR_ID_AMPERE,      0xE20E, CS_AMPERE_AMPEREONE192},   // Ampere AmpereOne-192
+    {PCI_VENDOR_ID_AMPERE,      0xE20F, CS_AMPERE_AMPEREONE192},   // Ampere AmpereOne-192
 
     // last element must have chipset CS_UNKNOWN (zero)
     {0,                         0,      CS_UNKNOWN}

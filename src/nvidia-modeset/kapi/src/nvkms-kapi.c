@@ -26,13 +26,19 @@
 #include "nvidia-modeset-os-interface.h"
 
 #include "nvkms-api.h"
+#include "nvkms-sync.h"
 #include "nvkms-rmapi.h"
 #include "nvkms-vrr.h"
+
+#include "nvkms-softfloat.h"
+#include "nv-float.h"
 
 #include "nvkms-kapi.h"
 #include "nvkms-kapi-private.h"
 #include "nvkms-kapi-internal.h"
 #include "nvkms-kapi-notifiers.h"
+
+#include "nv_smg.h"
 
 #include <class/cl0000.h> /* NV01_ROOT/NV01_NULL_OBJECT */
 #include <class/cl003e.h> /* NV01_MEMORY_SYSTEM */
@@ -52,6 +58,7 @@
 #include "ctrl/ctrl003e.h" /* NV003E_CTRL_CMD_GET_SURFACE_PHYS_PAGES */
 #include "ctrl/ctrl0041.h" /* NV0041_CTRL_SURFACE_INFO */
 
+#include "nv_smg.h"
 
 ct_assert(NVKMS_KAPI_LAYER_PRIMARY_IDX == NVKMS_MAIN_LAYER);
 ct_assert(NVKMS_KAPI_LAYER_MAX == NVKMS_MAX_LAYERS_PER_HEAD);
@@ -64,9 +71,73 @@ ct_assert(NVKMS_KAPI_LAYER_MAX == NVKMS_MAX_LAYERS_PER_HEAD);
      (1 << NVKMS_EVENT_TYPE_DYNAMIC_DPY_CONNECTED) | \
      (1 << NVKMS_EVENT_TYPE_FLIP_OCCURRED))
 
-static NvU32 EnumerateGpus(nv_gpu_info_t *gpuInfo)
+static NvU32 EnumerateGpus(struct NvKmsKapiGpuInfo *kapiGpuInfo)
 {
-    return nvkms_enumerate_gpus(gpuInfo);
+    nv_gpu_info_t *gpu_info = NULL;
+    nvMIGDeviceDescription *activeDevices = NULL;
+    NvU32 activeDeviceCount = 0;
+    NvU32 gpuCount;
+    NvU32 kapiGpuCount;
+
+    if (NV_OK != nvSMGGetDeviceList(&nvEvoGlobal.rmSmgContext,
+                                    &activeDevices,
+                                    &activeDeviceCount)) {
+        return 0;
+    }
+
+    gpu_info = nvkms_alloc(NV_MAX_GPUS * sizeof(*gpu_info), NV_TRUE);
+    if (!gpu_info) {
+        return 0;
+    }
+
+    /*
+     * Enumerate physical GPUs and generate an expanded list where entries
+     * for GPUs in MIG mode are replaced by a list of MIG GPUs on that GPU.
+     */
+    gpuCount = nvkms_enumerate_gpus(gpu_info);
+    kapiGpuCount = 0;
+
+    for (NvU32 i = 0; i < gpuCount; i++) {
+        NvBool foundMig = NV_FALSE;
+
+        for (NvU32 j = 0; j < activeDeviceCount; j++) {
+            /* Fail completely if we run out of array space. */
+            if (kapiGpuCount == NV_MAX_GPUS) {
+                nvKmsKapiLogDebug("Failed to enumerate devices: out of memory");
+                kapiGpuCount = 0;
+                break;
+            }
+
+            /*
+             * Return an NvKmsKapiGpuInfo for each active device found for
+             * the current gpu_id. For regular GPUs this will only be one
+             * but in MIG mode the same gpu_id can host multiple MIG
+             * devices.
+             */
+            if (activeDevices[j].gpuId == gpu_info[i].gpu_id) {
+                kapiGpuInfo[kapiGpuCount].gpuInfo = gpu_info[i];
+                kapiGpuInfo[kapiGpuCount].migDevice = activeDevices[j].migDeviceId;
+                kapiGpuCount++;
+                foundMig = NV_TRUE;
+            }
+        }
+
+        if (!foundMig) {
+            if (kapiGpuCount == NV_MAX_GPUS) {
+                nvKmsKapiLogDebug("Failed to enumerate devices: out of memory");
+                kapiGpuCount = 0;
+                break;
+            }
+
+            kapiGpuInfo[kapiGpuCount].gpuInfo = gpu_info[i];
+            kapiGpuInfo[kapiGpuCount].migDevice = NO_MIG_DEVICE;
+            kapiGpuCount++;
+        }
+    }
+
+    nvkms_free(gpu_info, NV_MAX_GPUS * sizeof(*gpu_info));
+
+    return kapiGpuCount;
 }
 
 /*
@@ -74,6 +145,15 @@ static NvU32 EnumerateGpus(nv_gpu_info_t *gpuInfo)
  */
 static void RmFreeDevice(struct NvKmsKapiDevice *device)
 {
+    if (device->smgGpuInstSubscriptionHdl != 0x0) {
+        nvKmsKapiFreeRmHandle(device, device->smgGpuInstSubscriptionHdl);
+        device->smgGpuInstSubscriptionHdl = 0x0;
+    }
+    if (device->smgComputeInstSubscriptionHdl != 0x0) {
+        nvKmsKapiFreeRmHandle(device, device->smgComputeInstSubscriptionHdl);
+        device->smgComputeInstSubscriptionHdl = 0x0;
+    }
+
     if (device->hRmSubDevice != 0x0) {
         nvRmApiFree(device->hRmClient,
                     device->hRmDevice,
@@ -109,6 +189,24 @@ static void RmFreeDevice(struct NvKmsKapiDevice *device)
 }
 
 /*
+ * Wrappers to help SMG access NvKmsKAPI's RM context.
+ */
+static NvU32 NvKmsKapiRMControl(nvRMContextPtr rmctx, NvU32 client, NvU32 object, NvU32 cmd, void *params, NvU32 paramsSize)
+{
+    return nvRmApiControl(client, object, cmd, params, paramsSize);
+}
+
+static NvU32 NvKmsKapiRMAlloc(nvRMContextPtr rmctx, NvU32 client, NvHandle parent, NvHandle object, NvU32 cls, void *allocParams)
+{
+    return nvRmApiAlloc(client, parent, object, cls, allocParams);
+}
+
+static NvU32 NvKmsKapiRMFree(nvRMContextPtr rmctx, NvU32 client, NvHandle parent, NvHandle object)
+{
+    return nvRmApiFree(client, parent, object);
+}
+
+/*
  * Helper function to allocate RM objects for NvKmsKapiDevice.
  */
 static NvBool RmAllocateDevice(struct NvKmsKapiDevice *device)
@@ -135,6 +233,13 @@ static NvBool RmAllocateDevice(struct NvKmsKapiDevice *device)
         nvKmsKapiLogDeviceDebug(device, "Failed to allocate RM client");
         goto failed;
     }
+
+    /* Initialize RM context */
+
+    device->rmSmgContext.clientHandle = device->hRmClient;
+    device->rmSmgContext.control      = NvKmsKapiRMControl;
+    device->rmSmgContext.alloc        = NvKmsKapiRMAlloc;
+    device->rmSmgContext.free         = NvKmsKapiRMFree;
 
     /* Query device instance */
 
@@ -234,6 +339,24 @@ static NvBool RmAllocateDevice(struct NvKmsKapiDevice *device)
 
     device->hRmSubDevice = hRmSubDevice;
 
+    if (device->migDevice != NO_MIG_DEVICE) {
+        device->smgGpuInstSubscriptionHdl     = nvKmsKapiGenerateRmHandle(device);
+        device->smgComputeInstSubscriptionHdl = nvKmsKapiGenerateRmHandle(device);
+
+        if (!device->smgGpuInstSubscriptionHdl || !device->smgComputeInstSubscriptionHdl) {
+            goto failed;
+        }
+
+        if (!nvSMGSubscribeSubDevToPartition(&device->rmSmgContext,
+                                             device->hRmSubDevice,
+                                             device->migDevice,
+                                             device->smgGpuInstSubscriptionHdl,
+                                             device->smgComputeInstSubscriptionHdl)) {
+            nvKmsKapiLogDeviceDebug(device, "Unable to configure MIG (Multi-Instance GPU) partition");
+            goto failed;
+        }
+    }
+
     if (device->isSOC) {
         /* NVKMS is only used on T23X and later chips,
          * which all support generic memory. */
@@ -253,7 +376,7 @@ static NvBool RmAllocateDevice(struct NvKmsKapiDevice *device)
                                    NV0080_CTRL_FB_CAPS_GENERIC_PAGE_KIND);
     }
 
-    device->caps.genericPageKind = 
+    device->caps.genericPageKind =
         supportsGenericPageKind ?
         0x06 /* NV_MMU_PTE_KIND_GENERIC_MEMORY */ :
         0xfe /* NV_MMU_PTE_KIND_GENERIC_16BX2 */;
@@ -272,9 +395,10 @@ failed:
  */
 static void KmsFreeDevice(struct NvKmsKapiDevice *device)
 {
-    /* Free notifier memory */
+    /* Free notifier and semaphore memory */
 
-    nvKmsKapiFreeNotifiers(device);
+    nvKmsKapiFreeNisoSurface(device, &device->semaphore);
+    nvKmsKapiFreeNisoSurface(device, &device->notifier);
 
     /* Free NVKMS device */
 
@@ -331,11 +455,8 @@ static NvBool KmsAllocateDevice(struct NvKmsKapiDevice *device)
         NV_VERSION_STRING,
         sizeof(paramsAlloc->request.versionString));
 
-    if (device->isSOC) {
-        paramsAlloc->request.deviceId = NVKMS_DEVICE_ID_TEGRA;
-    } else {
-        paramsAlloc->request.deviceId = device->deviceInstance;
-    }
+    paramsAlloc->request.deviceId.rmDeviceId = device->deviceInstance;
+    paramsAlloc->request.deviceId.migDevice = device->migDevice;
     paramsAlloc->request.sliMosaic = NV_FALSE;
     paramsAlloc->request.enableConsoleHotplugHandling = NV_TRUE;
 
@@ -361,7 +482,7 @@ static NvBool KmsAllocateDevice(struct NvKmsKapiDevice *device)
             device,
             "Failed to NVKM device %u(%u): %d %d\n",
              device->gpuId,
-             paramsAlloc->request.deviceId,
+             paramsAlloc->request.deviceId.rmDeviceId,
              status,
              paramsAlloc->reply.status);
 
@@ -384,12 +505,21 @@ static NvBool KmsAllocateDevice(struct NvKmsKapiDevice *device)
     device->caps.maxCursorSizeInPixels = paramsAlloc->reply.maxCursorSize;
     device->caps.requiresVrrSemaphores = paramsAlloc->reply.requiresVrrSemaphores;
 
+    device->caps.supportsInputColorSpace =
+        paramsAlloc->reply.supportsInputColorSpace;
+    device->caps.supportsInputColorRange =
+        paramsAlloc->reply.supportsInputColorRange;
+
+
     /* XXX Add LUT support */
 
     device->numHeads = paramsAlloc->reply.numHeads;
 
+    device->vtFbBaseAddress = paramsAlloc->reply.vtFbBaseAddress;
+    device->vtFbSize = paramsAlloc->reply.vtFbSize;
+
     for (head = 0; head < device->numHeads; head++) {
-        if (paramsAlloc->reply.numLayers[head] < 2) {
+        if (paramsAlloc->reply.numLayers[head] < 1) {
             goto done;
         }
         device->numLayers[head] = paramsAlloc->reply.numLayers[head];
@@ -398,8 +528,14 @@ static NvBool KmsAllocateDevice(struct NvKmsKapiDevice *device)
     for (layer = 0; layer < NVKMS_KAPI_LAYER_MAX; layer++) {
         device->supportedSurfaceMemoryFormats[layer] =
             paramsAlloc->reply.layerCaps[layer].supportedSurfaceMemoryFormats;
-        device->supportsHDR[layer] = paramsAlloc->reply.layerCaps[layer].supportsHDR;
+        device->supportsICtCp[layer] = paramsAlloc->reply.layerCaps[layer].supportsICtCp;
+
+        device->lutCaps.layer[layer].ilut =
+            paramsAlloc->reply.layerCaps[layer].ilut;
+        device->lutCaps.layer[layer].tmo =
+            paramsAlloc->reply.layerCaps[layer].tmo;
     }
+    device->lutCaps.olut = paramsAlloc->reply.olutCaps;
 
     if (paramsAlloc->reply.validNIsoFormatMask &
         (1 << NVKMS_NISO_FORMAT_FOUR_WORD_NVDISPLAY)) {
@@ -411,6 +547,15 @@ static NvBool KmsAllocateDevice(struct NvKmsKapiDevice *device)
         nvAssert(paramsAlloc->reply.validNIsoFormatMask &
                  (1 << NVKMS_NISO_FORMAT_LEGACY));
         device->notifier.format = NVKMS_NISO_FORMAT_LEGACY;
+    }
+
+    if (paramsAlloc->reply.validNIsoFormatMask &
+        (1 << NVKMS_NISO_FORMAT_FOUR_WORD_NVDISPLAY)) {
+        device->semaphore.format = NVKMS_NISO_FORMAT_FOUR_WORD_NVDISPLAY;
+    } else {
+        nvAssert(paramsAlloc->reply.validNIsoFormatMask &
+                 (1 << NVKMS_NISO_FORMAT_LEGACY));
+        device->semaphore.format = NVKMS_NISO_FORMAT_LEGACY;
     }
 
     /* XXX Add support for SLI/multiple display engines per device */
@@ -438,6 +583,14 @@ static NvBool KmsAllocateDevice(struct NvKmsKapiDevice *device)
     if (!nvKmsKapiAllocateNotifiers(device, inVideoMemory)) {
         nvKmsKapiLogDebug(
             "Failed to allocate Notifier objects for GPU ID 0x%08x",
+            device->gpuId);
+        goto done;
+    }
+
+    /* Allocate semaphore memory in video memory whenever available */
+    if (!nvKmsKapiAllocateSemaphores(device, !device->isSOC)) {
+        nvKmsKapiLogDebug(
+            "Failed to allocate Semaphore objects for GPU ID 0x%08x",
             device->gpuId);
         goto done;
     }
@@ -780,6 +933,7 @@ static struct NvKmsKapiDevice* AllocateDevice
     }
 
     device->gpuId = params->gpuId;
+    device->migDevice = params->migDevice;
 
     nvKmsKapiLogDebug(
         "Allocating NvKmsKapiDevice 0x%p for GPU ID 0x%08x",
@@ -849,7 +1003,7 @@ static void ReleaseOwnership(struct NvKmsKapiDevice *device)
 
 static NvBool GrantPermissions
 (
-    NvS32 fd, 
+    NvS32 fd,
     struct NvKmsKapiDevice *device,
     NvU32 head,
     NvKmsKapiDisplay display
@@ -1010,6 +1164,10 @@ static NvBool GetDeviceResourcesInfo
 
     info->caps.hasVideoMemory = !device->isSOC;
     info->caps.genericPageKind = device->caps.genericPageKind;
+    info->caps.requiresVrrSemaphores = device->caps.requiresVrrSemaphores;
+
+    info->vtFbBaseAddress = device->vtFbBaseAddress;
+    info->vtFbSize = device->vtFbSize;
 
     if (device->hKmsDevice == 0x0) {
         info->caps.pitchAlignment = 0x1;
@@ -1081,9 +1239,13 @@ static NvBool GetDeviceResourcesInfo
     info->caps.pitchAlignment = NV_EVO_PITCH_ALIGNMENT;
 
     info->caps.supportsSyncpts = device->supportsSyncpts;
+    info->caps.supportsInputColorRange = device->caps.supportsInputColorRange;
+    info->caps.supportsInputColorSpace = device->caps.supportsInputColorSpace;
 
     info->caps.supportedCursorSurfaceMemoryFormats =
         NVBIT(NvKmsSurfaceMemoryFormatA8R8G8B8);
+
+    info->caps.numDisplaySemaphores  = device->numDisplaySemaphores;
 
     ct_assert(sizeof(info->supportedSurfaceMemoryFormats) ==
               sizeof(device->supportedSurfaceMemoryFormats));
@@ -1092,12 +1254,15 @@ static NvBool GetDeviceResourcesInfo
                  device->supportedSurfaceMemoryFormats,
                  sizeof(device->supportedSurfaceMemoryFormats));
 
-    ct_assert(sizeof(info->supportsHDR) ==
-              sizeof(device->supportsHDR));
+    ct_assert(sizeof(info->supportsICtCp) ==
+              sizeof(device->supportsICtCp));
 
-    nvkms_memcpy(info->supportsHDR,
-                 device->supportsHDR,
-                 sizeof(device->supportsHDR));
+    nvkms_memcpy(info->supportsICtCp,
+                 device->supportsICtCp,
+                 sizeof(device->supportsICtCp));
+
+    info->lutCaps = device->lutCaps;
+
 done:
 
     return status;
@@ -1167,7 +1332,10 @@ static NvBool GetConnectorInfo
 )
 {
     struct NvKmsQueryConnectorStaticDataParams paramsConnector = { };
+    struct NvKmsQueryConnectorDynamicDataParams paramsDynamicConnector = { };
     NvBool status = NV_FALSE;
+    NvU64 startTime = 0;
+    NvBool timeout;
 
     if (device == NULL || info == NULL) {
         goto done;
@@ -1197,6 +1365,44 @@ static NvBool GetConnectorInfo
     info->signalFormat = paramsConnector.reply.signalFormat;
 
     info->type = paramsConnector.reply.type;
+
+
+    startTime = nvkms_get_usec();
+    do {
+        nvkms_memset(&paramsDynamicConnector, 0, sizeof(paramsDynamicConnector));
+        paramsDynamicConnector.request.deviceHandle    = device->hKmsDevice;
+        paramsDynamicConnector.request.dispHandle      = device->hKmsDisp;
+        paramsDynamicConnector.request.connectorHandle = connector;
+
+        if (!nvkms_ioctl_from_kapi(device->pKmsOpen,
+                                   NVKMS_IOCTL_QUERY_CONNECTOR_DYNAMIC_DATA,
+                                   &paramsDynamicConnector,
+                                   sizeof(paramsDynamicConnector))) {
+
+            nvKmsKapiLogDeviceDebug(
+                    device,
+                    "Failed to query dynamic data of connector 0x%08x",
+                    connector);
+            status = NV_FALSE;
+
+            goto done;
+        }
+
+        timeout = nvkms_get_usec() - startTime >
+            NVKMS_DP_DETECT_COMPLETE_TIMEOUT_USEC;
+
+        if (!paramsDynamicConnector.reply.detectComplete && !timeout) {
+            nvkms_usleep(NVKMS_DP_DETECT_COMPLETE_POLL_INTERVAL_USEC);
+        }
+    } while (!paramsDynamicConnector.reply.detectComplete && !timeout);
+
+    if (!paramsDynamicConnector.reply.detectComplete) {
+        nvKmsKapiLogDeviceDebug(device, "Timed out waiting for DisplayPort"
+               " device detection to complete.");
+        status = NV_FALSE;
+    }
+
+    info->dynamicDpyIdList = paramsDynamicConnector.reply.dynamicDpyIdList;
 
 done:
 
@@ -1250,6 +1456,7 @@ static NvBool GetStaticDisplayInfo
 
     info->internal = paramsDpyStatic.reply.mobileInternal;
     info->headMask = paramsDpyStatic.reply.headMask;
+    info->isDpMST = paramsDpyStatic.reply.isDpMST;
 done:
 
     return status;
@@ -1310,8 +1517,6 @@ static NvBool GetDynamicDisplayInfo(
     params->connected = pParamsDpyDynamic->reply.connected;
 
     if (pParamsDpyDynamic->reply.connected && !params->overrideEdid) {
-        NvBool vrrSupported =
-            (pParamsDpyDynamic->reply.vrrType != NVKMS_DPY_VRR_TYPE_NONE) ? NV_TRUE : NV_FALSE;
 
         nvkms_memcpy(
             params->edid.buffer,
@@ -1319,7 +1524,12 @@ static NvBool GetDynamicDisplayInfo(
             sizeof(params->edid.buffer));
 
         params->edid.bufferSize = pParamsDpyDynamic->reply.edid.bufferSize;
-        params->vrrSupported = (vrrSupported && !device->caps.requiresVrrSemaphores) ? NV_TRUE : NV_FALSE;
+    }
+
+    if (pParamsDpyDynamic->reply.connected) {
+        NvBool vrrSupported =
+            (pParamsDpyDynamic->reply.vrrType != NVKMS_DPY_VRR_TYPE_NONE) ? NV_TRUE : NV_FALSE;
+        params->vrrSupported = vrrSupported;
     }
 
 done:
@@ -1427,6 +1637,7 @@ static struct NvKmsKapiMemory* AllocateVideoMemory
     memory->hRmHandle = hRmHandle;
     memory->size = size;
     memory->surfaceParams.layout = layout;
+    memory->isVidmem = NV_TRUE;
 
     if (layout == NvKmsSurfaceMemoryLayoutBlockLinear) {
         memory->surfaceParams.blockLinear.genericMemory = NV_TRUE;
@@ -1467,6 +1678,7 @@ static struct NvKmsKapiMemory* AllocateSystemMemory
     memory->hRmHandle = hRmHandle;
     memory->size = size;
     memory->surfaceParams.layout = layout;
+    memory->isVidmem = NV_FALSE;
 
     if (layout == NvKmsSurfaceMemoryLayoutBlockLinear) {
         memory->surfaceParams.blockLinear.genericMemory = NV_TRUE;
@@ -1561,6 +1773,39 @@ static struct NvKmsKapiMemory* ImportMemory
     memory->size = memorySize;
     memory->surfaceParams = nvKmsParams.surfaceParams;
 
+    /*
+     * Determine address space of imported memory. For Tegra, there is only a
+     * single unified address space.
+     */
+    if (!device->isSOC) {
+        NV0041_CTRL_GET_SURFACE_INFO_PARAMS surfaceInfoParams = {};
+        NV0041_CTRL_SURFACE_INFO surfaceInfo = {};
+
+        surfaceInfo.index = NV0041_CTRL_SURFACE_INFO_INDEX_ADDR_SPACE_TYPE;
+
+        surfaceInfoParams.surfaceInfoListSize = 1;
+        surfaceInfoParams.surfaceInfoList = (NvP64)&surfaceInfo;
+
+        ret = nvRmApiControl(device->hRmClient,
+                             memory->hRmHandle,
+                             NV0041_CTRL_CMD_GET_SURFACE_INFO,
+                             &surfaceInfoParams,
+                             sizeof(surfaceInfoParams));
+
+        if (ret != NVOS_STATUS_SUCCESS) {
+            nvKmsKapiLogDeviceDebug(
+                device,
+                "Failed to get memory location of RM memory object 0x%x",
+                memory->hRmHandle);
+
+            nvKmsKapiFreeRmHandle(device, hMemory);
+            goto failed;
+        }
+
+        memory->isVidmem =
+            surfaceInfo.data == NV0000_CTRL_CMD_CLIENT_GET_ADDR_SPACE_TYPE_VIDMEM;
+    }
+
     return memory;
 
 failed:
@@ -1580,6 +1825,14 @@ static struct NvKmsKapiMemory* DupMemory
     struct NvKmsKapiMemory *memory;
     NvU32 hMemory;
     NvU32 ret;
+
+    if (srcMemory->isVidmem &&
+        (device->gpuId != srcDevice->gpuId)) {
+        nvKmsKapiLogDeviceDebug(
+            device,
+            "It is not possible to dup an NVKMS memory object located on the vidmem of a different device");
+        return NULL;
+    }
 
     memory = AllocMemoryObjectAndHandle(device, &hMemory);
 
@@ -1609,6 +1862,7 @@ static struct NvKmsKapiMemory* DupMemory
     memory->hRmHandle = hMemory;
     memory->size = srcMemory->size;
     memory->surfaceParams = srcMemory->surfaceParams;
+    memory->isVidmem = srcMemory->isVidmem;
 
     return memory;
 
@@ -1755,6 +2009,7 @@ GetSystemMemoryHandleFromDmaBufSgtHelper(struct NvKmsKapiDevice *device,
     memory->hRmHandle = hRmHandle;
     memory->size = limit + 1;
     memory->surfaceParams.layout = NvKmsSurfaceMemoryLayoutPitch;
+    memory->isVidmem = NV_FALSE;
 
     return memory;
 }
@@ -1887,57 +2142,6 @@ static NvBool GetMemoryPages
     return NV_TRUE;
 }
 
-/*
- * Check if the memory we are creating this framebuffer with is valid. We
- * cannot scan out sysmem or compressed buffers.
- *
- * If we cannot use this memory for display it may be resident in sysmem
- * or may belong to another GPU.
- */
-static NvBool IsMemoryValidForDisplay
-(
-    const struct NvKmsKapiDevice *device,
-    const struct NvKmsKapiMemory *memory
-)
-{
-    NV_STATUS status;
-    NV0041_CTRL_SURFACE_INFO surfaceInfo = {};
-    NV0041_CTRL_GET_SURFACE_INFO_PARAMS surfaceInfoParams = {};
-
-    if (device == NULL || memory == NULL) {
-        return NV_FALSE;
-    }
-
-    /*
-     * Don't do these checks on tegra. Tegra has different capabilities.
-     * Here we always say display is possible so we never fail framebuffer
-     * creation.
-     */
-    if (device->isSOC) {
-        return NV_TRUE;
-    }
-
-    /* Get the type of address space this memory is in, i.e. vidmem or sysmem */
-    surfaceInfo.index = NV0041_CTRL_SURFACE_INFO_INDEX_ADDR_SPACE_TYPE;
-
-    surfaceInfoParams.surfaceInfoListSize = 1;
-    surfaceInfoParams.surfaceInfoList = (NvP64)&surfaceInfo;
-
-    status = nvRmApiControl(device->hRmClient,
-                            memory->hRmHandle,
-                            NV0041_CTRL_CMD_GET_SURFACE_INFO,
-                            &surfaceInfoParams,
-                            sizeof(surfaceInfoParams));
-    if (status != NV_OK) {
-        nvKmsKapiLogDeviceDebug(device,
-                "Failed to get memory location of RM memory object 0x%x",
-                memory->hRmHandle);
-        return NV_FALSE;
-    }
-
-    return surfaceInfo.data == NV0000_CTRL_CMD_CLIENT_GET_ADDR_SPACE_TYPE_VIDMEM;
-}
-
 static void FreeMemoryPages
 (
     NvU64 *pPages
@@ -2045,11 +2249,18 @@ static void UnmapMemory
     }
 }
 
+static NvBool IsVidmem(
+    const struct NvKmsKapiMemory *memory)
+{
+    return memory->isVidmem;
+}
+
 static NvBool GetSurfaceParams(
     struct NvKmsKapiCreateSurfaceParams *params,
     NvU32 *pNumPlanes,
     enum NvKmsSurfaceMemoryLayout *pLayout,
     NvU32 *pLog2GobsPerBlockY,
+    NvBool *pNoDisplayCaching,
     NvU32 pitch[])
 {
     const NvKmsSurfaceMemoryFormatInfo *pFormatInfo =
@@ -2071,8 +2282,6 @@ static NvBool GetSurfaceParams(
         if (memory == NULL) {
             return FALSE;
         }
-
-        pitch[i] = params->planes[i].pitch;
 
         if (i == 0) {
             if (params->explicit_layout) {
@@ -2119,6 +2328,7 @@ static NvBool GetSurfaceParams(
 
         if (layout == NvKmsSurfaceMemoryLayoutBlockLinear) {
             if (params->explicit_layout) {
+                pitch[i] = params->planes[i].pitch;
                 if (pitch[i] & 63) {
                     nvKmsKapiLogDebug(
                         "Invalid block-linear pitch alignment: %u", pitch[i]);
@@ -2144,6 +2354,7 @@ static NvBool GetSurfaceParams(
     *pNumPlanes = pFormatInfo->numPlanes;
     *pLayout = layout;
     *pLog2GobsPerBlockY = log2GobsPerBlockY;
+    *pNoDisplayCaching = params->noDisplayCaching;
 
     return NV_TRUE;
 }
@@ -2162,12 +2373,14 @@ static struct NvKmsKapiSurface* CreateSurface
     NvU32 log2GobsPerBlockY = 0;
     NvU32 numPlanes = 0;
     NvU32 pitch[NVKMS_MAX_PLANES_PER_SURFACE] = { 0 };
+    NvBool noDisplayCaching = NV_FALSE;
     NvU32 i;
 
     if (!GetSurfaceParams(params,
                           &numPlanes,
                           &layout,
                           &log2GobsPerBlockY,
+                          &noDisplayCaching,
                           pitch))
     {
         goto failed;
@@ -2212,6 +2425,8 @@ static struct NvKmsKapiSurface* CreateSurface
         paramsReg.request.planes[i].pitch = pitch[i];
     }
 
+    paramsReg.request.noDisplayCaching = noDisplayCaching;
+
     status = nvkms_ioctl_from_kapi(device->pKmsOpen,
                                    NVKMS_IOCTL_REGISTER_SURFACE,
                                    &paramsReg, sizeof(paramsReg));
@@ -2252,6 +2467,13 @@ static void DestroySurface
 
     paramsUnreg.request.deviceHandle  = device->hKmsDevice;
     paramsUnreg.request.surfaceHandle = surface->hKmsHandle;
+    /*
+     * Since we are unregistering this surface from KAPI we know that this is
+     * primarily happens from nv_drm_framebuffer_destroy and access to this
+     * framebuffer has been externally synchronized, we are done with it.
+     * Because of that we do not need to synchronize this unregister.
+     */
+    paramsUnreg.request.skipSync = NV_TRUE;
 
     status = nvkms_ioctl_from_kapi(device->pKmsOpen,
                                    NVKMS_IOCTL_UNREGISTER_SURFACE,
@@ -2471,31 +2693,54 @@ static NvBool AssignSyncObjectConfig(
     struct NvKmsChannelSyncObjects *pSyncObject)
 {
     if (!device->supportsSyncpts) {
-        if (pLayerConfig->syncptParams.preSyncptSpecified ||
-            pLayerConfig->syncptParams.postSyncptRequested) {
+        if (pLayerConfig->syncParams.preSyncptSpecified ||
+            pLayerConfig->syncParams.postSyncptRequested) {
             return NV_FALSE;
         }
+
+    }
+
+    /* Syncpt and Semaphore usage are mutually exclusive. */
+    if (pLayerConfig->syncParams.semaphoreSpecified &&
+        (pLayerConfig->syncParams.preSyncptSpecified ||
+         pLayerConfig->syncParams.postSyncptRequested)) {
+        return NV_FALSE;
     }
 
     pSyncObject->useSyncpt = FALSE;
 
-    if (pLayerConfig->syncptParams.preSyncptSpecified) {
+    if (pLayerConfig->syncParams.preSyncptSpecified) {
         pSyncObject->useSyncpt = TRUE;
 
         pSyncObject->u.syncpts.pre.type = NVKMS_SYNCPT_TYPE_RAW;
-        pSyncObject->u.syncpts.pre.u.raw.id = pLayerConfig->syncptParams.preSyncptId;
-        pSyncObject->u.syncpts.pre.u.raw.value = pLayerConfig->syncptParams.preSyncptValue;
+        pSyncObject->u.syncpts.pre.u.raw.id = pLayerConfig->syncParams.u.syncpt.preSyncptId;
+        pSyncObject->u.syncpts.pre.u.raw.value = pLayerConfig->syncParams.u.syncpt.preSyncptValue;
+    } else if (pLayerConfig->syncParams.semaphoreSpecified) {
+        pSyncObject->u.semaphores.release.surface.surfaceHandle =
+            pSyncObject->u.semaphores.acquire.surface.surfaceHandle =
+            device->semaphore.hKmsHandle;
+        pSyncObject->u.semaphores.release.surface.format =
+            pSyncObject->u.semaphores.acquire.surface.format =
+            device->semaphore.format;
+        pSyncObject->u.semaphores.release.surface.offsetInWords =
+            pSyncObject->u.semaphores.acquire.surface.offsetInWords =
+            nvKmsKapiGetDisplaySemaphoreOffset(
+                device,
+                pLayerConfig->syncParams.u.semaphore.index) >> 2;
+        pSyncObject->u.semaphores.acquire.value =
+            NVKMS_KAPI_SEMAPHORE_VALUE_READY;
+        pSyncObject->u.semaphores.release.value =
+            NVKMS_KAPI_SEMAPHORE_VALUE_DONE;
     }
 
-    if (pLayerConfig->syncptParams.postSyncptRequested) {
+    if (pLayerConfig->syncParams.postSyncptRequested) {
         pSyncObject->useSyncpt = TRUE;
-
         pSyncObject->u.syncpts.requestedPostType = NVKMS_SYNCPT_TYPE_FD;
     }
     return NV_TRUE;
 }
 
-static void AssignHDRMetadataConfig(
+static NvBool AssignHDRMetadataConfig(
     const struct NvKmsKapiLayerConfig *layerConfig,
     const struct NvKmsKapiLayerRequestedConfig *layerRequestedConfig,
     const NvU32 layer,
@@ -2510,6 +2755,63 @@ static void AssignHDRMetadataConfig(
         params->layer[layer].hdr.staticMetadata =
             layerConfig->hdrMetadata.val;
     }
+
+    return params->layer[layer].hdr.specified;
+}
+
+static NvBool AssignLayerLutConfig(
+    const struct NvKmsKapiDevice *device,
+    const struct NvKmsKapiLayerConfig *layerConfig,
+    const struct NvKmsKapiLayerRequestedConfig *layerRequestedConfig,
+    const NvU32 layer,
+    struct NvKmsFlipCommonParams *params,
+    NvBool bFromKmsSetMode)
+{
+    NvBool changed = FALSE;
+
+    if ((device->lutCaps.layer[layer].ilut.supported) &&
+        (layerRequestedConfig->flags.ilutChanged || bFromKmsSetMode)) {
+
+        params->layer[layer].ilut.specified = TRUE;
+        params->layer[layer].ilut.enabled = layerConfig->ilut.enabled;
+
+        if (layerConfig->ilut.lutSurface != NULL) {
+            params->layer[layer].ilut.lut.surfaceHandle =
+                layerConfig->ilut.lutSurface->hKmsHandle;
+        } else {
+            params->layer[layer].ilut.lut.surfaceHandle = 0;
+        }
+        params->layer[layer].ilut.lut.offset = layerConfig->ilut.offset;
+        params->layer[layer].ilut.lut.vssSegments =
+            layerConfig->ilut.vssSegments;
+        params->layer[layer].ilut.lut.lutEntries =
+            layerConfig->ilut.lutEntries;
+
+        changed = TRUE;
+    }
+
+    if ((device->lutCaps.layer[layer].tmo.supported) &&
+        (layerRequestedConfig->flags.tmoChanged || bFromKmsSetMode)) {
+
+        params->layer[layer].tmo.specified = TRUE;
+        params->layer[layer].tmo.enabled = layerConfig->tmo.enabled;
+
+        if (layerConfig->tmo.lutSurface != NULL) {
+            params->layer[layer].tmo.lut.surfaceHandle =
+                layerConfig->tmo.lutSurface->hKmsHandle;
+        } else {
+            params->layer[layer].tmo.lut.surfaceHandle = 0;
+        }
+        params->layer[layer].tmo.lut.offset = layerConfig->tmo.offset;
+        params->layer[layer].tmo.lut.vssSegments =
+            layerConfig->tmo.vssSegments;
+        params->layer[layer].tmo.lut.lutEntries =
+            layerConfig->tmo.lutEntries;
+
+        changed = TRUE;
+    }
+
+    return changed;
 }
 
 static void NvKmsKapiCursorConfigToKms(
@@ -2576,16 +2878,22 @@ static NvBool NvKmsKapiOverlayLayerConfigToKms(
         params->layer[layer].compositionParams.specified = TRUE;
         params->layer[layer].minPresentInterval =
             layerConfig->minPresentInterval;
-
-        params->layer[layer].colorSpace.val = layerConfig->inputColorSpace;
-        params->layer[layer].colorSpace.specified = TRUE;
     }
 
-    if (layerRequestedConfig->flags.cscChanged) {
+    if (layerRequestedConfig->flags.cscChanged ||
+        layerRequestedConfig->flags.matrixOverridesChanged ||
+        bFromKmsSetMode) {
         params->layer[layer].csc.specified = NV_TRUE;
         params->layer[layer].csc.useMain = layerConfig->cscUseMain;
         if (!layerConfig->cscUseMain) {
             params->layer[layer].csc.matrix = layerConfig->csc;
+        }
+
+        // 'blendCtm' overrides 'csc', but provides a 3x4 matrix.
+        if (layerConfig->matrixOverrides.enabled.blendCtm) {
+            params->layer[layer].csc.useMain = FALSE;
+            params->layer[layer].csc.matrix =
+                layerConfig->matrixOverrides.blendCtm;
         }
     }
 
@@ -2608,8 +2916,68 @@ static NvBool NvKmsKapiOverlayLayerConfigToKms(
         params->layer[layer].outputPosition.specified = NV_TRUE;
     }
 
+    if (layerRequestedConfig->flags.inputColorSpaceChanged || bFromKmsSetMode) {
+        params->layer[layer].colorSpace.val = layerConfig->inputColorSpace;
+        params->layer[layer].colorSpace.specified = TRUE;
+    }
+
+    if (layerRequestedConfig->flags.inputTfChanged || bFromKmsSetMode) {
+        params->layer[layer].tf.val = layerConfig->inputTf;
+        params->layer[layer].tf.specified = TRUE;
+    }
+
+    if (layerRequestedConfig->flags.inputColorRangeChanged || bFromKmsSetMode) {
+        params->layer[layer].colorRange.val = layerConfig->inputColorRange;
+        params->layer[layer].colorSpace.specified = TRUE;
+    }
+
     AssignHDRMetadataConfig(layerConfig, layerRequestedConfig, layer,
                             params, bFromKmsSetMode);
+
+    if (layerRequestedConfig->flags.matrixOverridesChanged || bFromKmsSetMode) {
+        // 'lmsCtm' explicitly provides a matrix to program CSC00.
+        if (layerConfig->matrixOverrides.enabled.lmsCtm) {
+            params->layer[layer].csc00Override.matrix =
+                layerConfig->matrixOverrides.lmsCtm;
+            params->layer[layer].csc00Override.enabled = TRUE;
+        } else {
+            params->layer[layer].csc00Override.enabled = FALSE;
+        }
+        params->layer[layer].csc00Override.specified = TRUE;
+
+        // 'lmsToItpCtm' explicitly provides a matrix to program CSC01.
+        if (layerConfig->matrixOverrides.enabled.lmsToItpCtm) {
+            params->layer[layer].csc01Override.matrix =
+                layerConfig->matrixOverrides.lmsToItpCtm;
+            params->layer[layer].csc01Override.enabled = TRUE;
+        } else {
+            params->layer[layer].csc01Override.enabled = FALSE;
+        }
+        params->layer[layer].csc01Override.specified = TRUE;
+
+        // 'itpToLmsCtm' explicitly provides a matrix to program CSC10.
+        if (layerConfig->matrixOverrides.enabled.itpToLmsCtm) {
+            params->layer[layer].csc10Override.matrix =
+                layerConfig->matrixOverrides.itpToLmsCtm;
+            params->layer[layer].csc10Override.enabled = TRUE;
+        } else {
+            params->layer[layer].csc10Override.enabled = FALSE;
+        }
+        params->layer[layer].csc10Override.specified = TRUE;
+
+        // 'blendCtm' explicitly provides a matrix to program CSC11.
+        if (layerConfig->matrixOverrides.enabled.blendCtm) {
+            params->layer[layer].csc11Override.matrix =
+                layerConfig->matrixOverrides.blendCtm;
+            params->layer[layer].csc11Override.enabled = TRUE;
+        } else {
+            params->layer[layer].csc11Override.enabled = FALSE;
+        }
+        params->layer[layer].csc11Override.specified = TRUE;
+    }
+
+    AssignLayerLutConfig(device, layerConfig, layerRequestedConfig, layer,
+                         params, bFromKmsSetMode);
 
     if (commit) {
         NvU32 nextIndex = NVKMS_KAPI_INC_NOTIFIER_INDEX(
@@ -2695,9 +3063,6 @@ static NvBool NvKmsKapiPrimaryLayerConfigToKms(
             }
         }
 
-        params->layer[NVKMS_MAIN_LAYER].colorSpace.val = layerConfig->inputColorSpace;
-        params->layer[NVKMS_MAIN_LAYER].colorSpace.specified = TRUE;
-
         changed = TRUE;
     }
 
@@ -2709,18 +3074,98 @@ static NvBool NvKmsKapiPrimaryLayerConfigToKms(
         changed = TRUE;
     }
 
-    if (layerRequestedConfig->flags.cscChanged) {
+    if (layerRequestedConfig->flags.cscChanged ||
+        layerRequestedConfig->flags.matrixOverridesChanged ||
+        bFromKmsSetMode) {
         nvAssert(!layerConfig->cscUseMain);
 
         params->layer[NVKMS_MAIN_LAYER].csc.specified = NV_TRUE;
         params->layer[NVKMS_MAIN_LAYER].csc.useMain = FALSE;
         params->layer[NVKMS_MAIN_LAYER].csc.matrix = layerConfig->csc;
 
+        // 'blendCtm' overrides 'csc', but provides a 3x4 matrix.
+        if (layerConfig->matrixOverrides.enabled.blendCtm) {
+            params->layer[NVKMS_MAIN_LAYER].csc.matrix =
+                layerConfig->matrixOverrides.blendCtm;
+        }
+
         changed = TRUE;
     }
 
-    AssignHDRMetadataConfig(layerConfig, layerRequestedConfig, NVKMS_MAIN_LAYER,
-                            params, bFromKmsSetMode);
+    if (layerRequestedConfig->flags.inputColorSpaceChanged || bFromKmsSetMode) {
+        params->layer[NVKMS_MAIN_LAYER].colorSpace.val = layerConfig->inputColorSpace;
+        params->layer[NVKMS_MAIN_LAYER].colorSpace.specified = TRUE;
+
+        changed = TRUE;
+    }
+
+    if (layerRequestedConfig->flags.inputTfChanged || bFromKmsSetMode) {
+        params->layer[NVKMS_MAIN_LAYER].tf.val = layerConfig->inputTf;
+        params->layer[NVKMS_MAIN_LAYER].tf.specified = TRUE;
+
+        changed = TRUE;
+    }
+
+    if (layerRequestedConfig->flags.inputColorRangeChanged || bFromKmsSetMode) {
+        params->layer[NVKMS_MAIN_LAYER].colorRange.val = layerConfig->inputColorRange;
+        params->layer[NVKMS_MAIN_LAYER].colorRange.specified = TRUE;
+
+        changed = TRUE;
+    }
+
+    if (AssignHDRMetadataConfig(layerConfig, layerRequestedConfig,
+                                NVKMS_MAIN_LAYER, params, bFromKmsSetMode)) {
+        changed = TRUE;
+    }
+
+    if (layerRequestedConfig->flags.matrixOverridesChanged || bFromKmsSetMode) {
+        // 'lmsCtm' explicitly provides a matrix to program CSC00.
+        if (layerConfig->matrixOverrides.enabled.lmsCtm) {
+            params->layer[NVKMS_MAIN_LAYER].csc00Override.matrix =
+                layerConfig->matrixOverrides.lmsCtm;
+            params->layer[NVKMS_MAIN_LAYER].csc00Override.enabled = TRUE;
+        } else {
+            params->layer[NVKMS_MAIN_LAYER].csc00Override.enabled = FALSE;
+        }
+        params->layer[NVKMS_MAIN_LAYER].csc00Override.specified = TRUE;
+
+        // 'lmsToItpCtm' explicitly provides a matrix to program CSC01.
+        if (layerConfig->matrixOverrides.enabled.lmsToItpCtm) {
+            params->layer[NVKMS_MAIN_LAYER].csc01Override.matrix =
+                layerConfig->matrixOverrides.lmsToItpCtm;
+            params->layer[NVKMS_MAIN_LAYER].csc01Override.enabled = TRUE;
+        } else {
+            params->layer[NVKMS_MAIN_LAYER].csc01Override.enabled = FALSE;
+        }
+        params->layer[NVKMS_MAIN_LAYER].csc01Override.specified = TRUE;
+
+        // 'itpToLmsCtm' explicitly provides a matrix to program CSC10.
+        if (layerConfig->matrixOverrides.enabled.itpToLmsCtm) {
+            params->layer[NVKMS_MAIN_LAYER].csc10Override.matrix =
+                layerConfig->matrixOverrides.itpToLmsCtm;
+            params->layer[NVKMS_MAIN_LAYER].csc10Override.enabled = TRUE;
+        } else {
+            params->layer[NVKMS_MAIN_LAYER].csc10Override.enabled = FALSE;
+        }
+        params->layer[NVKMS_MAIN_LAYER].csc10Override.specified = TRUE;
+
+        // 'blendCtm' explicitly provides a matrix to program CSC11.
+        if (layerConfig->matrixOverrides.enabled.blendCtm) {
+            params->layer[NVKMS_MAIN_LAYER].csc11Override.matrix =
+                layerConfig->matrixOverrides.blendCtm;
+            params->layer[NVKMS_MAIN_LAYER].csc11Override.enabled = TRUE;
+        } else {
+            params->layer[NVKMS_MAIN_LAYER].csc11Override.enabled = FALSE;
+        }
+        params->layer[NVKMS_MAIN_LAYER].csc11Override.specified = TRUE;
+
+        changed = TRUE;
+    }
+
+    if (AssignLayerLutConfig(device, layerConfig, layerRequestedConfig,
+                             NVKMS_MAIN_LAYER, params, bFromKmsSetMode)) {
+        changed = TRUE;
+    }
 
     if (commit && changed) {
         NvU32 nextIndex = NVKMS_KAPI_INC_NOTIFIER_INDEX(
@@ -2795,28 +3240,35 @@ static NvBool NvKmsKapiLayerConfigToKms(
 }
 
 static void NvKmsKapiHeadLutConfigToKms(
-    const struct NvKmsKapiHeadModeSetConfig *modeSetConfig,
-    struct NvKmsSetLutCommonParams *lutParams)
+    const struct NvKmsKapiHeadRequestedConfig *headRequestedConfig,
+    struct NvKmsSetLutCommonParams *lutParams,
+    NvBool bFromKmsSetMode)
 {
+    const struct NvKmsKapiHeadModeSetConfig *modeSetConfig =
+        &headRequestedConfig->modeSetConfig;
     struct NvKmsSetInputLutParams  *input  = &lutParams->input;
     struct NvKmsSetOutputLutParams *output = &lutParams->output;
 
     /* input LUT */
-    input->specified = modeSetConfig->lut.input.specified;
-    input->depth     = modeSetConfig->lut.input.depth;
-    input->start     = modeSetConfig->lut.input.start;
-    input->end       = modeSetConfig->lut.input.end;
+    if (headRequestedConfig->flags.legacyIlutChanged || bFromKmsSetMode) {
+        input->specified = NV_TRUE;
+        input->depth     = modeSetConfig->lut.input.depth;
+        input->start     = modeSetConfig->lut.input.start;
+        input->end       = modeSetConfig->lut.input.end;
 
-    input->pRamps = nvKmsPointerToNvU64(modeSetConfig->lut.input.pRamps);
+        input->pRamps = nvKmsPointerToNvU64(modeSetConfig->lut.input.pRamps);
+    }
 
     /* output LUT */
-    output->specified = modeSetConfig->lut.output.specified;
-    output->enabled   = modeSetConfig->lut.output.enabled;
+    if (headRequestedConfig->flags.legacyOlutChanged || bFromKmsSetMode) {
+        output->specified = NV_TRUE;
+        output->enabled   = modeSetConfig->lut.output.enabled;
 
-    output->pRamps = nvKmsPointerToNvU64(modeSetConfig->lut.output.pRamps);
+        output->pRamps = nvKmsPointerToNvU64(modeSetConfig->lut.output.pRamps);
+    }
 }
 
-static NvBool AnyLayerTransferFunctionChanged(
+static NvBool AnyLayerOutputTransferFunctionChanged(
     const struct NvKmsKapiHeadRequestedConfig *headRequestedConfig)
 {
     NvU32 layer;
@@ -2827,7 +3279,7 @@ static NvBool AnyLayerTransferFunctionChanged(
         const struct NvKmsKapiLayerRequestedConfig *layerRequestedConfig =
             &headRequestedConfig->layerRequestedConfig[layer];
 
-        if (layerRequestedConfig->flags.tfChanged) {
+        if (layerRequestedConfig->flags.outputTfChanged) {
             return NV_TRUE;
         }
     }
@@ -2854,9 +3306,9 @@ static NvBool GetOutputTransferFunction(
 
         if (layerConfig->hdrMetadata.enabled) {
             if (!found) {
-                *tf = layerConfig->tf;
+                *tf = layerConfig->outputTf;
                 found = NV_TRUE;
-            } else if (*tf != layerConfig->tf) {
+            } else if (*tf != layerConfig->outputTf) {
                 nvKmsKapiLogDebug(
                     "Output transfer function should be the same for all layers on a head");
                 return NV_FALSE;
@@ -2925,8 +3377,29 @@ static NvBool NvKmsKapiRequestedModeSetConfigToKms(
 
         NvKmsKapiDisplayModeToKapi(&headModeSetConfig->mode, &paramsHead->mode);
 
-        if (headRequestedConfig->flags.lutChanged) {
-            NvKmsKapiHeadLutConfigToKms(headModeSetConfig, &paramsHead->flip.lut);
+        NvKmsKapiHeadLutConfigToKms(headRequestedConfig,
+                                    &paramsHead->flip.lut,
+                                    NV_TRUE /* bFromKmsSetMode */);
+
+        if (device->lutCaps.olut.supported) {
+            paramsHead->flip.olut.specified = TRUE;
+            paramsHead->flip.olut.enabled = headModeSetConfig->olut.enabled;
+
+            if (headModeSetConfig->olut.lutSurface != NULL) {
+                paramsHead->flip.olut.lut.surfaceHandle =
+                    headModeSetConfig->olut.lutSurface->hKmsHandle;
+            } else {
+                paramsHead->flip.olut.lut.surfaceHandle = 0;
+            }
+            paramsHead->flip.olut.lut.offset = headModeSetConfig->olut.offset;
+            paramsHead->flip.olut.lut.vssSegments =
+                headModeSetConfig->olut.vssSegments;
+            paramsHead->flip.olut.lut.lutEntries =
+                headModeSetConfig->olut.lutEntries;
+
+            paramsHead->flip.olutFpNormScale.specified = TRUE;
+            paramsHead->flip.olutFpNormScale.val =
+                headModeSetConfig->olutFpNormScale;
         }
 
         NvKmsKapiCursorConfigToKms(&headRequestedConfig->cursorRequestedConfig,
@@ -2975,13 +3448,8 @@ static NvBool NvKmsKapiRequestedModeSetConfigToKms(
         paramsHead->viewPortSizeIn.height =
             headModeSetConfig->mode.timings.vVisible;
 
-        if (device->caps.requiresVrrSemaphores) {
-            paramsHead->allowGsync = NV_FALSE;
-            paramsHead->allowAdaptiveSync = NVKMS_ALLOW_ADAPTIVE_SYNC_DISABLED;
-        } else {
-            paramsHead->allowGsync = NV_TRUE;
-            paramsHead->allowAdaptiveSync = NVKMS_ALLOW_ADAPTIVE_SYNC_ALL;
-        }
+        paramsHead->allowGsync = NV_TRUE;
+        paramsHead->allowAdaptiveSync = NVKMS_ALLOW_ADAPTIVE_SYNC_ALL;
     }
 
     return NV_TRUE;
@@ -3010,9 +3478,9 @@ static NvBool KmsSetMode(
         goto done;
     }
 
-    status = nvkms_ioctl_from_kapi(device->pKmsOpen,
-                                   NVKMS_IOCTL_SET_MODE,
-                                   params, sizeof(*params));
+    status = nvkms_ioctl_from_kapi_try_pmlock(device->pKmsOpen,
+                                              NVKMS_IOCTL_SET_MODE,
+                                              params, sizeof(*params));
 
     replyConfig->flipResult =
         (params->reply.status == NVKMS_SET_MODE_STATUS_SUCCESS) ?
@@ -3107,7 +3575,6 @@ static NvBool KmsFlip(
 
     params->request.deviceHandle = device->hKmsDevice;
     params->request.commit = commit;
-    params->request.allowVrr = NV_FALSE;
     params->request.pFlipHead = nvKmsPointerToNvU64(pFlipHead);
     params->request.numFlipHeads = 0;
     for (head = 0;
@@ -3157,7 +3624,7 @@ static NvBool KmsFlip(
         }
 
         flipParams->tf.specified =
-            AnyLayerTransferFunctionChanged(headRequestedConfig);
+            AnyLayerOutputTransferFunctionChanged(headRequestedConfig);
         if (flipParams->tf.specified) {
             enum NvKmsOutputTf tf;
             status = GetOutputTransferFunction(headRequestedConfig, &tf);
@@ -3187,10 +3654,35 @@ static NvBool KmsFlip(
         }
 
         if (headModeSetConfig->vrrEnabled) {
-            params->request.allowVrr = NV_TRUE;
+            flipParams->allowVrr = NV_TRUE;
         }
-        if (headRequestedConfig->flags.lutChanged) {
-            NvKmsKapiHeadLutConfigToKms(headModeSetConfig, &flipParams->lut);
+
+        NvKmsKapiHeadLutConfigToKms(headRequestedConfig,
+                                    &flipParams->lut,
+                                    NV_FALSE /* bFromKmsSetMode */);
+
+        if (device->lutCaps.olut.supported && headRequestedConfig->flags.olutChanged) {
+            flipParams->olut.specified = TRUE;
+            flipParams->olut.enabled = headModeSetConfig->olut.enabled;
+
+            if (headModeSetConfig->olut.lutSurface != NULL) {
+                flipParams->olut.lut.surfaceHandle =
+                    headModeSetConfig->olut.lutSurface->hKmsHandle;
+            } else {
+                flipParams->olut.lut.surfaceHandle = 0;
+            }
+            flipParams->olut.lut.offset = headModeSetConfig->olut.offset;
+            flipParams->olut.lut.vssSegments =
+                headModeSetConfig->olut.vssSegments;
+            flipParams->olut.lut.lutEntries =
+                headModeSetConfig->olut.lutEntries;
+        }
+
+        if (device->lutCaps.olut.supported &&
+            headRequestedConfig->flags.olutFpNormScaleChanged) {
+
+            flipParams->olutFpNormScale.specified = TRUE;
+            flipParams->olutFpNormScale.val = headModeSetConfig->olutFpNormScale;
         }
     }
 
@@ -3198,9 +3690,9 @@ static NvBool KmsFlip(
         goto done;
     }
 
-    status = nvkms_ioctl_from_kapi(device->pKmsOpen,
-                                   NVKMS_IOCTL_FLIP,
-                                   params, sizeof(*params));
+    status = nvkms_ioctl_from_kapi_try_pmlock(device->pKmsOpen,
+                                              NVKMS_IOCTL_FLIP,
+                                              params, sizeof(*params));
 
     replyConfig->flipResult = params->reply.flipResult;
 
@@ -3216,6 +3708,9 @@ static NvBool KmsFlip(
     }
 
     /*! fill back flip reply */
+    replyConfig->vrrFlip = params->reply.vrrFlipType;
+    replyConfig->vrrSemaphoreIndex = params->reply.vrrSemaphoreIndex;
+
     for (i = 0; i < params->request.numFlipHeads; i++) {
          const struct NvKmsKapiHeadRequestedConfig *headRequestedConfig =
             &requestedConfig->headRequestedConfig[pFlipHead[i].head];
@@ -3246,7 +3741,7 @@ static NvBool KmsFlip(
 
               /*! initialize explicitly to -1 as 0 is valid file descriptor */
               layerReplyConfig->postSyncptFd = -1;
-              if (layerRequestedConfig->syncptParams.postSyncptRequested) {
+              if (layerRequestedConfig->syncParams.postSyncptRequested) {
                  layerReplyConfig->postSyncptFd =
                      flipParams->layer[layer].postSyncpt.u.fd;
               }
@@ -3286,9 +3781,11 @@ static NvBool ApplyModeSetConfig(
         }
 
         bRequiredModeset =
-            headRequestedConfig->flags.activeChanged   ||
-            headRequestedConfig->flags.displaysChanged ||
-            headRequestedConfig->flags.modeChanged;
+            headRequestedConfig->flags.activeChanged       ||
+            headRequestedConfig->flags.displaysChanged     ||
+            headRequestedConfig->flags.modeChanged         ||
+            headRequestedConfig->flags.hdrInfoFrameChanged ||
+            headRequestedConfig->flags.colorimetryChanged;
 
         /*
          * NVKMS flip ioctl could not validate flip configuration for an
@@ -3457,6 +3954,72 @@ static void nvKmsKapiSetSuspendResumeCallback
     pSuspendResumeFunc = function;
 }
 
+static NvBool SignalVrrSemaphore
+(
+    struct NvKmsKapiDevice *device,
+    NvS32 index
+)
+{
+    NvBool status = NV_TRUE;
+    struct NvKmsVrrSignalSemaphoreParams params = { };
+    params.request.deviceHandle = device->hKmsDevice;
+    params.request.vrrSemaphoreIndex = index;
+    status = nvkms_ioctl_from_kapi(device->pKmsOpen,
+                                   NVKMS_IOCTL_VRR_SIGNAL_SEMAPHORE,
+                                   &params, sizeof(params));
+    if (!status) {
+        nvKmsKapiLogDeviceDebug(device, "NVKMS VrrSignalSemaphore failed");
+    }
+    return status;
+}
+
+static NvBool CheckLutNotifier
+(
+    struct NvKmsKapiDevice *device,
+    NvU32 head,
+    NvBool waitForCompletion
+)
+{
+    NvBool status = NV_TRUE;
+    struct NvKmsCheckLutNotifierParams params = { };
+    params.request.deviceHandle = device->hKmsDevice;
+    params.request.dispHandle = device->hKmsDisp;
+    params.request.head = head;
+    params.request.waitForCompletion = waitForCompletion;
+    status = nvkms_ioctl_from_kapi(device->pKmsOpen,
+                                   NVKMS_IOCTL_CHECK_LUT_NOTIFIER,
+                                   &params, sizeof(params));
+
+    /*
+     * In cases where we're first enabling a head, we would expect status to be
+     * false, but in that case, there's no LUT notifier to wait for, so treat
+     * that case as complete.
+     */
+    return !status || params.reply.complete;
+}
+
+static void FramebufferConsoleDisabled
+(
+    struct NvKmsKapiDevice *device
+)
+{
+    struct NvKmsFramebufferConsoleDisabledParams params = { };
+    NvBool status;
+
+    if (device->hKmsDevice == 0x0) {
+        return;
+    }
+
+    params.request.deviceHandle = device->hKmsDevice;
+
+    status = nvkms_ioctl_from_kapi(device->pKmsOpen,
+                                   NVKMS_IOCTL_FRAMEBUFFER_CONSOLE_DISABLED,
+                                   &params, sizeof(params));
+    if (!status) {
+        nvKmsKapiLogDeviceDebug(device, "NVKMS FramebufferConsoleDisabled failed");
+    }
+}
+
 NvBool nvKmsKapiGetFunctionsTableInternal
 (
     struct NvKmsKapiFunctionsTable *funcsTable
@@ -3508,6 +4071,7 @@ NvBool nvKmsKapiGetFunctionsTableInternal
 
     funcsTable->mapMemory   = MapMemory;
     funcsTable->unmapMemory = UnmapMemory;
+    funcsTable->isVidmem    = IsVidmem;
 
     funcsTable->createSurface  = CreateSurface;
     funcsTable->destroySurface = DestroySurface;
@@ -3525,8 +4089,6 @@ NvBool nvKmsKapiGetFunctionsTableInternal
     funcsTable->getMemoryPages = GetMemoryPages;
     funcsTable->freeMemoryPages = FreeMemoryPages;
 
-    funcsTable->isMemoryValidForDisplay = IsMemoryValidForDisplay;
-
     funcsTable->importSemaphoreSurface = nvKmsKapiImportSemaphoreSurface;
     funcsTable->freeSemaphoreSurface = nvKmsKapiFreeSemaphoreSurface;
     funcsTable->registerSemaphoreSurfaceCallback =
@@ -3536,6 +4098,57 @@ NvBool nvKmsKapiGetFunctionsTableInternal
     funcsTable->setSemaphoreSurfaceValue =
         nvKmsKapiSetSemaphoreSurfaceValue;
     funcsTable->setSuspendResumeCallback = nvKmsKapiSetSuspendResumeCallback;
+    funcsTable->framebufferConsoleDisabled = FramebufferConsoleDisabled;
+
+    funcsTable->tryInitDisplaySemaphore = nvKmsKapiTryInitDisplaySemaphore;
+    funcsTable->signalDisplaySemaphore = nvKmsKapiSignalDisplaySemaphore;
+    funcsTable->cancelDisplaySemaphore = nvKmsKapiCancelDisplaySemaphore;
+    funcsTable->signalVrrSemaphore = SignalVrrSemaphore;
+    funcsTable->checkLutNotifier = CheckLutNotifier;
 
     return NV_TRUE;
+}
+
+NvU32 nvKmsKapiF16ToF32Internal(NvU16 a)
+{
+    float16_t fa = { .v = a };
+    return f16_to_f32(fa).v;
+}
+
+NvU16 nvKmsKapiF32ToF16Internal(NvU32 a)
+{
+    float32_t fa = { .v = a };
+    return f32_to_f16(fa).v;
+}
+
+NvU32 nvKmsKapiF32MulInternal(NvU32 a, NvU32 b)
+{
+    float32_t fa = { .v = a };
+    float32_t fb = { .v = b };
+    return f32_mul(fa, fb).v;
+}
+
+NvU32 nvKmsKapiF32DivInternal(NvU32 a, NvU32 b)
+{
+    float32_t fa = { .v = a };
+    float32_t fb = { .v = b };
+    return f32_div(fa, fb).v;
+}
+
+NvU32 nvKmsKapiF32AddInternal(NvU32 a, NvU32 b)
+{
+    float32_t fa = { .v = a };
+    float32_t fb = { .v = b };
+    return f32_add(fa, fb).v;
+}
+
+NvU32 nvKmsKapiF32ToUI32RMinMagInternal(NvU32 a, NvBool exact)
+{
+    float32_t fa = { .v = a };
+    return f32_to_ui32_r_minMag(fa, exact);
+}
+
+NvU32 nvKmsKapiUI32ToF32Internal(NvU32 a)
+{
+    return ui32_to_f32(a).v;
 }

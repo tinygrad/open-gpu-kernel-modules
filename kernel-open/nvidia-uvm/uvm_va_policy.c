@@ -1,5 +1,5 @@
 /*******************************************************************************
-    Copyright (c) 2022 NVIDIA Corporation
+    Copyright (c) 2022-2024 NVIDIA Corporation
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"), to
@@ -51,7 +51,7 @@ const uvm_va_policy_t *uvm_va_policy_get(uvm_va_block_t *va_block, NvU64 addr)
         return node ? &node->policy : &uvm_va_policy_default;
     }
     else {
-        return uvm_va_range_get_policy(va_block->va_range);
+        return &va_block->managed_range->policy;
     }
 }
 
@@ -97,13 +97,19 @@ const uvm_va_policy_t *uvm_va_policy_get_region(uvm_va_block_t *va_block, uvm_va
         return policy;
     }
     else {
-        return uvm_va_range_get_policy(va_block->va_range);
+        return &va_block->managed_range->policy;
     }
 }
 
 bool uvm_va_policy_preferred_location_equal(const uvm_va_policy_t *policy, uvm_processor_id_t proc, int cpu_numa_id)
 {
     bool equal = uvm_id_equal(policy->preferred_location, proc);
+
+    if (!UVM_ID_IS_CPU(policy->preferred_location))
+        UVM_ASSERT(policy->preferred_nid == NUMA_NO_NODE);
+
+    if (!UVM_ID_IS_CPU(proc))
+        UVM_ASSERT(cpu_numa_id == NUMA_NO_NODE);
 
     if (equal && UVM_ID_IS_CPU(policy->preferred_location))
         equal = uvm_numa_id_eq(policy->preferred_nid, cpu_numa_id);
@@ -656,7 +662,7 @@ const uvm_va_policy_t *uvm_va_policy_set_preferred_location(uvm_va_block_t *va_b
         // and that the policy is changing.
         UVM_ASSERT(node->node.start >= start);
         UVM_ASSERT(node->node.end <= end);
-        UVM_ASSERT(!uvm_id_equal(node->policy.preferred_location, processor_id));
+        UVM_ASSERT(!uvm_va_policy_preferred_location_equal(&node->policy, processor_id, cpu_node_id));
     }
 
     node->policy.preferred_location = processor_id;

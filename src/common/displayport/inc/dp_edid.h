@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2010-2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2010-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -124,26 +124,7 @@ namespace DisplayPort
             return this->patchedChecksum;
         }
 
-        bool isValidHeader() const
-        {
-            NvU8 validHeaderData[8] = {
-                0x00, 0xFF, 0xFF, 0xFF, 0xFF,
-                0xFF, 0xFF, 0x00};
-
-            if (buffer.getLength() < 0x8)
-                return false;
-
-            for (unsigned i = 0; i < 8; i++)
-            {
-                if (buffer.data[i] != validHeaderData[i])
-                {
-                    DP_LOG(("DP-EDID> Invalid EDID Header"));
-                    return false;
-                }
-            }
-
-            return true;
-        }
+        bool isValidHeader() const;
 
         unsigned getManufId() const
         {
@@ -184,8 +165,15 @@ namespace DisplayPort
             bool delayAfterD3;
             bool keepLinkAlive;
             bool useLegacyAddress;
-            bool reassessMaxLink;
             bool bIgnoreDscCap;           // Ignore DSC even if sink reports DSC capability
+            bool bDisableDownspread;
+            bool bForceHeadShutdown;
+            bool bDP2XPreferNonDSCForLowPClk;
+            bool bDisableDscMaxBppLimit;
+            bool bForceHeadShutdownOnModeTransition;
+            bool bSkipCableIdCheck;
+            bool bAllocateManualTimeslots;
+            bool bSkipResetMSTMBeforeLt;
         }_WARFlags;
 
         _WARFlags WARFlags;

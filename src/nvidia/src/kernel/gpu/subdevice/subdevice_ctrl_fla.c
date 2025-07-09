@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2018-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2018-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -177,16 +177,20 @@ subdeviceCtrlCmdFlaRange_IMPL
     OBJGPU   *pGpu = GPU_RES_GET_GPU(pSubdevice);
     KernelBus *pKernelBus = GPU_GET_KERNEL_BUS(pGpu);
     KernelMIGManager *pKernelMIGManager;
-    NvHandle hClient = RES_GET_CLIENT_HANDLE(pSubdevice);
-    CALL_CONTEXT *pCallContext = resservGetTlsCallContext();
+    RmClient *pRmClient = dynamicCast(RES_GET_CLIENT(pSubdevice), RmClient);
+    CALL_CONTEXT *pCallContext;
+
+    NV_ASSERT_OR_RETURN(NULL != pRmClient, NV_ERR_INVALID_CLIENT);
+
+    pCallContext = resservGetTlsCallContext();
 
     NV_ASSERT_OR_RETURN(pCallContext != NULL, NV_ERR_INVALID_STATE);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
-    if (!rmclientIsCapableOrAdminByHandle(hClient,
-                                          NV_RM_CAP_EXT_FABRIC_MGMT,
-                                          pCallContext->secInfo.privLevel))
+    if (!rmclientIsCapableOrAdmin(pRmClient,
+                                  NV_RM_CAP_EXT_FABRIC_MGMT,
+                                  pCallContext->secInfo.privLevel))
     {
         return NV_ERR_INSUFFICIENT_PERMISSIONS;
     }
@@ -254,7 +258,7 @@ subdeviceCtrlCmdFlaGetRange_IMPL
     KernelBus    *pKernelBus    = GPU_GET_KERNEL_BUS(pGpu);
     NvBool        bIsConntectedToNvswitch;
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     {
         KernelNvlink *pKernelNvlink = GPU_GET_KERNEL_NVLINK(pGpu);
@@ -278,7 +282,7 @@ subdeviceCtrlCmdFlaGetFabricMemStats_IMPL
     FABRIC_VASPACE *pFabricVAS = NULL;
     NV_STATUS       status = NV_OK;
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     if (pGpu->pFabricVAS == NULL)
     {

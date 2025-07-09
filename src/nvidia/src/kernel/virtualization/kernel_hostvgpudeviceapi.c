@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -23,11 +23,11 @@
 #include "ctrl/ctrl2080.h"
 #include "virtualization/kernel_hostvgpudeviceapi.h"
 #include "virtualization/vgpuconfigapi.h"
-
+#include "gpu/bus/kern_bus.h"
+#include "platform/sli/sli.h"
 #include "core/core.h"
 #include "core/locks.h"
 #include "os/os.h"
-#include "virtualization/kernel_hostvgpudeviceapi.h"
 #include "dev_ctrl_defines.h"
 #include "mem_mgr/mem.h"
 #include "kernel/gpu/bif/kernel_bif.h"
@@ -45,6 +45,9 @@
 #include "kernel/rmapi/rs_utils.h"
 #include "vgpu/vgpu_events.h"
 #include "gpu/mem_sys/kern_mem_sys.h"
+#if RMCFG_FEATURE_GSPRM_BULLSEYE || defined(GSPRM_BULLSEYE_ENABLE)
+#include "diagnostics/code_coverage_mgr.h"
+#endif
 
 ct_assert(NVA084_MAX_VMMU_SEGMENTS == NV2080_CTRL_MAX_VMMU_SEGMENTS);
 ct_assert(NV2080_GPU_MAX_ENGINES == RM_ENGINE_TYPE_LAST);
@@ -76,13 +79,7 @@ kernelhostvgpudeviceapiConstruct_IMPL
 {
     NV_STATUS status = NV_OK;
     OBJGPU *pGpu = GPU_RES_GET_GPU(pKernelHostVgpuDeviceApi);
-    KernelGsp *pKernelGsp = GPU_GET_KERNEL_GSP(pGpu);
-    RM_API *pRmApi = GPU_GET_PHYSICAL_RMAPI(pGpu);
     NVA084_ALLOC_PARAMETERS *pAllocParams = pParams->pAllocParams;
-    NV2080_CTRL_VGPU_MGR_INTERNAL_BOOTLOAD_GSP_VGPU_PLUGIN_TASK_PARAMS *pBootloadParams = NULL;
-    Memory *pMemory;
-    NvU32 i;
-    NvU64 vmmuSegmentSize;
     KERNEL_HOST_VGPU_DEVICE *pKernelHostVgpuDevice = NULL;
     RsShared *pShared;
     Device *pDevice;
@@ -115,6 +112,7 @@ kernelhostvgpudeviceapiConstruct_IMPL
                                    pAllocParams->vgpuDeviceInstanceId,
                                    pAllocParams->bDisableDefaultSmcExecPartRestore,
                                    pAllocParams->placementId,
+                                   pAllocParams->vgpuDevName,
                                    &pKernelHostVgpuDevice);
     if (status != NV_OK)
     {
@@ -125,159 +123,14 @@ kernelhostvgpudeviceapiConstruct_IMPL
     status = serverAllocShare(&g_resServ, classInfo(KernelHostVgpuDeviceShr), &pShared);
     if (status != NV_OK)
         goto allocShareError;
-    pKernelHostVgpuDeviceApi->pShared = dynamicCast(pShared, KernelHostVgpuDeviceShr);
-    pKernelHostVgpuDeviceApi->pShared->pDevice = pKernelHostVgpuDevice;
-    pKernelHostVgpuDevice->pGspPluginHeapMemDesc = NULL;
 
-    if (IS_GSP_CLIENT(pGpu))
-    {
-        KernelMemorySystem *pKernelMemorySystem = GPU_GET_KERNEL_MEMORY_SYSTEM(pGpu);
+    pKernelHostVgpuDeviceApi->pShared                = dynamicCast(pShared, KernelHostVgpuDeviceShr);
+    pKernelHostVgpuDeviceApi->pShared->pDevice       = pKernelHostVgpuDevice;
+    pKernelHostVgpuDevice->pGspPluginHeapMemDesc     = NULL;
+    pKernelHostVgpuDevice->bGspPluginTaskInitialized = NV_FALSE;
+    pKernelHostVgpuDevice->vgpuDeviceInstanceId      = pAllocParams->vgpuDeviceInstanceId;
 
-        if (!IS_VGPU_GSP_PLUGIN_OFFLOAD_ENABLED(pGpu) || !gpuIsSriovEnabled(pGpu))
-        {
-            status = NV_ERR_NOT_SUPPORTED;
-            goto done;
-        }
-
-        if (pAllocParams->numGuestFbHandles == 0 || pAllocParams->numGuestFbHandles > NVA084_MAX_VMMU_SEGMENTS)
-        {
-            status = NV_ERR_INVALID_ARGUMENT;
-            goto done;
-        }
-
-        vmmuSegmentSize = gpuGetVmmuSegmentSize(pGpu);
-        if (vmmuSegmentSize == 0)
-        {
-            status = NV_ERR_INVALID_STATE;
-            goto done;
-        }
-
-        // This structure can't be allocated on stack because it will result function stack usage > 4KB
-        pBootloadParams = portMemAllocNonPaged(sizeof(*pBootloadParams));
-        if (pBootloadParams == NULL)
-        {
-            status = NV_ERR_NO_MEMORY;
-            goto done;
-        }
-        portMemSet(pBootloadParams, 0, sizeof(*pBootloadParams));
-
-        if (gpuIsSelfHosted(pGpu))
-        {
-            pKernelHostVgpuDevice->hbmRegionList = portMemAllocNonPaged(sizeof(HBM_REGION_INFO)* pAllocParams->numGuestFbHandles);
-            if (pKernelHostVgpuDevice->hbmRegionList == NULL)
-            {
-                status = NV_ERR_NO_MEMORY;
-                goto done;
-            }
-
-            pKernelHostVgpuDevice->numValidHbmRegions = 0;
-        }
-
-        for (i = 0; i < pAllocParams->numGuestFbHandles; i++)
-        {
-            status = memGetByHandle(pClient, pAllocParams->guestFbHandleList[i], &pMemory);
-            if (status != NV_OK)
-            {
-                NV_PRINTF(LEVEL_ERROR, "Invalid Memory handle\n");
-                goto done;
-            }
-            pBootloadParams->guestFbPhysAddrList[i] = memdescGetPhysAddr(pMemory->pMemDesc, AT_GPU, 0);
-            pBootloadParams->guestFbLengthList[i] = pMemory->pMemDesc->Size;
-
-            if (!NV_IS_ALIGNED64(pBootloadParams->guestFbPhysAddrList[i], vmmuSegmentSize) ||
-                !NV_IS_ALIGNED64(pBootloadParams->guestFbLengthList[i], vmmuSegmentSize))
-            {
-                NV_PRINTF(LEVEL_ERROR, "guest fb segment PA or length is not VMMU segment size aligned\n");
-                status = NV_ERR_INVALID_ARGUMENT;
-                goto done;
-            }
-            if (gpuIsSelfHosted(pGpu))
-            {
-                pKernelHostVgpuDevice->hbmRegionList[i].hbmBaseAddr = memdescGetPhysAddr(pMemory->pMemDesc, AT_GPU, 0);
-                pKernelHostVgpuDevice->hbmRegionList[i].hbmBaseAddr += pKernelMemorySystem->coherentCpuFbBase;
-                pKernelHostVgpuDevice->hbmRegionList[i].size = pMemory->pMemDesc->Size;
-                pKernelHostVgpuDevice->numValidHbmRegions++;
-            }
-        }
-
-        status = memGetByHandle(pClient, pAllocParams->hPluginHeapMemory, &pMemory);
-        if (status != NV_OK)
-        {
-            NV_PRINTF(LEVEL_ERROR, "Invalid plugin heap Memory handle\n");
-            goto done;
-        }
-
-        pKernelHostVgpuDevice->pGspPluginHeapMemDesc = pMemory->pMemDesc;
-
-        // As GSP-RM will map this memory in vGPU-GSP-Plugin's address space, it
-        // should be referenced to make sure it doesn't get freed before
-        // vGPU-Gsp-Plugin's usage has been removed
-        memdescAddRef(pKernelHostVgpuDevice->pGspPluginHeapMemDesc);
-
-        pBootloadParams->pluginHeapMemoryPhysAddr = memdescGetPhysAddr(pMemory->pMemDesc, AT_GPU, 0);
-        pBootloadParams->pluginHeapMemoryLength = pMemory->pMemDesc->Size;
-
-        // Initialize logging buffers for vgpu partition
-        {
-            if ((pAllocParams->initTaskLogBuffOffset + pAllocParams->initTaskLogBuffSize) >=
-                pBootloadParams->pluginHeapMemoryLength)
-            {
-                NV_PRINTF(LEVEL_ERROR, "Invalid init task log buffer\n");
-                status = NV_ERR_INVALID_ARGUMENT;
-                goto done;
-            }
-
-            if ((pAllocParams->vgpuTaskLogBuffOffset + pAllocParams->vgpuTaskLogBuffSize) >=
-                pBootloadParams->pluginHeapMemoryLength)
-            {
-                NV_PRINTF(LEVEL_ERROR, "Invalid vgpu task log buffer\n");
-                status = NV_ERR_INVALID_ARGUMENT;
-                goto done;
-            }
-
-            pBootloadParams->initTaskLogBuffOffset = pAllocParams->initTaskLogBuffOffset + pBootloadParams->pluginHeapMemoryPhysAddr;
-            pBootloadParams->initTaskLogBuffSize = pAllocParams->initTaskLogBuffSize;
-            pBootloadParams->vgpuTaskLogBuffOffset = pAllocParams->vgpuTaskLogBuffOffset + pBootloadParams->pluginHeapMemoryPhysAddr;
-            pBootloadParams->vgpuTaskLogBuffSize = pAllocParams->vgpuTaskLogBuffSize;
-
-            NV_CHECK_OK_OR_GOTO(status,
-                                LEVEL_ERROR,
-                                kgspInitVgpuPartitionLogging_HAL(pGpu, pKernelGsp, pAllocParams->gfid,
-                                                                 pBootloadParams->initTaskLogBuffOffset,
-                                                                 pBootloadParams->initTaskLogBuffSize,
-                                                                 pBootloadParams->vgpuTaskLogBuffOffset,
-                                                                 pBootloadParams->vgpuTaskLogBuffSize),
-                                done);
-        }
-
-
-        pBootloadParams->gfid                              = pAllocParams->gfid;
-        pBootloadParams->swizzId                           = pAllocParams->swizzId;
-        pBootloadParams->numGuestFbSegments                = pAllocParams->numGuestFbHandles;
-        pBootloadParams->ctrlBuffOffset                    = pAllocParams->ctrlBuffOffset;
-        pBootloadParams->bDeviceProfilingEnabled           = pAllocParams->bDeviceProfilingEnabled;
-
-        // Populate chidOffset for all engines to reserve same chid in GSP-RM
-        for (i = 0; i < RM_ENGINE_TYPE_LAST; i++)
-        {
-            NvU32 nv2080EngineType = gpuGetNv2080EngineType(i);
-
-            //
-            // pHostVgpuDevice->chidOffset is in RM_ENGINE_TYPE order
-            // pBootloadParams->chidOffset is in NV2080_ENGINE_TYPE order
-            //
-            pBootloadParams->chidOffset[nv2080EngineType] = pKernelHostVgpuDevice->chidOffset[i];
-        }
-
-        status = pRmApi->Control(pRmApi, pGpu->hInternalClient, pGpu->hInternalSubdevice,
-                                 NV2080_CTRL_CMD_VGPU_MGR_INTERNAL_BOOTLOAD_GSP_VGPU_PLUGIN_TASK,
-                                 pBootloadParams, sizeof(*pBootloadParams));
-        if (status != NV_OK)
-        {
-            NV_PRINTF(LEVEL_ERROR, "Failed to call NV2080_CTRL_CMD_VGPU_MGR_INTERNAL_BOOTLOAD_GSP_VGPU_PLUGIN_TASK\n");
-            goto freeLogging;
-        }
-    }
+    pKernelHostVgpuDevice->bGpupLiveMigrationEnabled = pAllocParams->bGpupLiveMigrationEnabled;
 
     if (status == NV_OK)
     {
@@ -286,7 +139,7 @@ kernelhostvgpudeviceapiConstruct_IMPL
             if (pDevice->pKernelHostVgpuDevice != NULL)
             {
                 status = NV_ERR_INVALID_STATE;
-                goto freeLogging;
+                goto done;
             }
             pDevice->pKernelHostVgpuDevice = pKernelHostVgpuDevice;
         }
@@ -294,16 +147,7 @@ kernelhostvgpudeviceapiConstruct_IMPL
         CliNotifyVgpuConfigEvent(pGpu, NVA081_NOTIFIERS_EVENT_VGPU_GUEST_CREATED);
     }
 
-freeLogging:
-    if (status != NV_OK && IS_GSP_CLIENT(pGpu) && pBootloadParams != NULL)
-    {
-        // Free vgpu partition LIBOS task logging structures.
-        NV_ASSERT_OK(kgspFreeVgpuPartitionLogging_HAL(pGpu, pKernelGsp, pKernelHostVgpuDevice->gfid));
-    }
-
 done:
-    portMemFree(pBootloadParams);
-
     if (status != NV_OK)
     {
         if (pKernelHostVgpuDevice->hbmRegionList != NULL)
@@ -368,12 +212,62 @@ kernelhostvgpudeviceapiCopyConstruct_IMPL
     return NV_OK;
 }
 
+static NV_STATUS
+_kernelhostvgpudeviceInvalidateGpuTLBL2Cache(OBJGPU *pGpu, Device *pDevice)
+{
+    KernelGmmu *pKernelGmmu = GPU_GET_KERNEL_GMMU(pGpu);
+    KernelMemorySystem *pKernelMemorySystem = GPU_GET_KERNEL_MEMORY_SYSTEM(pGpu);
+    KernelBus *pKernelBus = GPU_GET_KERNEL_BUS(pGpu);
+    NV2080_CTRL_FB_FLUSH_GPU_CACHE_PARAMS *pl2_params = portMemAllocNonPaged(sizeof(*pl2_params));
+    NV_STATUS rmStatus = NV_OK;
+
+    if (pl2_params == NULL)
+    {
+        return NV_ERR_NO_MEMORY;
+    }
+
+    /* Invalidate TLBs for non SR-IOV vGPUs */
+    if (!gpuIsSriovEnabled(pGpu))
+        kgmmuInvalidateTlb_HAL(pGpu, pKernelGmmu, NULL, VASPACE_FLAGS_NONE,
+                               PTE_DOWNGRADE, GPU_GFID_PF, NV_GMMU_INVAL_SCOPE_ALL_TLBS);
+
+    /* Invalidate L2 cache for sysmem */
+    pl2_params->flags =
+        DRF_DEF(2080, _CTRL_FB_FLUSH_GPU_CACHE_FLAGS, _APERTURE, _SYSTEM_MEMORY) |
+        DRF_DEF(2080, _CTRL_FB_FLUSH_GPU_CACHE_FLAGS, _INVALIDATE, _YES)         |
+        DRF_DEF(2080, _CTRL_FB_FLUSH_GPU_CACHE_FLAGS, _FLUSH_MODE, _FULL_CACHE);
+
+    rmStatus = kmemsysFlushGpuCache(pGpu, pKernelMemorySystem, pKernelBus, pl2_params);
+
+    if (rmStatus != NV_OK)
+    {
+        NV_PRINTF(LEVEL_ERROR, "Failed to invalidate gpu L2 cache for sysmem. Status:0x%x\n", rmStatus);
+    }
+
+    /* Invalidate L2 cache for vidmem */
+    portMemSet(pl2_params, 0, sizeof(*pl2_params));
+    pl2_params->flags =
+        DRF_DEF(2080, _CTRL_FB_FLUSH_GPU_CACHE_FLAGS, _APERTURE, _VIDEO_MEMORY)  |
+        DRF_DEF(2080, _CTRL_FB_FLUSH_GPU_CACHE_FLAGS, _INVALIDATE, _YES)         |
+        DRF_DEF(2080, _CTRL_FB_FLUSH_GPU_CACHE_FLAGS, _FLUSH_MODE, _FULL_CACHE)  |
+        DRF_DEF(2080, _CTRL_FB_FLUSH_GPU_CACHE_FLAGS, _FB_FLUSH, _NO);
+
+    rmStatus = kmemsysFlushGpuCache(pGpu, pKernelMemorySystem, pKernelBus, pl2_params);
+
+    if (rmStatus != NV_OK)
+    {
+        NV_PRINTF(LEVEL_ERROR, "Failed to invalidate gpu L2 cache for vidmem. Status:0x%x\n", rmStatus);
+    }
+
+    portMemFree(pl2_params);
+    return rmStatus;
+}
+
 void
 destroyKernelHostVgpuDeviceShare(OBJGPU *pGpu, KernelHostVgpuDeviceShr* pShare)
 {
-
     NV_CHECK_OR_RETURN_VOID(LEVEL_NOTICE, pShare != NULL);
-    
+
     KERNEL_HOST_VGPU_DEVICE *pKernelHostVgpuDevice = pShare->pDevice;
     RsShared *pShared = staticCast(pShare, RsShared);
     NvS32 refCount;
@@ -389,14 +283,24 @@ destroyKernelHostVgpuDeviceShare(OBJGPU *pGpu, KernelHostVgpuDeviceShr* pShare)
     NV_ASSERT(pDevice != NULL);
     if (pDevice != NULL)
     {
+        status = _kernelhostvgpudeviceInvalidateGpuTLBL2Cache(pGpu, pDevice);
+        if (status != NV_OK)
+        {
+            NV_PRINTF(LEVEL_ERROR, "Failed to invalidate TLBs and L2 cache. Status:0x%x\n", status);
+        }
         pDevice->pKernelHostVgpuDevice = NULL;
     }
 
-    if (IS_GSP_CLIENT(pGpu))
+    if (IS_GSP_CLIENT(pGpu) && pKernelHostVgpuDevice->bGspPluginTaskInitialized)
     {
         RM_API *pRmApi = GPU_GET_PHYSICAL_RMAPI(pGpu);
         NV2080_CTRL_VGPU_MGR_INTERNAL_SHUTDOWN_GSP_VGPU_PLUGIN_TASK_PARAMS shutdownParams = { 0 };
         NV2080_CTRL_VGPU_MGR_INTERNAL_VGPU_PLUGIN_CLEANUP_PARAMS cleanupResourcesParams = {0};
+        // Extend timeout to 30s for these calls to account for long-running mass client free (bug 4928590)
+        // Otherwise this can hit XID 119 and orphan all remaining clients on GSP side
+        NvU32 defaultus = pGpu->timeoutData.defaultus;
+
+        pGpu->timeoutData.defaultus = 30*1000*1000;
 
         shutdownParams.gfid = pKernelHostVgpuDevice->gfid;
 
@@ -410,6 +314,7 @@ destroyKernelHostVgpuDeviceShare(OBJGPU *pGpu, KernelHostVgpuDeviceShr* pShare)
         status = pRmApi->Control(pRmApi, pGpu->hInternalClient, pGpu->hInternalSubdevice,
                                  NV2080_CTRL_CMD_VGPU_MGR_INTERNAL_VGPU_PLUGIN_CLEANUP,
                                  &cleanupResourcesParams, sizeof(cleanupResourcesParams));
+        pGpu->timeoutData.defaultus = defaultus;
         if (status != NV_OK)
             NV_PRINTF(LEVEL_ERROR, "Failed to call cleanup plugin resources\n");
 
@@ -452,6 +357,9 @@ kernelhostvgpudeviceapiCtrlCmdSetVgpuDeviceInfo_IMPL
 
     NV_PRINTF(LEVEL_INFO, "%s\n", __FUNCTION__);
 
+    NV_ASSERT_OR_RETURN(!IS_GSP_CLIENT(pGpu) || pKernelHostVgpuDeviceApi->pShared->pDevice->bGspPluginTaskInitialized,
+                        NV_ERR_INVALID_STATE);
+
     pKernelHostVgpuDevice = pKernelHostVgpuDeviceApi->pShared->pDevice;
 
     portMemCopy(pKernelHostVgpuDevice->vgpuUuid, RM_SHA1_GID_SIZE, pParams->vgpuUuid, RM_SHA1_GID_SIZE);
@@ -472,6 +380,9 @@ kernelhostvgpudeviceapiCtrlCmdSetVgpuGuestLifeCycleState_IMPL
     NV_STATUS status = NV_OK;
 
     NV_PRINTF(LEVEL_INFO, "%s\n", __FUNCTION__);
+
+    NV_ASSERT_OR_RETURN(!IS_GSP_CLIENT(pGpu) || pKernelHostVgpuDeviceApi->pShared->pDevice->bGspPluginTaskInitialized,
+                        NV_ERR_INVALID_STATE);
 
     if (pParams->vmLifeCycleState == NVA081_NOTIFIERS_EVENT_VGPU_GUEST_DESTROYED)
         status = kvgpumgrClearGuestVmInfo(pGpu, pKernelHostVgpuDeviceApi->pShared->pDevice);
@@ -586,6 +497,9 @@ kernelhostvgpudeviceapiCtrlCmdSetOfflinedPagePatchInfo_IMPL
     NvBool      bPageRetirementEnabled = NV_FALSE;
     NvU64       Spa                    = 0;
     KERNEL_HOST_VGPU_DEVICE *pKernelHostVgpuDevice;
+
+    NV_ASSERT_OR_RETURN(!IS_GSP_CLIENT(pGpu) || pKernelHostVgpuDeviceApi->pShared->pDevice->bGspPluginTaskInitialized,
+                        NV_ERR_INVALID_STATE);
 
     if (IS_VGPU_GSP_PLUGIN_OFFLOAD_ENABLED(pGpu))
         return NV_ERR_NOT_SUPPORTED;
@@ -708,10 +622,13 @@ kernelhostvgpudeviceapiCtrlCmdTriggerPrivDoorbell_IMPL
     NvU32 handle;
     NV_STATUS status = NV_OK;
 
+    NV_ASSERT_OR_RETURN(!IS_GSP_CLIENT(pGpu) || pKernelHostVgpuDeviceApi->pShared->pDevice->bGspPluginTaskInitialized,
+                        NV_ERR_INVALID_STATE);
+
     NV_ASSERT_OR_RETURN(pParams->handle == NV_DOORBELL_NOTIFY_LEAF_VF_CPU_PLUGIN_HANDLE,
         NV_ERR_INVALID_ARGUMENT);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     if (!IS_VGPU_GSP_PLUGIN_OFFLOAD_ENABLED(pGpu) ||
         !gpuIsSriovEnabled(pGpu) || IS_VIRTUAL(pGpu))
@@ -733,7 +650,11 @@ kernelhostvgpudeviceapiCtrlCmdEventSetNotification_IMPL
     NVA084_CTRL_KERNEL_HOST_VGPU_DEVICE_EVENT_SET_NOTIFICATION_PARAMS *pSetEventParams
 )
 {
+    OBJGPU   *pGpu = GPU_RES_GET_GPU(pKernelHostVgpuDeviceApi);
     NV_STATUS status = NV_OK;
+
+    NV_ASSERT_OR_RETURN(!IS_GSP_CLIENT(pGpu) || pKernelHostVgpuDeviceApi->pShared->pDevice->bGspPluginTaskInitialized,
+                        NV_ERR_INVALID_STATE);
 
     // NV01_EVENT must have been plugged into this subdevice
     if (inotifyGetNotificationList(staticCast(pKernelHostVgpuDeviceApi, INotifier)) == NULL)
@@ -798,6 +719,9 @@ kernelhostvgpudeviceapiCtrlCmdGetBarMappingRanges_IMPL
     NvU64 vfRegionSizes[NVA084_CTRL_KERNEL_HOST_VGPU_DEVICE_MAX_BAR_MAPPING_RANGES];
     KernelBif *pKernelBif = GPU_GET_KERNEL_BIF(pGpu);
     NvU32 numAreas = 0, i = 0, j = 0;
+
+    NV_ASSERT_OR_RETURN(!IS_GSP_CLIENT(pGpu) || pKernelHostVgpuDeviceApi->pShared->pDevice->bGspPluginTaskInitialized,
+                        NV_ERR_INVALID_STATE);
 
     NV_ASSERT_OR_RETURN(pKernelBif != NULL, NV_ERR_INVALID_STATE);
 
@@ -879,6 +803,9 @@ kernelhostvgpudeviceapiCtrlCmdRestoreDefaultExecPartition_IMPL
     KERNEL_HOST_VGPU_DEVICE *pKernelHostVgpuDevice;
     OBJGPU *pGpu = GPU_RES_GET_GPU(pKernelHostVgpuDeviceApi);
 
+    NV_ASSERT_OR_RETURN(!IS_GSP_CLIENT(pGpu) || pKernelHostVgpuDeviceApi->pShared->pDevice->bGspPluginTaskInitialized,
+                        NV_ERR_INVALID_STATE);
+
     pKernelHostVgpuDevice = pKernelHostVgpuDeviceApi->pShared->pDevice;
     NV_ASSERT_OR_RETURN(pKernelHostVgpuDevice != NULL, NV_ERR_INVALID_STATE);
 
@@ -924,6 +851,9 @@ kernelhostvgpudeviceapiCtrlCmdFreeStates_IMPL
     RM_API *pRmApi = GPU_GET_PHYSICAL_RMAPI(pGpu);
     KERNEL_HOST_VGPU_DEVICE *pKernelHostVgpuDevice = pKernelHostVgpuDeviceApi->pShared->pDevice;
 
+    NV_ASSERT_OR_RETURN(!IS_GSP_CLIENT(pGpu) || pKernelHostVgpuDeviceApi->pShared->pDevice->bGspPluginTaskInitialized,
+                        NV_ERR_INVALID_STATE);
+
     NV2080_CTRL_VGPU_MGR_INTERNAL_FREE_STATES_PARAMS params;
     params.gfid = pKernelHostVgpuDevice->gfid;
     params.flags = pParams->flags;
@@ -933,4 +863,301 @@ kernelhostvgpudeviceapiCtrlCmdFreeStates_IMPL
             NV2080_CTRL_CMD_VGPU_MGR_INTERNAL_FREE_STATES, &params, sizeof(params)));
 
     return NV_OK;
+}
+
+NV_STATUS
+kernelhostvgpudeviceapiCtrlCmdBootloadVgpuTask_IMPL
+(
+    KernelHostVgpuDeviceApi *pKernelHostVgpuDeviceApi,
+    NVA084_CTRL_KERNEL_HOST_VGPU_DEVICE_BOOTLOAD_VGPU_TASK_PARAMS* pParams
+)
+{
+    NV_STATUS status = NV_OK;
+    OBJGPU *pGpu = GPU_RES_GET_GPU(pKernelHostVgpuDeviceApi);
+    KernelGsp *pKernelGsp = GPU_GET_KERNEL_GSP(pGpu);
+    RM_API *pRmApi = GPU_GET_PHYSICAL_RMAPI(pGpu);
+    NV2080_CTRL_VGPU_MGR_INTERNAL_BOOTLOAD_GSP_VGPU_PLUGIN_TASK_PARAMS *pBootloadParams = NULL;
+    Memory *pMemory;
+    NvU32 i;
+    NvU64 vmmuSegmentSize;
+    RsClient *pClient = NULL;
+    NvBool bPreserveLogBufferFull = NV_FALSE;
+
+    if (!IS_GSP_CLIENT(pGpu))
+        return NV_ERR_NOT_SUPPORTED;
+
+    KERNEL_HOST_VGPU_DEVICE *pKernelHostVgpuDevice = pKernelHostVgpuDeviceApi->pShared->pDevice;
+    NV_ASSERT_OR_RETURN(pKernelHostVgpuDevice != NULL, NV_ERR_INVALID_STATE);
+    NV_ASSERT_OR_RETURN(!pKernelHostVgpuDevice->bGspPluginTaskInitialized, NV_ERR_INVALID_STATE);
+
+    status = serverGetClientUnderLock(&g_resServ, pKernelHostVgpuDevice->hPluginFBAllocationClient, &pClient);
+    if (status != NV_OK)
+    {
+        NV_PRINTF(LEVEL_ERROR, "Failed to get pClient\n");
+        return NV_ERR_INVALID_CLIENT;
+    }
+
+    KernelMemorySystem *pKernelMemorySystem = GPU_GET_KERNEL_MEMORY_SYSTEM(pGpu);
+
+    if (!IS_VGPU_GSP_PLUGIN_OFFLOAD_ENABLED(pGpu) || !gpuIsSriovEnabled(pGpu))
+    {
+        status = NV_ERR_NOT_SUPPORTED;
+        goto done;
+    }
+
+    if (pParams->numGuestFbHandles == 0 || pParams->numGuestFbHandles > NVA084_MAX_VMMU_SEGMENTS)
+    {
+        status = NV_ERR_INVALID_ARGUMENT;
+        goto done;
+    }
+
+    vmmuSegmentSize = gpuGetVmmuSegmentSize(pGpu);
+    if (vmmuSegmentSize == 0)
+    {
+        status = NV_ERR_INVALID_STATE;
+        goto done;
+    }
+
+    // This structure can't be allocated on stack because it will result function stack usage > 4KB
+    pBootloadParams = portMemAllocNonPaged(sizeof(*pBootloadParams));
+    if (pBootloadParams == NULL)
+    {
+        status = NV_ERR_NO_MEMORY;
+        goto done;
+    }
+    portMemSet(pBootloadParams, 0, sizeof(*pBootloadParams));
+
+    if (gpuIsSelfHosted(pGpu))
+    {
+        pKernelHostVgpuDevice->hbmRegionList = portMemAllocNonPaged(
+                                                   sizeof(HBM_REGION_INFO)* pParams->numGuestFbHandles);
+        if (pKernelHostVgpuDevice->hbmRegionList == NULL)
+        {
+            status = NV_ERR_NO_MEMORY;
+            goto done;
+        }
+
+        pKernelHostVgpuDevice->numValidHbmRegions = 0;
+    }
+
+    for (i = 0; i < pParams->numGuestFbHandles; i++)
+    {
+        status = memGetByHandle(pClient, pParams->guestFbHandleList[i], &pMemory);
+        if (status != NV_OK)
+        {
+            NV_PRINTF(LEVEL_ERROR, "Invalid Memory handle\n");
+            goto done;
+        }
+
+        pBootloadParams->guestFbPhysAddrList[i] = memdescGetPhysAddr(pMemory->pMemDesc, AT_GPU, 0);
+        pBootloadParams->guestFbLengthList[i] = pMemory->pMemDesc->Size;
+
+        if (!NV_IS_ALIGNED64(pBootloadParams->guestFbPhysAddrList[i], vmmuSegmentSize) ||
+            !NV_IS_ALIGNED64(pBootloadParams->guestFbLengthList[i], vmmuSegmentSize))
+        {
+            NV_PRINTF(LEVEL_ERROR, "guest fb segment PA or length is not VMMU segment size aligned\n");
+            status = NV_ERR_INVALID_ARGUMENT;
+            goto done;
+        }
+        if (gpuIsSelfHosted(pGpu))
+        {
+            pKernelHostVgpuDevice->hbmRegionList[i].hbmBaseAddr = memdescGetPhysAddr(pMemory->pMemDesc, AT_GPU, 0);
+            pKernelHostVgpuDevice->hbmRegionList[i].hbmBaseAddr += pKernelMemorySystem->coherentCpuFbBase;
+            pKernelHostVgpuDevice->hbmRegionList[i].size = pMemory->pMemDesc->Size;
+            pKernelHostVgpuDevice->numValidHbmRegions++;
+        }
+    }
+
+    status = memGetByHandle(pClient, pParams->hPluginHeapMemory, &pMemory);
+    if (status != NV_OK)
+    {
+        NV_PRINTF(LEVEL_ERROR, "Invalid plugin heap Memory handle\n");
+        goto done;
+    }
+
+    pKernelHostVgpuDevice->pGspPluginHeapMemDesc = pMemory->pMemDesc;
+
+    // As GSP-RM will map this memory in vGPU-GSP-Plugin's address space, it
+    // should be referenced to make sure it doesn't get freed before
+    // vGPU-Gsp-Plugin's usage has been removed
+    memdescAddRef(pKernelHostVgpuDevice->pGspPluginHeapMemDesc);
+
+    pBootloadParams->pluginHeapMemoryPhysAddr = memdescGetPhysAddr(pMemory->pMemDesc, AT_GPU, 0);
+    pBootloadParams->pluginHeapMemoryLength = pMemory->pMemDesc->Size;
+
+    // Initialize logging buffers for vgpu partition
+    {
+        if ((pParams->initTaskLogBuffOffset + pParams->initTaskLogBuffSize) >=
+             pBootloadParams->pluginHeapMemoryLength)
+        {
+            NV_PRINTF(LEVEL_ERROR, "Invalid init task log buffer\n");
+            status = NV_ERR_INVALID_ARGUMENT;
+            goto done;
+        }
+
+        if ((pParams->vgpuTaskLogBuffOffset + pParams->vgpuTaskLogBuffSize) >=
+             pBootloadParams->pluginHeapMemoryLength)
+        {
+            NV_PRINTF(LEVEL_ERROR, "Invalid vgpu task log buffer\n");
+            status = NV_ERR_INVALID_ARGUMENT;
+            goto done;
+        }
+
+        if ((pParams->kernelLogBuffOffset + pParams->kernelLogBuffSize) >=
+             pBootloadParams->pluginHeapMemoryLength)
+        {
+            NV_PRINTF(LEVEL_ERROR, "Invalid vgpu kernel log buffer\n");
+            status = NV_ERR_INVALID_ARGUMENT;
+            goto done;
+        }
+
+
+        pBootloadParams->initTaskLogBuffOffset  = pParams->initTaskLogBuffOffset +
+                                                  pBootloadParams->pluginHeapMemoryPhysAddr;
+        pBootloadParams->initTaskLogBuffSize    = pParams->initTaskLogBuffSize;
+        pBootloadParams->vgpuTaskLogBuffOffset  = pParams->vgpuTaskLogBuffOffset +
+                                                  pBootloadParams->pluginHeapMemoryPhysAddr;
+        pBootloadParams->vgpuTaskLogBuffSize    = pParams->vgpuTaskLogBuffSize;
+        pBootloadParams->kernelLogBuffOffset    = pParams->kernelLogBuffOffset +
+                                                  pBootloadParams->pluginHeapMemoryPhysAddr;
+        pBootloadParams->kernelLogBuffSize      = pParams->kernelLogBuffSize;
+
+        NV_CHECK_OK_OR_GOTO(status,
+                            LEVEL_ERROR,
+                            kgspInitVgpuPartitionLogging_HAL(pGpu, pKernelGsp, pKernelHostVgpuDevice->gfid,
+                                                             pBootloadParams->initTaskLogBuffOffset,
+                                                             pBootloadParams->initTaskLogBuffSize,
+                                                             pBootloadParams->vgpuTaskLogBuffOffset,
+                                                             pBootloadParams->vgpuTaskLogBuffSize,
+                                                             pBootloadParams->kernelLogBuffOffset,
+                                                             pBootloadParams->kernelLogBuffSize,
+                                                             &bPreserveLogBufferFull),
+                            done);
+    }
+
+    pBootloadParams->gfid                              = pKernelHostVgpuDevice->gfid;
+    pBootloadParams->swizzId                           = pKernelHostVgpuDevice->swizzId;
+    pBootloadParams->numGuestFbSegments                = pParams->numGuestFbHandles;
+    pBootloadParams->ctrlBuffOffset                    = pParams->ctrlBuffOffset;
+    pBootloadParams->bDeviceProfilingEnabled           = pParams->bDeviceProfilingEnabled;
+
+    // Populate chidOffset for all engines to reserve same chid in GSP-RM
+    for (i = 0; i < NV2080_ENGINE_TYPE_LAST; i++)
+    {
+        NvU32 rmEngineType = gpuGetRmEngineType(i);
+
+        //
+        // pHostVgpuDevice->chidOffset is in RM_ENGINE_TYPE order
+        // pBootloadParams->chidOffset is in NV2080_ENGINE_TYPE order
+        //
+        pBootloadParams->chidOffset[i] = pKernelHostVgpuDevice->chidOffset[rmEngineType];
+    }
+
+    status = pRmApi->Control(pRmApi, pGpu->hInternalClient, pGpu->hInternalSubdevice,
+                             NV2080_CTRL_CMD_VGPU_MGR_INTERNAL_BOOTLOAD_GSP_VGPU_PLUGIN_TASK,
+                             pBootloadParams, sizeof(*pBootloadParams));
+
+    if (!bPreserveLogBufferFull)
+    {
+        // Preserve any captured vGPU Partition logs
+        NV_ASSERT_OK(kgspPreserveVgpuPartitionLogging(pGpu, pKernelGsp, pKernelHostVgpuDevice->gfid));
+    }
+
+#if RMCFG_FEATURE_GSPRM_BULLSEYE || defined(GSPRM_BULLSEYE_ENABLE)
+    OBJSYS *pSys = SYS_GET_INSTANCE();
+    codecovmgrResetCoverage(pSys->pCodeCovMgr, pKernelHostVgpuDevice->gfid, pGpu->gpuInstance);
+#endif
+    if (status != NV_OK && pBootloadParams != NULL)
+    {
+        NV_PRINTF(LEVEL_ERROR, "Failed to call NV2080_CTRL_CMD_VGPU_MGR_INTERNAL_BOOTLOAD_GSP_VGPU_PLUGIN_TASK\n");
+        NV_ASSERT_OK(kgspFreeVgpuPartitionLogging_HAL(pGpu, pKernelGsp, pKernelHostVgpuDevice->gfid));
+    }
+
+done:
+    portMemFree(pBootloadParams);
+
+    if (status != NV_OK)
+    {
+        if (pKernelHostVgpuDevice->hbmRegionList != NULL)
+        {
+            portMemFree(pKernelHostVgpuDevice->hbmRegionList);
+            pKernelHostVgpuDevice->hbmRegionList = NULL;
+            pKernelHostVgpuDevice->numValidHbmRegions = 0;
+        }
+
+        if (pKernelHostVgpuDevice->pGspPluginHeapMemDesc != NULL)
+        {
+            memdescRemoveRef(pKernelHostVgpuDevice->pGspPluginHeapMemDesc);
+            pKernelHostVgpuDevice->pGspPluginHeapMemDesc = NULL;
+        }
+
+        kvgpumgrGuestUnregister(pGpu, pKernelHostVgpuDevice);
+    }
+    else
+    {
+        pKernelHostVgpuDevice->bGspPluginTaskInitialized = NV_TRUE;
+    }
+
+    return status;
+}
+
+NV_STATUS
+kernelhostvgpudeviceapiCtrlCmdSetPlacementId_IMPL
+(
+    KernelHostVgpuDeviceApi *pKernelHostVgpuDeviceApi,
+    NVA084_CTRL_CMD_KERNEL_HOST_VGPU_DEVICE_SET_PLACEMENT_ID_PARAMS* pParams
+)
+{
+    NV_STATUS                rmStatus               = NV_OK;
+    OBJGPU                  *pGpu                   = GPU_RES_GET_GPU(pKernelHostVgpuDeviceApi);
+    NvBool                   bMIGInUse              = IS_MIG_IN_USE(pGpu);
+    VGPU_TYPE               *vgpuTypeInfo           = NULL;
+    Device                  *pMigDevice             = NULL;
+    RsClient                *pClient;
+    KERNEL_HOST_VGPU_DEVICE *pKernelHostVgpuDevice;
+
+    NV_PRINTF(LEVEL_INFO, "%s\n", __FUNCTION__);
+
+    pKernelHostVgpuDevice = pKernelHostVgpuDeviceApi->pShared->pDevice;
+    pKernelHostVgpuDevice->placementId = pParams->placementId;
+
+    if (!gpuIsSriovEnabled(pGpu))
+        return rmStatus;
+
+    NV_ASSERT_OK_OR_RETURN(kvgpumgrGetVgpuTypeInfo(pKernelHostVgpuDevice->vgpuType, &vgpuTypeInfo));
+
+    // This block will execute in case of openRM
+    if (IS_GSP_CLIENT(pGpu))
+    {
+        KernelFifo *pKernelFifo = GPU_GET_KERNEL_FIFO(pGpu);
+        ENGINE_INFO tmpEngineInfo;
+
+        if (bMIGInUse)
+        {
+            NV_ASSERT_OK_OR_RETURN(serverGetClientUnderLock(&g_resServ, pKernelHostVgpuDevice->hMigClient, &pClient));
+            NV_ASSERT_OK_OR_RETURN(deviceGetByHandle(pClient, pKernelHostVgpuDevice->hMigDevice, &pMigDevice));
+        }
+
+        portMemSet(&tmpEngineInfo, 0, sizeof(ENGINE_INFO));
+
+        NV_ASSERT_OK_OR_RETURN(kfifoGetHostDeviceInfoTable_HAL(pGpu, pKernelFifo, &tmpEngineInfo, pMigDevice));
+
+        rmStatus = vgpuMgrReserveSystemChannelIDs(pGpu,
+                                                  vgpuTypeInfo,
+                                                  pKernelHostVgpuDevice->gfid,
+                                                  pKernelHostVgpuDevice->chidOffset,
+                                                  pKernelHostVgpuDevice->channelCount,
+                                                  pMigDevice,
+                                                  pParams->numChannels,
+                                                  pKernelHostVgpuDevice->placementId,
+                                                  tmpEngineInfo.engineInfoListSize,
+                                                  tmpEngineInfo.engineInfoList);
+
+        portMemFree(tmpEngineInfo.engineInfoList);
+        tmpEngineInfo.engineInfoList = NULL;
+    }
+
+    // This block will execute in case of monolithic RM
+
+    return rmStatus;
 }

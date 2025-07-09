@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2022-2023 NVIDIA CORPORATION & AFFILIATES
+ * SPDX-FileCopyrightText: Copyright (c) 2022-2025 NVIDIA CORPORATION & AFFILIATES
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -33,6 +33,7 @@
 // management partition and CPU-RM/other uprocs.
 //
 
+#define NVDM_TYPE_RESET                 0x4
 #define NVDM_TYPE_HULK                  0x11
 #define NVDM_TYPE_FIRMWARE_UPDATE       0x12
 #define NVDM_TYPE_PRC                   0x13
@@ -45,5 +46,7 @@
 #define NVDM_TYPE_UEFI_RM               0x1C
 #define NVDM_TYPE_UEFI_XTL_DEBUG_INTR   0x1D
 #define NVDM_TYPE_TNVL                  0x1F
+#define NVDM_TYPE_CLOCK_BOOST           0x20
+#define NVDM_TYPE_FSP_GSP_COMM          0x21
 
 #endif // FSP_NVDM_FORMAT_H

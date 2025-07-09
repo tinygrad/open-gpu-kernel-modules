@@ -81,6 +81,7 @@ typedef struct
 #define NVLINK_INBAND_GPU_PROBE_CAPS_SRIOV_ENABLED NVBIT(0)
 #define NVLINK_INBAND_GPU_PROBE_CAPS_PROBE_UPDATE  NVBIT(1)
 #define NVLINK_INBAND_GPU_PROBE_CAPS_EGM_SUPPORT   NVBIT(2)
+#define NVLINK_INBAND_GPU_PROBE_CAPS_ATS_SUPPORT   NVBIT(3)
 
 /* Add more caps as need in the future */
 
@@ -100,7 +101,9 @@ typedef struct
 
     NvU32  gpuCapMask;           /* GPU capabilities, one of NVLINK_INBAND_GPU_PROBE_CAPS */
     NvU8   bwMode;               /* NVLink bandwidth mode, one of NVLINK_INBAND_BW_MODE */
-    NvU8   reserved[31];         /* For future use. Must be initialized to zero */
+    NvU8   rbmRequested;         /* Flag to request a specific RBM Mode */
+    NvU8   rbmLinkCount;         /* Number of links to be used for Reduced Bandwidth mode */
+    NvU8   reserved[29];         /* For future use. Must be initialized to zero */
 } nvlink_inband_gpu_probe_req_t;
 
 typedef struct
@@ -115,11 +118,28 @@ typedef struct
 #define NVLINK_INBAND_FM_CAPS_BW_MODE_HALF       NVBIT64(3)
 #define NVLINK_INBAND_FM_CAPS_BW_MODE_3QUARTER   NVBIT64(4)
 #define NVLINK_INBAND_FM_CAPS_MC_TEAM_SETUP_V2   NVBIT64(5)
+#define NVLINK_INBAND_FM_CAPS_EGM_ENABLED        NVBIT64(6)
+#define NVLINK_INBAND_FM_CAPS_ATS_ENABLED        NVBIT64(7)
 
-#define NVLINK_INBAND_FABRIC_HEALTH_MASK_DEGRADED_BW 1:0
-#define NVLINK_INBAND_FABRIC_HEALTH_MASK_DEGRADED_BW_NOT_SUPPORTED 0
-#define NVLINK_INBAND_FABRIC_HEALTH_MASK_DEGRADED_BW_TRUE          1
-#define NVLINK_INBAND_FABRIC_HEALTH_MASK_DEGRADED_BW_FALSE         2
+#define NVLINK_INBAND_FABRIC_HEALTH_MASK_DEGRADED_BW                    1:0
+#define NVLINK_INBAND_FABRIC_HEALTH_MASK_DEGRADED_BW_NOT_SUPPORTED      0
+#define NVLINK_INBAND_FABRIC_HEALTH_MASK_DEGRADED_BW_TRUE               1
+#define NVLINK_INBAND_FABRIC_HEALTH_MASK_DEGRADED_BW_FALSE              2
+
+#define NVLINK_INBAND_FABRIC_HEALTH_MASK_ROUTE_UPDATE               3:2
+#define NVLINK_INBAND_FABRIC_HEALTH_MASK_ROUTE_UPDATE_NOT_SUPPORTED 0
+#define NVLINK_INBAND_FABRIC_HEALTH_MASK_ROUTE_UPDATE_TRUE          1
+#define NVLINK_INBAND_FABRIC_HEALTH_MASK_ROUTE_UPDATE_FALSE         2
+
+#define NVLINK_INBAND_FABRIC_HEALTH_MASK_CONNECTION_UNHEALTHY               5:4
+#define NVLINK_INBAND_FABRIC_HEALTH_MASK_CONNECTION_UNHEALTHY_NOT_SUPPORTED 0
+#define NVLINK_INBAND_FABRIC_HEALTH_MASK_CONNECTION_UNHEALTHY_TRUE          1
+#define NVLINK_INBAND_FABRIC_HEALTH_MASK_CONNECTION_UNHEALTHY_FALSE         2
+
+#define NVLINK_INBAND_FABRIC_HEALTH_MASK_LINK_MASK_CHANGED               7:6
+#define NVLINK_INBAND_FABRIC_HEALTH_MASK_LINK_MASK_CHANGED_NOT_SUPPORTED 0
+#define NVLINK_INBAND_FABRIC_HEALTH_MASK_LINK_MASK_CHANGED_TRUE          1
+#define NVLINK_INBAND_FABRIC_HEALTH_MASK_LINK_MASK_CHANGED_FALSE         2
 
 typedef struct
 {
@@ -135,7 +155,10 @@ typedef struct
     NvU32  linkMaskToBeReduced;   /* bit mask of unused NVLink ports for P2P */
     NvU32  cliqueId;              /* Fabric Clique Id */
     NvU32  fabricHealthMask;      /* Mask containing bits indicating various fabric health parameters */
-    NvU8   reserved[20];          /* For future use. Must be initialized to zero */
+    NvU32  gpaAddressEGMHi;       /* GPA Address for EGM. Don't use if EGM support is not present in GFM */
+    NvU8   maxRbmLinks;           /* Max RBM mode supported */
+    NvU32  remapTableIdx;         /* remap table index for the GPU */
+    NvU8   reserved[11];          /* For future use. Must be initialized to zero */
 } nvlink_inband_gpu_probe_rsp_t;
 
 typedef struct
@@ -149,7 +172,8 @@ typedef struct
     NvU64  gpuHandle;             /* Unique handle assigned by initialization entity for this GPU */
     NvU32  cliqueId;              /* Fabric Clique Id*/
     NvU32  fabricHealthMask;      /* Mask containing bits indicating various fabric health parameters */
-    NvU8   reserved[32];          /* For future use. Must be initialized to zero */
+    NvU32  epoch;                 /* Epoch to be matched by RM when allowing P2P between GPUs */
+    NvU8   reserved[28];          /* For future use. Must be initialized to zero */
 } nvlink_inband_gpu_probe_update_req_t;
 
 typedef struct
@@ -204,7 +228,6 @@ typedef struct
 typedef struct
 {
     NvU64 mcTeamHandle;          /* Unique handle assigned for this Multicast team */
-                                 /* Should be zero if the response is sent to the importer nodes */
     NvU32 flags;                 /* For future use. Must be initialized to zero */
     NvU8  reserved[8];           /* For future use. Must be initialized to zero */
     NvU64 mcAddressBase;         /* FLA starting address assigned for the Multicast slot */

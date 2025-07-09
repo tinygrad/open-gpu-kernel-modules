@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2014-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2014-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -33,6 +33,7 @@
 #include "ctrl/ctrlxxxx.h"
 #include "ctrl/ctrl2080/ctrl2080gpu.h"
 #include "nv_vgpu_types.h"
+#include "nvcfg_sdk.h"
 /* NVA081_VGPU_CONFIG control commands and parameters */
 
 #define NVA081_CTRL_CMD(cat,idx)             NVXXXX_CTRL_CMD(0xA081, NVA081_CTRL_##cat, idx)
@@ -42,8 +43,9 @@
 #define NVA081_CTRL_VGPU_CONFIG              (0x01)
 
 #define NVA081_CTRL_VGPU_CONFIG_INVALID_TYPE 0x00
-#define NVA081_MAX_VGPU_TYPES_PER_PGPU       0x40
+#define NVA081_MAX_VGPU_TYPES_PER_PGPU       0x64
 #define NVA081_MAX_VGPU_PER_PGPU             32
+#define NVA081_MAX_VGPU_PER_GI               12
 #define NVA081_VM_UUID_SIZE                  16
 #define NVA081_VGPU_STRING_BUFFER_SIZE       32
 #define NVA081_VGPU_SIGNATURE_SIZE           128
@@ -52,6 +54,10 @@
 #define NVA081_PGPU_METADATA_STRING_SIZE     256
 #define NVA081_EXTRA_PARAMETERS_SIZE         1024
 #define NVA081_PLACEMENT_ID_INVALID          0xFFFFU
+#define NVA081_CONFIG_PARAMS_MAX_LENGTH      1024
+
+#define NVA081_MAX_BAR_REGION_COUNT          4
+#define NVA081_MAX_SPARSE_REGION_COUNT       5
 
 /*
  * NVA081_CTRL_CMD_VGPU_CONFIG_SET_INFO
@@ -114,14 +120,17 @@ typedef struct NVA081_CTRL_VGPU_INFO {
     NvU32 ftraceEnable;
     NvU32 gpuDirectSupported;
     NvU32 nvlinkP2PSupported;
+    NvU32 maxInstancePerGI;
     NvU32 multiVgpuExclusive;
     NvU32 exclusiveType;
     NvU32 exclusiveSize;
     // used only by NVML
     NvU32 gpuInstanceProfileId;
     NvU32 placementSize;
-    NvU32 placementCount;
-    NvU32 placementIds[NVA081_MAX_VGPU_PER_PGPU];
+    NvU32 homogeneousPlacementCount;
+    NvU32 homogeneousPlacementIds[NVA081_MAX_VGPU_PER_PGPU];
+    NvU32 heterogeneousPlacementCount;
+    NvU32 heterogeneousPlacementIds[NVA081_MAX_VGPU_PER_PGPU];
 } NVA081_CTRL_VGPU_INFO;
 
 /*
@@ -238,6 +247,8 @@ typedef struct NVA081_GUEST_VM_INFO {
  * placementId [OUT]
  *  This param specifies the placement ID of heterogeneous timesliced vGPU instance.
  *  Otherwise it is NVA081_PLACEMENT_ID_INVALID.
+ * vgpuDevName [OUT]
+ *  This param specifies the VF BDF of the virtual GPU.
  *
  */
 typedef struct NVA081_HOST_VGPU_DEVICE {
@@ -245,7 +256,7 @@ typedef struct NVA081_HOST_VGPU_DEVICE {
     NvU32  vgpuDeviceInstanceId;
     NV_DECLARE_ALIGNED(NvU64 vgpuPciId, 8);
     NvU8   vgpuUuid[VM_UUID_SIZE];
-    NvU8   mdevUuid[VM_UUID_SIZE];
+    NvU8   vgpuDevName[VM_UUID_SIZE];
     NvU32  encoderCapacity;
     NV_DECLARE_ALIGNED(NvU64 fbUsed, 8);
     NvU32  eccState;
@@ -321,6 +332,11 @@ typedef struct NVA081_CTRL_VGPU_CONFIG_GET_VGPU_TYPE_INFO_PARAMS {
  *      This structure represents supported/creatable vGPU types on a pGPU
  */
 typedef struct NVA081_CTRL_VGPU_CONFIG_GET_VGPU_TYPES_PARAMS {
+    /*
+     * [IN] GPU Instance ID or Swizz ID
+     */
+    NvU32 gpuInstanceId;
+
     /*
      * [OUT] vGPU config state on a pGPU
      */
@@ -430,45 +446,9 @@ typedef struct NVA081_CTRL_VGPU_CONFIG_EVENT_SET_NOTIFICATION_PARAMS {
 
 
 /* valid event action values */
-#define NVA081_CTRL_EVENT_SET_NOTIFICATION_ACTION_DISABLE (0x00000000)
-#define NVA081_CTRL_EVENT_SET_NOTIFICATION_ACTION_SINGLE  (0x00000001)
-#define NVA081_CTRL_EVENT_SET_NOTIFICATION_ACTION_REPEAT  (0x00000002)
-
-/*
- * NVA081_CTRL_CMD_VGPU_CONFIG_NOTIFY_START
- *
- * This command notifies the nvidia-vgpu-vfio module with start status.
- * It notifies whether start has been successful or not.
- *
- *   mdevUuid
- *     This parameter specifies the uuid of the mdev device for which start has
- *     been called.
- *   vmUuid
- *     The UUID of VM for which vGPU has been created.
- *   vmName
- *     The name of VM for which vGPU has been created.
- *   returnStatus
- *     This parameter species whether the vGPU plugin is initialized or not.
- *     it specifies the error code in case plugin initialization has failed
- *
- * Possible status values returned are:
- *   NV_OK
- *   NV_ERR_OBJECT_NOT_FOUND
- */
-#define NVA081_CTRL_CMD_VGPU_CONFIG_NOTIFY_START          (0xa0810107) /* finn: Evaluated from "(FINN_NVA081_VGPU_CONFIG_VGPU_CONFIG_INTERFACE_ID << 8) | NVA081_CTRL_VGPU_CONFIG_NOTIFY_START_PARAMS_MESSAGE_ID" */
-
-/*
- * NVA081_CTRL_VGPU_CONFIG_NOTIFY_START_PARAMS
- * This structure represents information of plugin init status.
- */
-#define NVA081_CTRL_VGPU_CONFIG_NOTIFY_START_PARAMS_MESSAGE_ID (0x7U)
-
-typedef struct NVA081_CTRL_VGPU_CONFIG_NOTIFY_START_PARAMS {
-    NvU8  mdevUuid[VM_UUID_SIZE];
-    NvU8  vmUuid[VM_UUID_SIZE];
-    NvU8  vmName[NVA081_VM_NAME_SIZE];
-    NvU32 returnStatus;
-} NVA081_CTRL_VGPU_CONFIG_NOTIFY_START_PARAMS;
+#define NVA081_CTRL_EVENT_SET_NOTIFICATION_ACTION_DISABLE              (0x00000000)
+#define NVA081_CTRL_EVENT_SET_NOTIFICATION_ACTION_SINGLE               (0x00000001)
+#define NVA081_CTRL_EVENT_SET_NOTIFICATION_ACTION_REPEAT               (0x00000002)
 
 /*
  * NVA081_CTRL_CMD_VGPU_CONFIG_UPDATE_PGPU_INFO
@@ -692,6 +672,9 @@ typedef struct NVA081_CTRL_PGPU_GET_MULTI_VGPU_SUPPORT_INFO_PARAMS {
  *
  * heterogeneousMultiVgpuSupported [OUT]
  *  This param specifies whether heterogeneous multi-vGPU is supported
+ * warmUpdateSupported [OUT]
+ *  This param specifies FSR / warm driver update operation is supported
+ *  ie. supports FSR and warm update of vGPU host driver without terminating the running guest VM
  *
  * Possible status values returned are:
  *   NV_OK
@@ -706,6 +689,7 @@ typedef struct NVA081_CTRL_PGPU_GET_MULTI_VGPU_SUPPORT_INFO_PARAMS {
 
 typedef struct NVA081_CTRL_GET_VGPU_DRIVER_CAPS_PARAMS {
     NvU32 heterogeneousMultiVgpuSupported;
+    NvU32 warmUpdateSupported;
 } NVA081_CTRL_GET_VGPU_DRIVER_CAPS_PARAMS;
 
 /*
@@ -756,25 +740,38 @@ typedef struct NVA081_CTRL_VGPU_CONFIG_VALIDATE_SWIZZID_PARAMS {
 } NVA081_CTRL_VGPU_CONFIG_VALIDATE_SWIZZID_PARAMS;
 
 /*
- * NVA081_CTRL_CMD_VGPU_CONFIG_UPDATE_HETEROGENEOUS_INFO
+ * NVA081_CTRL_CMD_VGPU_CONFIG_UPDATE_PLACEMENT_INFO
  *
  * This command is used to get a placement Id from RM for timesliced
- * heterogeneous vGPUs.
+ * heterogeneous or homogeneous vGPUs. The physical GPU shall be used
+ * in either heterogeneous or homogeneous mode at a time.
  *
  * isHeterogeneousEnabled [OUT]
  *  This param specific whether timesliced heterogeneous vGPU is enabled
  *  for different FB sized profiles.
  *
- * vgpuTypeId [IN]
- *  This param specifies the Type ID for VGPU profile
- *
  * placementId [IN / OUT]
  *  This param specifies the input placement ID provided by hypervisor
  *  or output placement ID reserved by RM for vGPU type ID.
  *
- * TODO : This same RmCtrl will be also be used to provide GSP heap offset
- *        to CPU plugin when vGPU-GSP is enabled.
- *        (As guest fb and gsp heap is allocated before A084 object)
+ * vgpuTypeId [IN]
+ *  This param specifies the Type ID for VGPU profile
+ *
+ * vgpuDevName [IN]
+ *  This param specifies the VF BDF of the virtual GPU.
+ *
+ * guestFbLength [OUT]
+ *  This param specifies the FB size assigned to the VM.
+ *
+ * guestFbOffset [OUT]
+ *  This param specifies the starting FB offset assigned to the VM.
+ *
+ * gspHeapOffset [OUT]
+ *  This param specifies the heap offset of gsp vgpu task.
+ *
+ * guestBar1PFOffset [OUT]
+ *  This param specifies the starting PF BAR1 offset assigned to the VM.
+ *  Only applicable for the legacy GPUs. 
  *
  * Possible status values returned are:
  *   NV_OK
@@ -782,18 +779,20 @@ typedef struct NVA081_CTRL_VGPU_CONFIG_VALIDATE_SWIZZID_PARAMS {
  *   NV_ERR_INVALID_STATE
  *   NV_ERR_INVALID_ARGUMENT
  */
-#define NVA081_CTRL_CMD_VGPU_CONFIG_UPDATE_HETEROGENEOUS_INFO (0xa081011b) /* finn: Evaluated from "(FINN_NVA081_VGPU_CONFIG_VGPU_CONFIG_INTERFACE_ID << 8) | NVA081_CTRL_VGPU_CONFIG_UPDATE_HETEROGENEOUS_INFO_PARAMS_MESSAGE_ID" */
+#define NVA081_CTRL_CMD_VGPU_CONFIG_UPDATE_PLACEMENT_INFO (0xa081011b) /* finn: Evaluated from "(FINN_NVA081_VGPU_CONFIG_VGPU_CONFIG_INTERFACE_ID << 8) | NVA081_CTRL_VGPU_CONFIG_UPDATE_PLACEMENT_INFO_PARAMS_MESSAGE_ID" */
 
-#define NVA081_CTRL_VGPU_CONFIG_UPDATE_HETEROGENEOUS_INFO_PARAMS_MESSAGE_ID (0x1bU)
+#define NVA081_CTRL_VGPU_CONFIG_UPDATE_PLACEMENT_INFO_PARAMS_MESSAGE_ID (0x1bU)
 
-typedef struct NVA081_CTRL_VGPU_CONFIG_UPDATE_HETEROGENEOUS_INFO_PARAMS {
+typedef struct NVA081_CTRL_VGPU_CONFIG_UPDATE_PLACEMENT_INFO_PARAMS {
     NvBool isHeterogeneousEnabled;
     NvU16  placementId;
     NvU32  vgpuTypeId;
+    NvU8   vgpuDevName[VM_UUID_SIZE];
     NV_DECLARE_ALIGNED(NvU64 guestFbLength, 8);
     NV_DECLARE_ALIGNED(NvU64 guestFbOffset, 8);
     NV_DECLARE_ALIGNED(NvU64 gspHeapOffset, 8);
-} NVA081_CTRL_VGPU_CONFIG_UPDATE_HETEROGENEOUS_INFO_PARAMS;
+    NV_DECLARE_ALIGNED(NvU64 guestBar1PFOffset, 8);
+} NVA081_CTRL_VGPU_CONFIG_UPDATE_PLACEMENT_INFO_PARAMS;
 
 /*
  * NVA081_CTRL_CMD_VGPU_CONFIG_GET_CREATABLE_PLACEMENTS
@@ -801,6 +800,9 @@ typedef struct NVA081_CTRL_VGPU_CONFIG_UPDATE_HETEROGENEOUS_INFO_PARAMS {
  * This command fetches count and list of creatable vGPU placements
  *
  * Parameters:
+ *
+ * gpuInstanceId [IN]
+ *  GPU Instance ID or Swizz ID
  *
  * vgpuTypeId [IN]
  *  The client provided vGPU type ID
@@ -825,6 +827,7 @@ typedef struct NVA081_CTRL_VGPU_CONFIG_UPDATE_HETEROGENEOUS_INFO_PARAMS {
 #define NVA081_CTRL_VGPU_CONFIG_GET_CREATABLE_PLACEMENTS_PARAMS_MESSAGE_ID (0x1cU)
 
 typedef struct NVA081_CTRL_VGPU_CONFIG_GET_CREATABLE_PLACEMENTS_PARAMS {
+    NvU32 gpuInstanceId;
     NvU32 vgpuTypeId;
     NvU32 placementSize;
     NvU32 count;
@@ -853,8 +856,21 @@ typedef struct NVA081_CTRL_PGPU_GET_VGPU_STREAMING_CAPABILITY_PARAMS {
 } NVA081_CTRL_PGPU_GET_VGPU_STREAMING_CAPABILITY_PARAMS;
 
 /* vGPU capabilities */
-#define NVA081_CTRL_VGPU_CAPABILITY_MINI_QUARTER_GPU         0
-#define NVA081_CTRL_VGPU_CAPABILITY_COMPUTE_MEDIA_ENGINE_GPU 1
+#define NVA081_CTRL_VGPU_CAPABILITY_MINI_QUARTER_GPU                 0
+#define NVA081_CTRL_VGPU_CAPABILITY_COMPUTE_MEDIA_ENGINE_GPU         1
+#define NVA081_CTRL_VGPU_CAPABILITY_WARM_UPDATE                      2
+#define NVA081_CTRL_VGPU_CAPABILITY_DEVICE_STREAMING                 3
+#define NVA081_CTRL_VGPU_CAPABILITY_READ_DEVICE_BUFFER_BW            4
+#define NVA081_CTRL_VGPU_CAPABILITY_WRITE_DEVICE_BUFFER_BW           5
+#define NVA081_CTRL_VGPU_CAPABILITY_HETEROGENEOUS_TIMESLICE_SIZES    6
+#define NVA081_CTRL_VGPU_CAPABILITY_HETEROGENEOUS_TIMESLICE_PROFILES 7
+#define NVA081_CTRL_VGPU_CAPABILITY_FRACTIONAL_MULTI_VGPU            8
+#define NVA081_CTRL_VGPU_CAPABILITY_HOMOGENEOUS_PLACEMENT_ID         9
+
+#define NVA081_CTRL_VGPU_CAPABILITY_MIG_TIMESLICING_SUPPORTED        10
+#define NVA081_CTRL_VGPU_CAPABILITY_MIG_TIMESLICING_MODE_ENABLED     11
+
+
 
 /*
  * NVA081_CTRL_CMD_VGPU_SET_CAPABILITY
@@ -873,7 +889,7 @@ typedef struct NVA081_CTRL_PGPU_GET_VGPU_STREAMING_CAPABILITY_PARAMS {
  *   NV_ERR_OBJECT_NOT_FOUND
  *   NV_ERR_INVALID_ARGUMENT
  */
-#define NVA081_CTRL_CMD_VGPU_SET_CAPABILITY                  (0xa081011e) /* finn: Evaluated from "(FINN_NVA081_VGPU_CONFIG_VGPU_CONFIG_INTERFACE_ID << 8) | NVA081_CTRL_VGPU_SET_CAPABILITY_PARAMS_MESSAGE_ID" */
+#define NVA081_CTRL_CMD_VGPU_SET_CAPABILITY                          (0xa081011e) /* finn: Evaluated from "(FINN_NVA081_VGPU_CONFIG_VGPU_CONFIG_INTERFACE_ID << 8) | NVA081_CTRL_VGPU_SET_CAPABILITY_PARAMS_MESSAGE_ID" */
 
 #define NVA081_CTRL_VGPU_SET_CAPABILITY_PARAMS_MESSAGE_ID (0x1eU)
 
@@ -904,8 +920,140 @@ typedef struct NVA081_CTRL_VGPU_SET_CAPABILITY_PARAMS {
 #define NVA081_CTRL_VGPU_GET_CAPABILITY_PARAMS_MESSAGE_ID (0x1fU)
 
 typedef struct NVA081_CTRL_VGPU_GET_CAPABILITY_PARAMS {
-    NvU32  capability;
-    NvBool state;
+    NvU32 capability;
+    NvU32 state;
 } NVA081_CTRL_VGPU_GET_CAPABILITY_PARAMS;
+
+/*
+ * NVA081_CTRL_CMD_VGPU_SET_VM_NAME
+ *
+ * This command is to set VM name for the host.
+ *
+ * vmIdType [IN]
+ *  This param provides the guest VM ID type based on the host.
+ *
+ * guestVmId [IN]
+ *  This param provides the guest VM indentifier to RM based on the host.
+ *
+ * vmName [IN]
+ *  This param provides the VM name of the vGPU device attached
+ *  to the above mentioned host VM.
+ *
+ * Possible status values returned are:
+ *   NV_OK
+ *   NV_ERR_OBJECT_NOT_FOUND
+ *   NV_ERR_INVALID_ARGUMENT
+ */
+
+#define NVA081_CTRL_CMD_VGPU_SET_VM_NAME (0xa0810120) /* finn: Evaluated from "(FINN_NVA081_VGPU_CONFIG_VGPU_CONFIG_INTERFACE_ID << 8) | NVA081_CTRL_VGPU_SET_VM_NAME_PARAMS_MESSAGE_ID" */
+
+#define NVA081_CTRL_VGPU_SET_VM_NAME_PARAMS_MESSAGE_ID (0x20U)
+
+typedef struct NVA081_CTRL_VGPU_SET_VM_NAME_PARAMS {
+    VM_ID_TYPE vmIdType;
+    NV_DECLARE_ALIGNED(VM_ID guestVmId, 8);
+    NvU8       vmName[NVA081_VM_NAME_SIZE];
+} NVA081_CTRL_VGPU_SET_VM_NAME_PARAMS;
+
+/*
+ * NVA081_CTRL_CMD_VGPU_GET_BAR_INFO
+ *
+ * This command is to get the bar info for a vGPU.
+ *
+ * gpuPciId [IN]
+ *  This param specifies the PCI device ID of VF on which VM is running
+ *
+ * vgpuName [IN]
+ *  This param provides the vGPU device name to RM.
+ *
+ * configParams [IN]
+ *  This param provides the vGPU config params to RM
+ *
+ * barSizes [OUT]
+ *  This param provides the BAR size for each region index of the device
+ *
+ * sparseOffsets [OUT]
+ *  This param provides the offset of each sparse mmap region in BAR0
+ *
+ * sparseSizes [OUT]
+ *  This param provides the size of each sparse mmap region in BAR0
+ *
+ * sparseCount [OUT]
+ *  This param provides the number of sparse mmap regions in BAR0
+ *
+ * isBar064bit [OUT]
+ *  This param provides whether the BAR0 is 64bit of the vGPU device
+ *
+ * Possible status values returned are:
+ *   NV_OK
+ *   NV_ERR_OBJECT_NOT_FOUND
+ *   NV_ERR_INVALID_ARGUMENT
+ */
+
+#define NVA081_CTRL_CMD_VGPU_GET_BAR_INFO (0xa0810121) /* finn: Evaluated from "(FINN_NVA081_VGPU_CONFIG_VGPU_CONFIG_INTERFACE_ID << 8) | NVA081_CTRL_VGPU_GET_BAR_INFO_PARAMS_MESSAGE_ID" */
+
+#define NVA081_CTRL_VGPU_GET_BAR_INFO_PARAMS_MESSAGE_ID (0x21U)
+
+typedef struct NVA081_CTRL_VGPU_GET_BAR_INFO_PARAMS {
+    NvU32  gpuPciId;
+    NvU8   vgpuName[VM_UUID_SIZE];
+    NvU8   configParams[NVA081_CONFIG_PARAMS_MAX_LENGTH];
+    NV_DECLARE_ALIGNED(NvU64 barSizes[NVA081_MAX_BAR_REGION_COUNT], 8);
+    NV_DECLARE_ALIGNED(NvU64 sparseOffsets[NVA081_MAX_SPARSE_REGION_COUNT], 8);
+    NV_DECLARE_ALIGNED(NvU64 sparseSizes[NVA081_MAX_SPARSE_REGION_COUNT], 8);
+    NvU32  sparseCount;
+    NvBool isBar064bit;
+} NVA081_CTRL_VGPU_GET_BAR_INFO_PARAMS;
+
+/*
+ * NVA081_CTRL_CMD_VGPU_CONFIG_GET_MIGRATION_BANDWIDTH
+ *
+ * This command is to get the migration bandwidth of the physical GPU.
+ *
+ * migrationBandwidth [OUT]
+ *  This param specifies the migration bandwidth of GPU
+ *
+ * Possible status values returned are:
+ *   NV_OK
+ *   NV_ERR_INVALID_REQUEST
+ *   NV_ERR_INVALID_STATE
+ *   NV_ERR_INVALID_ARGUMENT
+ */
+#define NVA081_CTRL_CMD_VGPU_CONFIG_GET_MIGRATION_BANDWIDTH (0xa0810122) /* finn: Evaluated from "(FINN_NVA081_VGPU_CONFIG_VGPU_CONFIG_INTERFACE_ID << 8) | NVA081_CTRL_VGPU_CONFIG_GET_MIGRATION_BANDWIDTH_PARAMS_MESSAGE_ID" */
+
+#define NVA081_CTRL_VGPU_CONFIG_GET_MIGRATION_BANDWIDTH_PARAMS_MESSAGE_ID (0x22U)
+
+typedef struct NVA081_CTRL_VGPU_CONFIG_GET_MIGRATION_BANDWIDTH_PARAMS {
+    NvU32 migrationBandwidth;
+} NVA081_CTRL_VGPU_CONFIG_GET_MIGRATION_BANDWIDTH_PARAMS;
+
+/*
+ * NVA081_CTRL_CMD_VGPU_CONFIG_ENUMERATE_VGPU_PER_GPU_INSTANCE
+ *
+ * This command enumerates list of vGPU guest instances per GPU instance
+ *
+ * gpuInstanceId [IN]
+ *  This parameter specifies the GPU Instance Id or Swizz Id
+ *
+ * numVgpu [OUT]
+ *  This parameter specifies the number of virtual GPUs created on a GPU instance
+ *
+ * vgpuInstanceIds [OUT]
+ *  This parameter specifies an array of vGPU type ids active on a GPU instance
+ *
+ * Possible status values returned are:
+ *   NV_OK
+ *   NV_ERR_OBJECT_NOT_FOUND
+ *   NV_ERR_NOT_SUPPORTED
+ */
+#define NVA081_CTRL_CMD_VGPU_CONFIG_ENUMERATE_VGPU_PER_GPU_INSTANCE (0xa0810124) /* finn: Evaluated from "(FINN_NVA081_VGPU_CONFIG_VGPU_CONFIG_INTERFACE_ID << 8) | NVA081_CTRL_VGPU_CONFIG_ENUMERATE_VGPU_PER_GPU_INSTANCE_PARAMS_MESSAGE_ID" */
+
+#define NVA081_CTRL_VGPU_CONFIG_ENUMERATE_VGPU_PER_GPU_INSTANCE_PARAMS_MESSAGE_ID (0x24U)
+
+typedef struct NVA081_CTRL_VGPU_CONFIG_ENUMERATE_VGPU_PER_GPU_INSTANCE_PARAMS {
+    NvU32 gpuInstanceId;
+    NvU32 numVgpu;
+    NvU32 vgpuInstanceIds[NVA081_MAX_VGPU_PER_GI];
+} NVA081_CTRL_VGPU_CONFIG_ENUMERATE_VGPU_PER_GPU_INSTANCE_PARAMS;
 
 /* _ctrlA081vgpuconfig_h_ */

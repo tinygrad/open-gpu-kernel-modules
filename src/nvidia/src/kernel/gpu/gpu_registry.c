@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -199,17 +199,38 @@ gpuInitRegistryOverrides_KERNEL
         pGpu->bBf3WarBug4040336Enabled = (data32 == NV_REG_STR_RM_DMA_ADJUST_PEER_MMIO_BF3_ENABLE);
     }
 
-    if (osReadRegistryDword(pGpu, NV_REG_STR_RM_ITERATIVE_MMU_WALKER, &data32) == NV_OK)
-    {
-        pGpu->bIterativeMmuWalker = (data32 == NV_REG_STR_RM_ITERATIVE_MMU_WALKER_ENABLED);
-    }
-
 #if defined(GPU_LOAD_FAILURE_TEST_SUPPORTED)
     if (osReadRegistryDword(pGpu, NV_REG_STR_GPU_LOAD_FAILURE_TEST, &data32) == NV_OK)
     {
         pGpu->loadFailurePathTestControl = data32;
     }
 #endif
+
+    if (osReadRegistryDword(pGpu, NV_REG_STR_RM_DEBUG_RUSD_POLLING, &data32) == NV_OK)
+    {
+        pGpu->userSharedData.pollingRegistryOverride = data32;
+    }
+
+    if (osReadRegistryDword(pGpu, NV_REG_STR_RM_RUSD_POLLING_INTERVAL, &data32) == NV_OK)
+    {
+        if (data32 < NV_REG_STR_RM_RUSD_POLLING_INTERVAL_MIN)
+            data32 = NV_REG_STR_RM_RUSD_POLLING_INTERVAL_MIN;
+        if (data32 > NV_REG_STR_RM_RUSD_POLLING_INTERVAL_MAX)
+            data32 = NV_REG_STR_RM_RUSD_POLLING_INTERVAL_MAX;
+        pGpu->userSharedData.pollingFrequencyMs = data32;
+        pGpu->userSharedData.bPollFrequencyOverridden = NV_TRUE;
+    }
+    else
+    {
+        pGpu->userSharedData.pollingFrequencyMs = NV_REG_STR_RM_RUSD_POLLING_INTERVAL_DEFAULT;
+        pGpu->userSharedData.bPollFrequencyOverridden = NV_FALSE;
+    }
+    
+    if ((osReadRegistryDword(pGpu, NV_REG_STR_RM_INIT_MEM_REUSE, &data32) == NV_OK) &&
+        (data32 == NV_REG_STR_RM_INIT_MEM_REUSE_DISABLE))
+    {
+        pGpu->setProperty(pGpu, PDB_PROP_GPU_REUSE_INIT_CONTING_MEM, NV_FALSE);
+    }
 
     return NV_OK;
 }
@@ -225,11 +246,13 @@ gpuInitInstLocOverrides_IMPL
 {
     NvU32 data32 = 0;
     //
-    // If Hopper CC mode is enabled, move all except few buffers to FB
+    // If Hopper CC mode or protected pcie is enabled, move all except few buffers to FB
     //
     if (((osReadRegistryDword(pGpu, NV_REG_STR_RM_CONFIDENTIAL_COMPUTE, &data32) == NV_OK) &&
          FLD_TEST_DRF(_REG_STR, _RM_CONFIDENTIAL_COMPUTE, _ENABLED, _YES, data32) &&
-         pGpu->getProperty(pGpu, PDB_PROP_GPU_CC_FEATURE_CAPABLE)) || gpuIsCCEnabledInHw_HAL(pGpu))
+         pGpu->getProperty(pGpu, PDB_PROP_GPU_CC_FEATURE_CAPABLE)) ||
+        gpuIsCCEnabledInHw_HAL(pGpu) ||
+        gpuIsMultiGpuNvleEnabledInHw_HAL(pGpu))
     {
 
         pGpu->instLocOverrides  = NV_REG_STR_RM_INST_LOC_ALL_VID;
@@ -330,7 +353,7 @@ gpuInitInstLocOverrides_IMPL
     {
         pGpu->instLocOverrides = FLD_SET_DRF(_REG, _STR_RM_INST_LOC, _BAR_PTE, _DEFAULT, pGpu->instLocOverrides);
         pGpu->instLocOverrides = FLD_SET_DRF(_REG, _STR_RM_INST_LOC, _BAR_PDE, _DEFAULT, pGpu->instLocOverrides);
-        NV_PRINTF(LEVEL_WARNING, "Ignoring regkeys to place BAR PTE/PDE in SYSMEM\n");
+        NV_PRINTF(LEVEL_INFO, "Ignoring regkeys to place BAR PTE/PDE in SYSMEM\n");
     }
 
     return NV_OK;

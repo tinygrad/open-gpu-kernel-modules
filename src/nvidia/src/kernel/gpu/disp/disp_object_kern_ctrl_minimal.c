@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -33,73 +33,6 @@
 #include "rmapi/client_resource.h"
 #include "rmapi/rmapi.h"
 #include "rmapi/rs_utils.h"
-
-NV_STATUS
-dispobjCtrlCmdEventSetTrigger_IMPL
-(
-    DispObject *pDispObject
-)
-{
-    OBJGPU        *pGpu = DISPAPI_GET_GPU(pDispObject);
-    KernelDisplay *pKernelDisplay = GPU_GET_KERNEL_DISPLAY(pGpu);
-
-    kdispNotifyEvent(pGpu, pKernelDisplay, NV5070_NOTIFIERS_SW, NULL, 0, 0, 0);
-
-    return NV_OK;
-}
-
-NV_STATUS
-dispobjCtrlCmdEventSetMemoryNotifies_IMPL
-(
-    DispObject *pDispObject,
-    NV5070_CTRL_EVENT_SET_MEMORY_NOTIFIES_PARAMS *pSetMemoryNotifiesParams
-)
-{
-    OBJGPU        *pGpu = DISPAPI_GET_GPU(pDispObject);
-    DisplayApi    *pDisplayApi = staticCast(pDispObject, DisplayApi);
-    RsClient      *pClient = RES_GET_CLIENT(pDispObject);
-    Memory        *pMemory;
-    NvU32         *pNotifyActions, i;
-
-    // error check subDeviceInstance
-    if (pSetMemoryNotifiesParams->subDeviceInstance >= gpumgrGetSubDeviceCountFromGpu(pGpu))
-    {
-        NV_PRINTF(LEVEL_INFO, "bad subDeviceInstance 0x%x\n",
-                  pSetMemoryNotifiesParams->subDeviceInstance);
-        return NV_ERR_INVALID_ARGUMENT;
-    }
-
-    pNotifyActions = pDisplayApi->pNotifyActions[pSetMemoryNotifiesParams->subDeviceInstance];
-
-    // ensure there's no pending notifications
-    for (i = 0; i < pDisplayApi->numNotifiers; i++)
-    {
-        if (pNotifyActions[i] != NV5070_CTRL_EVENT_SET_NOTIFICATION_ACTION_DISABLE)
-        {
-            return NV_ERR_STATE_IN_USE;
-        }
-    }
-
-    if (pSetMemoryNotifiesParams->hMemory == NV01_NULL_OBJECT)
-    {
-        pDisplayApi->hNotifierMemory = pSetMemoryNotifiesParams->hMemory;
-        pDisplayApi->pNotifierMemory = NULL;
-        return NV_OK;
-    }
-
-    NV_CHECK_OK_OR_RETURN(LEVEL_SILENT,
-        memGetByHandle(pClient, pSetMemoryNotifiesParams->hMemory, &pMemory));
-
-    if (pMemory->pMemDesc->Size < sizeof(NvNotification) * pDisplayApi->numNotifiers)
-    {
-        return NV_ERR_INVALID_LIMIT;
-    }
-
-    pDisplayApi->hNotifierMemory = pSetMemoryNotifiesParams->hMemory;
-    pDisplayApi->pNotifierMemory = pMemory;
-
-    return NV_OK;
-}
 
 static NV_STATUS getRgConnectedLockpin(OBJGPU *pGpu,
     KernelDisplay *pKernelDisplay, NvU32 head,
@@ -171,20 +104,16 @@ dispobjCtrlCmdGetRgConnectedLockpinStateless_IMPL
     OBJGPU         *pGpu = DISPAPI_GET_GPU(pDispObject);
     KernelDisplay *pKernelDisplay = GPU_GET_KERNEL_DISPLAY(pGpu);
     NvHandle        hClient = RES_GET_CLIENT_HANDLE(pDispObject);
-    DisplayApi     *pDisplayApi;
     OBJGPU         *pPeerGpu;
 
     NV_ASSERT_OR_RETURN(pParams->head < pKernelDisplay->numHeads, NV_ERR_INVALID_ARGUMENT);
 
-    if (!CliGetDispInfo(hClient, pParams->peer.hDisplay, &pDisplayApi) &&
-        !CliGetDispCommonInfo(hClient, pParams->peer.hDisplay, &pDisplayApi))
-    {
-        return NV_ERR_INVALID_OBJECT_HANDLE;
-    }
-
     RsResourceRef *pPeerDisplayRef;
     NV_ASSERT_OK_OR_RETURN(serverutilGetResourceRef(hClient, pParams->peer.hDisplay, &pPeerDisplayRef));
     NV_ASSERT_OR_RETURN(pPeerDisplayRef->pParentRef != NULL, NV_ERR_INVALID_STATE);
+    NV_ASSERT_OR_RETURN((dynamicCast(pPeerDisplayRef->pResource, DispCommon) != NULL ||
+                         dynamicCast(pPeerDisplayRef->pResource, DispObject) != NULL), 
+                         NV_ERR_INVALID_OBJECT);
 
     Subdevice *pPeerSubdevice;
     NV_ASSERT_OK_OR_RETURN(subdeviceGetByInstance(RES_GET_CLIENT(pDispObject), pPeerDisplayRef->pParentRef->hResource,

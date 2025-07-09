@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2018-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2018-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -25,6 +25,9 @@
 
 #include "mem_mgr/fla_mem.h"
 
+
+#include "platform/chipset/chipset.h"
+
 #include "gpu_mgr/gpu_mgr.h"
 #include "gpu/gpu.h"
 #include "gpu/mem_mgr/mem_mgr.h"
@@ -36,6 +39,7 @@
 #include "gpu/subdevice/subdevice.h"
 #include "vgpu/rpc.h"
 #include "platform/sli/sli.h"
+#include "deprecated/rmapi_deprecated.h"
 
 #include "class/cl0041.h" // NV04_MEMORY
 #include "class/cl003e.h" // NV01_MEMORY_SYSTEM
@@ -172,7 +176,7 @@ memDestruct_IMPL
     if (pMemory->bRpcAlloc && (IS_VIRTUAL(pGpu) || IS_GSP_CLIENT(pGpu)))
     {
         NV_RM_RPC_FREE(pGpu, hClient, hParent, hMemory, status);
-        NV_ASSERT(status == NV_OK);
+        NV_ASSERT((status == NV_OK) || (status == NV_ERR_GPU_IN_FULLCHIP_RESET));
     }
 }
 
@@ -312,6 +316,8 @@ dmaNvos32ToPageSizeAttr
                     return RM_ATTR_PAGE_SIZE_HUGE;
                 case NVOS32_ATTR2_PAGE_SIZE_HUGE_512MB:
                     return RM_ATTR_PAGE_SIZE_512MB;
+                case NVOS32_ATTR2_PAGE_SIZE_HUGE_256GB:
+                    return RM_ATTR_PAGE_SIZE_256GB;
             }
             break;
     }
@@ -339,7 +345,6 @@ memConstructCommon_IMPL
 {
     OBJGPU            *pGpu           = NULL;
     NV_STATUS          status         = NV_OK;
-    NvHandle           hClient        = RES_GET_CLIENT_HANDLE(pMemory);
     NvHandle           hParent        = RES_GET_PARENT_HANDLE(pMemory);
     NvHandle           hMemory        = RES_GET_HANDLE(pMemory);
 
@@ -480,7 +485,7 @@ memConstructCommon_IMPL
     // Make GSP-RM aware of the memory descriptor so it can be used there
     if (FLD_TEST_DRF(OS32, _ATTR2, _REGISTER_MEMDESC_TO_PHYS_RM, _TRUE, attr2))
     {
-        status = memdescRegisterToGSP(pGpu, hClient, hParent, hMemory);
+        status = memRegisterWithGsp(pGpu, RES_GET_CLIENT(pMemory), hParent, hMemory);
         if (status != NV_OK)
             goto done;
     }
@@ -502,6 +507,121 @@ done:
     }
 
     return status;
+}
+
+NV_STATUS
+memRegisterWithGsp_IMPL
+(
+    OBJGPU *pGpu,
+    RsClient *pClient,
+    NvHandle hParent,
+    NvHandle hMemory
+)
+{
+    NV_STATUS          status     = NV_OK;
+    Memory            *pMemory    = NULL;
+    RsResourceRef     *pMemoryRef = NULL;
+    MEMORY_DESCRIPTOR *pMemDesc   = NULL;
+    NvU32              hClass;
+
+    // Nothing to do without GSP
+    if (!IS_GSP_CLIENT(pGpu))
+    {
+        return NV_OK;
+    }
+
+    NV_CHECK_OK_OR_RETURN(LEVEL_ERROR, clientGetResourceRef(pClient, hMemory, &pMemoryRef));
+
+    pMemory = dynamicCast(pMemoryRef->pResource, Memory);
+    NV_CHECK_OR_RETURN(LEVEL_ERROR, pMemory != NULL, NV_ERR_INVALID_OBJECT);
+
+    pMemDesc = pMemory->pMemDesc;
+
+    // Check: memory already registered
+    if (pMemory->bRegisteredWithGsp)
+    {
+        return NV_OK;
+    }
+
+    // Check:  no subdevice memDescs
+    NV_CHECK_OR_RETURN(LEVEL_ERROR,
+                       !memdescHasSubDeviceMemDescs(pMemDesc),
+                       NV_ERR_INVALID_STATE);
+
+    // Check: SYSMEM or FBMEM only
+    if (memdescGetAddressSpace(pMemDesc) == ADDR_FBMEM)
+        hClass = NV01_MEMORY_LIST_FBMEM;
+    else if  (memdescGetAddressSpace(pMemDesc) == ADDR_SYSMEM)
+        hClass = NV01_MEMORY_LIST_SYSTEM;
+    else
+        return NV_ERR_INVALID_STATE;
+
+    NvU32 os02Flags = 0;
+
+    NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
+                          RmDeprecatedConvertOs32ToOs02Flags(pMemory->Attr,
+                                                             pMemory->Attr2,
+                                                             pMemory->Flags,
+                                                             &os02Flags));
+    NV_RM_RPC_ALLOC_MEMORY(pGpu,
+                           pClient->hClient,
+                           hParent,
+                           hMemory,
+                           hClass,
+                           os02Flags,
+                           pMemDesc,
+                           status);
+
+    if (status == NV_OK)
+    {
+        // Mark memory as registered in GSP
+        pMemory->bRegisteredWithGsp = NV_TRUE;
+    }
+
+    return status;
+}
+
+static void
+_memUnregisterFromGsp
+(
+    Memory *pMemory,
+    RsClient *pClient,
+    NvHandle hParent,
+    NvHandle hMemory
+)
+{
+    NV_STATUS status = NV_OK;
+
+    // Nothing to do without GSP
+    if ((pMemory->pGpu == NULL) ||
+        !IS_GSP_CLIENT(pMemory->pGpu))
+    {
+        return;
+    }
+
+    // Nothing to do if memory is not registered to GSP
+    if (!pMemory->bRegisteredWithGsp)
+    {
+        return;
+    }
+
+    NV_RM_RPC_FREE(pMemory->pGpu,
+                   pClient->hClient,
+                   hParent,
+                   hMemory,
+                   status);
+
+    if (status == NV_OK)
+    {
+        // Mark memory as not registered in GSP
+        pMemory->bRegisteredWithGsp = NV_FALSE;
+    }
+    else
+    {
+        NV_PRINTF(LEVEL_ERROR,
+                  "Failed to unregister hMemory 0x%08x from GSP, status 0x%08x\n",
+                  hMemory, status);
+    }
 }
 
 static NvBool
@@ -553,16 +673,6 @@ _memDestructCommonWithDevice
     }
 
     dispcmnGetByDevice(pRsClient, hDevice, &pDispCommon);
-
-    if (pDispCommon != NULL)
-    {
-        DisplayApi *pDisplayApi = staticCast(pDispCommon, DisplayApi);
-        if (pDisplayApi->hNotifierMemory == hMemory)
-        {
-            pDisplayApi->hNotifierMemory = NV01_NULL_OBJECT;
-            pDisplayApi->pNotifierMemory = NULL;
-        }
-    }
 
     //
     // Release any FB HW resources
@@ -647,18 +757,16 @@ memDestructCommon_IMPL
     Memory *pMemory
 )
 {
-    OBJGPU             *pGpu            = pMemory->pGpu;
     RsResourceRef      *pResourceRef    = RES_GET_REF(pMemory);
     RsResourceRef      *pParentRef      = pResourceRef->pParentRef;
     RsClient           *pClient         = RES_GET_CLIENT(pMemory);
-    NvHandle            hClient         = pClient->hClient;
     NvHandle            hParent         = pParentRef->hResource;
     NvHandle            hMemory         = RES_GET_HANDLE(pMemory);
 
     if (!pMemory->bConstructed)
         return;
 
-    NV_ASSERT_OK(memdescDeregisterFromGSP(pGpu, hClient, hParent, hMemory));
+    _memUnregisterFromGsp(pMemory, pClient, hParent, hMemory);
 
     // Do device specific teardown if we have a device
     if (pMemory->pDevice != NULL)
@@ -847,8 +955,8 @@ memCopyConstruct_IMPL
     //
     if (RES_GET_CLIENT_HANDLE(pMemoryDst) == RES_GET_PARENT_HANDLE(pMemoryDst))
     {
-        NV_ASSERT_OR_RETURN(RES_GET_CLIENT_HANDLE(pMemorySrc) ==
-                          RES_GET_PARENT_HANDLE(pMemorySrc),
+        NV_CHECK_OR_RETURN(LEVEL_ERROR,
+                RES_GET_CLIENT_HANDLE(pMemorySrc) == RES_GET_PARENT_HANDLE(pMemorySrc),
                 NV_ERR_INVALID_OBJECT_PARENT);
         return NV_OK;
     }
@@ -1089,4 +1197,57 @@ memIsDuplicate_IMPL
     *pDuplicate = (pMemory->pMemDesc == pMemory1->pMemDesc);
 
     return NV_OK;
+}
+
+void memSetSysmemCacheAttrib_IMPL
+(
+    OBJGPU                          *pGpu,
+    NV_MEMORY_ALLOCATION_PARAMS     *pAllocData,
+    NvU32                           *pCpuCacheAttrib,
+    NvU32                           *pGpuCacheAttrib
+)
+{
+    //
+    // For system memory default to GPU uncached. GPU caching is different from
+    // the expected default memory model since it is not coherent.  Clients must
+    // understand this and handle any coherency requirements explicitly.
+    //
+    if (DRF_VAL(OS32, _ATTR2, _GPU_CACHEABLE, pAllocData->attr2) ==
+        NVOS32_ATTR2_GPU_CACHEABLE_DEFAULT)
+    {
+        pAllocData->attr2 = FLD_SET_DRF(OS32, _ATTR2, _GPU_CACHEABLE, _NO,
+                                        pAllocData->attr2);
+    }
+
+    if (DRF_VAL(OS32, _ATTR2, _GPU_CACHEABLE, pAllocData->attr2) ==
+        NVOS32_ATTR2_GPU_CACHEABLE_YES)
+    {
+        *pGpuCacheAttrib = NV_MEMORY_CACHED;
+    }
+    else
+    {
+        *pGpuCacheAttrib = NV_MEMORY_UNCACHED;
+    }
+
+    if (DRF_VAL(OS32, _ATTR, _COHERENCY, pAllocData->attr) == NVOS32_ATTR_COHERENCY_UNCACHED)
+        *pCpuCacheAttrib = NV_MEMORY_UNCACHED;
+    else if (DRF_VAL(OS32, _ATTR, _COHERENCY, pAllocData->attr) == NVOS32_ATTR_COHERENCY_CACHED)
+        *pCpuCacheAttrib = NV_MEMORY_CACHED;
+    else if (DRF_VAL(OS32, _ATTR, _COHERENCY, pAllocData->attr) == NVOS32_ATTR_COHERENCY_WRITE_COMBINE)
+        *pCpuCacheAttrib = NV_MEMORY_WRITECOMBINED;
+    else if (DRF_VAL(OS32, _ATTR, _COHERENCY, pAllocData->attr) == NVOS32_ATTR_COHERENCY_WRITE_THROUGH)
+        *pCpuCacheAttrib = NV_MEMORY_CACHED;
+    else if (DRF_VAL(OS32, _ATTR, _COHERENCY, pAllocData->attr) == NVOS32_ATTR_COHERENCY_WRITE_PROTECT)
+        *pCpuCacheAttrib = NV_MEMORY_CACHED;
+    else if (DRF_VAL(OS32, _ATTR, _COHERENCY, pAllocData->attr) == NVOS32_ATTR_COHERENCY_WRITE_BACK)
+        *pCpuCacheAttrib = NV_MEMORY_CACHED;
+    else
+        *pCpuCacheAttrib = 0;
+
+    ct_assert(NVOS32_ATTR_COHERENCY_UNCACHED      == NVOS02_FLAGS_COHERENCY_UNCACHED);
+    ct_assert(NVOS32_ATTR_COHERENCY_CACHED        == NVOS02_FLAGS_COHERENCY_CACHED);
+    ct_assert(NVOS32_ATTR_COHERENCY_WRITE_COMBINE == NVOS02_FLAGS_COHERENCY_WRITE_COMBINE);
+    ct_assert(NVOS32_ATTR_COHERENCY_WRITE_THROUGH == NVOS02_FLAGS_COHERENCY_WRITE_THROUGH);
+    ct_assert(NVOS32_ATTR_COHERENCY_WRITE_PROTECT == NVOS02_FLAGS_COHERENCY_WRITE_PROTECT);
+    ct_assert(NVOS32_ATTR_COHERENCY_WRITE_BACK    == NVOS02_FLAGS_COHERENCY_WRITE_BACK);
 }

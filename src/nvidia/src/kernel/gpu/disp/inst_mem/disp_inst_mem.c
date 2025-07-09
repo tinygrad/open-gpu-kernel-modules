@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -37,6 +37,7 @@
 #include "gpu/mem_mgr/mem_mgr.h"
 #include "os/nv_memory_type.h"
 #include "os/os.h"
+#include "containers/eheap_old.h"
 
 /*!
  * Display Context DMA instance memory is always 2 16B blocks in size on all chips.  There
@@ -176,7 +177,6 @@ instmemInitHashTable
 )
 {
     NV_STATUS status = NV_OK;
-    NvU32     i;
 
     pInstMem->nHashTableEntries = hashTableSize / sizeof(DISP_HW_HASH_TABLE_ENTRY);
     pInstMem->hashTableBaseAddr = instmemGetHashTableBaseAddr_HAL(pGpu, pInstMem);
@@ -192,10 +192,9 @@ instmemInitHashTable
     }
 
     // Initialize Hash Table.
-    for (i = 0; i < pInstMem->nHashTableEntries; i++)
-    {
-        pInstMem->pHashTable[i].pContextDma = NULL;
-    }
+    portMemSet(pInstMem->pHashTable, 0x00, pInstMem->nHashTableEntries *
+                                            sizeof(SW_HASH_TABLE_ENTRY));
+
 
 exit:
     return status;

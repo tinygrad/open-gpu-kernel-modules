@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2022-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -49,6 +49,14 @@ kmigmgrIsGPUInstanceFlagValid_GH100
                                 _MEMORY_SIZE, gpuInstanceFlag);
     NvU32 computeSizeFlag = DRF_VAL(2080_CTRL_GPU, _PARTITION_FLAG,
                                     _COMPUTE_SIZE, gpuInstanceFlag);
+    NvU32 gfxSizeFlag = DRF_VAL(2080_CTRL_GPU, _PARTITION_FLAG,
+                                    _GFX_SIZE, gpuInstanceFlag);
+
+    if (!FLD_TEST_REF(NV2080_CTRL_GPU_PARTITION_FLAG_REQ_ALL_MEDIA, _DEFAULT, gpuInstanceFlag))
+    {
+        return NV_FALSE;
+    }
+
     switch (memSizeFlag)
     {
         case NV2080_CTRL_GPU_PARTITION_FLAG_MEMORY_SIZE_FULL:
@@ -71,9 +79,29 @@ kmigmgrIsGPUInstanceFlagValid_GH100
         case NV2080_CTRL_GPU_PARTITION_FLAG_COMPUTE_SIZE_MINI_QUARTER:
         case NV2080_CTRL_GPU_PARTITION_FLAG_COMPUTE_SIZE_EIGHTH:
             break;
+        case NV2080_CTRL_GPU_PARTITION_FLAG_COMPUTE_SIZE_RESERVED_INTERNAL_06:
+        case NV2080_CTRL_GPU_PARTITION_FLAG_COMPUTE_SIZE_RESERVED_INTERNAL_07:
+            return NV_FALSE;
         default:
             NV_PRINTF(LEVEL_ERROR, "Unrecognized GPU compute partitioning flag 0x%x\n",
                       computeSizeFlag);
+            return NV_FALSE;
+    }
+    switch (gfxSizeFlag)
+    {
+        case NV2080_CTRL_GPU_PARTITION_FLAG_GFX_SIZE_NONE:
+            break;
+        case NV2080_CTRL_GPU_PARTITION_FLAG_GFX_SIZE_FULL:
+        case NV2080_CTRL_GPU_PARTITION_FLAG_GFX_SIZE_HALF:
+        case NV2080_CTRL_GPU_PARTITION_FLAG_GFX_SIZE_MINI_HALF:
+        case NV2080_CTRL_GPU_PARTITION_FLAG_GFX_SIZE_QUARTER:
+        case NV2080_CTRL_GPU_PARTITION_FLAG_GFX_SIZE_EIGHTH:
+        case NV2080_CTRL_GPU_PARTITION_FLAG_GFX_SIZE_RESERVED_INTERNAL_06:
+        case NV2080_CTRL_GPU_PARTITION_FLAG_GFX_SIZE_RESERVED_INTERNAL_07:
+            return NV_FALSE;
+        default:
+            NV_PRINTF(LEVEL_ERROR, "Unrecognized GPU GFX partitioning flag 0x%x\n",
+                      gfxSizeFlag);
             return NV_FALSE;
     }
     return NV_TRUE;
@@ -100,11 +128,10 @@ kmigmgrIsGPUInstanceCombinationValid_GH100
         return NV_FALSE;
     }
 
-    NV_CHECK_OR_RETURN(LEVEL_ERROR,
-        kmigmgrGetSmallestGpuInstanceSize(pGpu, pKernelMIGManager, &smallestComputeSizeFlag) == NV_OK,
-        NV_FALSE);
+    smallestComputeSizeFlag = kmigmgrSmallestComputeProfileSize(pGpu, pKernelMIGManager);
+    NV_CHECK_OR_RETURN(LEVEL_ERROR, smallestComputeSizeFlag != KMIGMGR_COMPUTE_SIZE_INVALID, NV_FALSE);
 
-    // JPG_OFA profile is only available on the smallest partition
+    // JPG_OFA profile is only available on the smallest available partition
     if (FLD_TEST_REF(NV2080_CTRL_GPU_PARTITION_FLAG_REQ_DEC_JPG_OFA, _ENABLE, gpuInstanceFlag))
     {
         if (computeSizeFlag != smallestComputeSizeFlag)

@@ -1,13 +1,22 @@
+
 #ifndef _G_OBJECT_NVOC_H_
 #define _G_OBJECT_NVOC_H_
+
+// Version of generated metadata structures
+#ifdef NVOC_METADATA_VERSION
+#undef NVOC_METADATA_VERSION
+#endif
+#define NVOC_METADATA_VERSION 2
+
 #include "nvoc/runtime.h"
+#include "nvoc/rtti.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2015-2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2015-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -33,6 +42,10 @@ extern "C" {
  * This file is part of the NVOC runtime.
  */
 
+#pragma once
+
+#include "nvoc/prelude.h"
+
 #include "g_object_nvoc.h"
 
 #ifndef _NVOC_OBJECT_H_
@@ -41,7 +54,8 @@ extern "C" {
 #include "nvtypes.h"
 #include "nvstatus.h"
 
-#include "nvoc/prelude.h"
+
+
 
 struct Object;
 
@@ -78,13 +92,33 @@ struct NVOC_CHILD_TREE
 #define PRIVATE_FIELD(x) NVOC_PRIVATE_FIELD(x)
 #endif
 
+
+// Metadata with per-class RTTI
+struct NVOC_METADATA__Object;
+
+
 struct Object {
-    const struct NVOC_RTTI *__nvoc_rtti;
-    struct Object *__nvoc_pbase_Object;
+
+    // Metadata starts with RTTI structure.
+    union {
+         const struct NVOC_METADATA__Object *__nvoc_metadata_ptr;
+         const struct NVOC_RTTI *__nvoc_rtti;
+    };
+
+    // Ancestor object pointers for `staticCast` feature
+    struct Object *__nvoc_pbase_Object;    // obj
+
+    // Data members
     struct Object *pParent;
     struct NVOC_CHILD_TREE childTree;
     NvU32 ipVersion;
     NvU32 createFlags;
+};
+
+
+// Metadata with per-class RTTI
+struct NVOC_METADATA__Object {
+    const struct NVOC_RTTI rtti;
 };
 
 #ifndef __NVOC_CLASS_Object_TYPEDEF__
@@ -96,18 +130,18 @@ typedef struct Object Object;
 #define __nvoc_class_id_Object 0x497031
 #endif /* __nvoc_class_id_Object */
 
+// Casting support
 extern const struct NVOC_CLASS_DEF __nvoc_class_def_Object;
 
 #define __staticCast_Object(pThis) \
     ((pThis)->__nvoc_pbase_Object)
 
 #ifdef __nvoc_object_h_disabled
-#define __dynamicCast_Object(pThis) ((Object*)NULL)
+#define __dynamicCast_Object(pThis) ((Object*) NULL)
 #else //__nvoc_object_h_disabled
 #define __dynamicCast_Object(pThis) \
-    ((Object*)__nvoc_dynamicCast(staticCast((pThis), Dynamic), classInfo(Object)))
+    ((Object*) __nvoc_dynamicCast(staticCast((pThis), Dynamic), classInfo(Object)))
 #endif //__nvoc_object_h_disabled
-
 
 NV_STATUS __nvoc_objCreateDynamic_Object(Object**, Dynamic*, NvU32, va_list);
 
@@ -115,6 +149,10 @@ NV_STATUS __nvoc_objCreate_Object(Object**, Dynamic*, NvU32);
 #define __objCreate_Object(ppNewObj, pParent, createFlags) \
     __nvoc_objCreate_Object((ppNewObj), staticCast((pParent), Dynamic), (createFlags))
 
+
+// Wrapper macros
+
+// Dispatch functions
 void objAddChild_IMPL(struct Object *pObj, struct Object *pChild);
 
 #ifdef __nvoc_object_h_disabled

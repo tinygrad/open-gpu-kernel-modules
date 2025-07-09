@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -32,6 +32,7 @@
 #include "gpu/gpu_child_class_defs.h"
 #include "gpu/eng_desc.h"
 
+
 //
 // List of GPU children that present for the chip. List entries contain$
 // {CLASS-ID, # of instances} pairs, e.g.: {CE, 2} is 2 instance of OBJCE. This$
@@ -53,7 +54,6 @@ static const GPUCHILDPRESENT gpuChildrenPresent_AD102[] =
     GPU_CHILD_PRESENT(KernelRc, 1),
     GPU_CHILD_PRESENT(Intr, 1),
     GPU_CHILD_PRESENT(NvDebugDump, 1),
-    GPU_CHILD_PRESENT(OBJGPUMON, 1),
     GPU_CHILD_PRESENT(OBJSWENG, 1),
     GPU_CHILD_PRESENT(OBJUVM, 1),
     GPU_CHILD_PRESENT(KernelBif, 1),

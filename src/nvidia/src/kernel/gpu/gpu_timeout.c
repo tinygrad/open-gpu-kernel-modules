@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -30,7 +30,7 @@
 
 #include "lib/base_utils.h"
 #include "gpu/gpu.h"
-#include "objtmr.h"
+#include "gpu/timer/objtmr.h"
 #include "nvrm_registry.h"
 #include "core/thread_state.h"
 #include "core/locks.h"
@@ -240,7 +240,7 @@ timeoutSet
         //
         timeoutNs += osGetTickResolution();
 
-        osGetCurrentTick(&timeInNs);
+        timeInNs = osGetCurrentTick();
 
         pTimeout->pTmrGpu = NULL;
         pTimeout->timeout = timeInNs + timeoutNs;
@@ -311,7 +311,7 @@ _checkTimeout
 
     if (pTimeout->flags & GPU_TIMEOUT_FLAGS_OSTIMER)
     {
-        osGetCurrentTick(&timeInNs);
+        timeInNs = osGetCurrentTick();
         if (timeInNs >= pTimeout->timeout)
         {
             if (!(pTimeout->flags & GPU_TIMEOUT_FLAGS_BYPASS_JOURNAL_LOG))

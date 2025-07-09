@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -92,7 +92,6 @@ diagapiControlFilter_IMPL
         switch (pRmCtrlParams->cmd)
         {
             // For Guest OS, only below RM controls are supported.
-            case NV208F_CTRL_CMD_FIFO_ENABLE_VIRTUAL_CONTEXT:
             case NV208F_CTRL_CMD_FIFO_CHECK_ENGINE_CONTEXT:
             case NV208F_CTRL_CMD_DMA_GET_VAS_BLOCK_DETAILS:
                 break;

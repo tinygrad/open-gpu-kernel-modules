@@ -33,6 +33,8 @@ extern "C" {
 struct NvKmsPerOpenDev *nvAllocPerOpenDev(struct NvKmsPerOpen *pOpen,
                                           NVDevEvoPtr pDevEvo, NvBool isPrivileged);
 
+void nvRevokeDevice(NVDevEvoPtr pDevEvo);
+
 void nvFreePerOpenDev(struct NvKmsPerOpen *pOpen,
                       struct NvKmsPerOpenDev *pOpenDev);
 

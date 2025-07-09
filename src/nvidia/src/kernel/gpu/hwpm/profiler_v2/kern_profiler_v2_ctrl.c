@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2022-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -222,11 +222,6 @@ profilerBaseCtrlCmdUnbindPmResources_IMPL
         pProfiler->pBoundPmaBuf = NULL;
     }
 
-    if (IS_VIRTUAL(pGpu))
-    {
-        return _issueRpcToHost(pGpu);
-    }
-
     return pRmApi->Control(pRmApi, hClient, hObject,
                            NVB0CC_CTRL_CMD_INTERNAL_UNBIND_PM_RESOURCES,
                            NULL, 0);
@@ -257,29 +252,54 @@ profilerBaseCtrlCmdAllocPmaStream_IMPL
     NVB0CC_CTRL_ALLOC_PMA_STREAM_PARAMS *pParams
 )
 {
-    NV_STATUS status                          = NV_OK;
     OBJGPU   *pGpu                            = GPU_RES_GET_GPU(pProfiler);
     RM_API   *pRmApi                          = GPU_GET_PHYSICAL_RMAPI(pGpu);
-    NvHandle  hClient                         = RES_GET_CLIENT_HANDLE(pProfiler);
-    NvHandle  hParent                         = RES_GET_PARENT_HANDLE(pProfiler);
+    RsClient *pClient                         = RES_GET_CLIENT(pProfiler);
     NvHandle  hObject                         = RES_GET_HANDLE(pProfiler);
-    NvBool    bMemPmaBufferRegistered         = NV_FALSE;
-    NvBool    bMemPmaBytesAvailableRegistered = NV_FALSE;
+    NvHandle  hDevice;
     NVB0CC_CTRL_INTERNAL_ALLOC_PMA_STREAM_PARAMS internalParams;
     RsResourceRef     *pMemoryRef = NULL;
+    RsResourceRef     *pDevice = NULL;
+    NvBool    bHasCountBuffer = clientGetResourceRef(pClient, pParams->hMemPmaBytesAvailable, &pMemoryRef) == NV_OK;
+    NvBool    bHasMemBuffer   = clientGetResourceRef(pClient, pParams->hMemPmaBuffer, &pMemoryRef) == NV_OK;
+    NvBool    bHasBuffers = bHasCountBuffer && bHasMemBuffer;
+
+
+    // find handle of Device
+    NV_ASSERT_OK_OR_RETURN(
+        refFindAncestorOfType(RES_GET_REF(pProfiler), classId(Device), &pDevice));
+    hDevice = pDevice->hResource;
+
+    // Allocate requisite arrays if not already done
+    if (bHasBuffers && (pProfiler->ppBytesAvailable == NULL))
+    {
+        NVB0CC_CTRL_INTERNAL_GET_MAX_PMAS_PARAMS maxPmaParams;
+        portMemSet(&maxPmaParams, 0, sizeof(NVB0CC_CTRL_INTERNAL_GET_MAX_PMAS_PARAMS));
+        NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
+            pRmApi->Control(pRmApi, pClient->hClient, hObject,
+                NVB0CC_CTRL_CMD_INTERNAL_GET_MAX_PMAS,
+                &maxPmaParams, sizeof(maxPmaParams)));
+
+        pProfiler->maxPmaChannels = maxPmaParams.maxPmaChannels;
+        pProfiler->ppBytesAvailable = (RsResourceRef**)portMemAllocNonPaged(maxPmaParams.maxPmaChannels * sizeof(RsResourceRef*));
+        NV_ASSERT_OR_RETURN(pProfiler->ppBytesAvailable !=  NULL, NV_ERR_NO_MEMORY);
+        pProfiler->ppStreamBuffers = (RsResourceRef**)portMemAllocNonPaged(maxPmaParams.maxPmaChannels * sizeof(RsResourceRef*));
+        NV_ASSERT_OR_ELSE(pProfiler->ppStreamBuffers !=  NULL, {
+            portMemFree(pProfiler->ppBytesAvailable);
+            pProfiler->ppBytesAvailable = NULL;
+            return NV_ERR_NO_MEMORY;
+        });
+    }
+
     //
     // REGISTER  MEMDESCs TO GSP
     // These are no-op with BareMetal/No GSP
     //
-    NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR,
-                        memdescRegisterToGSP(pGpu, hClient, hParent, pParams->hMemPmaBuffer),
-                        fail);
-    bMemPmaBufferRegistered = NV_TRUE;
+    NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
+                          memRegisterWithGsp(pGpu, pClient, hDevice, pParams->hMemPmaBuffer));
 
-    NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR,
-                        memdescRegisterToGSP(pGpu, hClient, hParent, pParams->hMemPmaBytesAvailable),
-                        fail);
-    bMemPmaBytesAvailableRegistered = NV_TRUE;
+    NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
+                          memRegisterWithGsp(pGpu, pClient, hDevice, pParams->hMemPmaBytesAvailable));
 
     portMemSet(&internalParams, 0, sizeof(NVB0CC_CTRL_INTERNAL_ALLOC_PMA_STREAM_PARAMS));
     internalParams.hMemPmaBuffer = pParams->hMemPmaBuffer;
@@ -292,39 +312,25 @@ profilerBaseCtrlCmdAllocPmaStream_IMPL
     internalParams.pmaBufferVA = pParams->pmaBufferVA;
     internalParams.bInputPmaChIdx = NV_FALSE;
 
-     NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR,
+    NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
         pRmApi->Control(pRmApi,
-                        hClient,
+                        pClient->hClient,
                         hObject,
                         NVB0CC_CTRL_CMD_INTERNAL_ALLOC_PMA_STREAM,
-                        &internalParams, sizeof(internalParams)), fail);
+                        &internalParams, sizeof(internalParams)));
 
     pParams->pmaChannelIdx = internalParams.pmaChannelIdx;
 
-    if (serverutilGetResourceRef(hClient, pParams->hMemPmaBytesAvailable, &pMemoryRef) == NV_OK &&
-        serverutilGetResourceRef(hClient, pParams->hMemPmaBuffer, &pMemoryRef) == NV_OK)
+    if (bHasBuffers)
     {
-        if (pProfiler->ppBytesAvailable == NULL)
-        {
-            NVB0CC_CTRL_INTERNAL_GET_MAX_PMAS_PARAMS maxPmaParams;
-            portMemSet(&maxPmaParams, 0, sizeof(NVB0CC_CTRL_INTERNAL_GET_MAX_PMAS_PARAMS));
-            NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR,
-                pRmApi->Control(pRmApi, hClient, hObject,
-                    NVB0CC_CTRL_CMD_INTERNAL_GET_MAX_PMAS,
-                    &maxPmaParams, sizeof(maxPmaParams)), fail);
 
-            pProfiler->maxPmaChannels = maxPmaParams.maxPmaChannels;
-            pProfiler->ppBytesAvailable = (RsResourceRef**)portMemAllocNonPaged(maxPmaParams.maxPmaChannels * sizeof(RsResourceRef*));
-            pProfiler->ppStreamBuffers = (RsResourceRef**)portMemAllocNonPaged(maxPmaParams.maxPmaChannels * sizeof(RsResourceRef*));
-        }
-
-        NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR,
-            serverutilGetResourceRef(hClient, pParams->hMemPmaBytesAvailable, &pMemoryRef), fail);
+        NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
+            clientGetResourceRef(pClient, pParams->hMemPmaBytesAvailable, &pMemoryRef));
         pProfiler->ppBytesAvailable[pParams->pmaChannelIdx] = pMemoryRef;
         refAddDependant(pMemoryRef, RES_GET_REF(pProfiler));
 
-        NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR,
-            serverutilGetResourceRef(hClient, pParams->hMemPmaBuffer, &pMemoryRef), fail);
+        NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
+            clientGetResourceRef(pClient, pParams->hMemPmaBuffer, &pMemoryRef));
         pProfiler->ppStreamBuffers[pParams->pmaChannelIdx] = pMemoryRef;
         refAddDependant(pMemoryRef, RES_GET_REF(pProfiler));
 
@@ -336,22 +342,7 @@ profilerBaseCtrlCmdAllocPmaStream_IMPL
     // Copy output params to external struct.
     pParams->pmaBufferVA = internalParams.pmaBufferVA;
 
-    return status;
-
-fail:
-    if (bMemPmaBufferRegistered)
-    {
-        // These are no-op with BareMetal/No GSP
-        NV_ASSERT_OK(memdescDeregisterFromGSP(pGpu, hClient, hParent, pParams->hMemPmaBuffer));
-    }
-
-    if (bMemPmaBytesAvailableRegistered)
-    {
-        // These are no-op with BareMetal/No GSP
-        NV_ASSERT_OK(memdescDeregisterFromGSP(pGpu, hClient, hParent, pParams->hMemPmaBytesAvailable));
-    }
-
-    return status;
+    return NV_OK;
 }
 
 /*
@@ -764,7 +755,7 @@ profilerBaseCtrlCmdInternalGetMaxPmas_IMPL
     NVB0CC_CTRL_INTERNAL_GET_MAX_PMAS_PARAMS *pParams
 )
 {
-    POBJGPU     pGpu        = GPU_RES_GET_GPU(pProfiler);
+    OBJGPU     *pGpu        = GPU_RES_GET_GPU(pProfiler);
     KernelHwpm *pKernelHwpm = GPU_GET_KERNEL_HWPM(pGpu);
 
     pParams->maxPmaChannels = pKernelHwpm->maxPmaChannels;

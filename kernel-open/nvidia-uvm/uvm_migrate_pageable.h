@@ -1,5 +1,5 @@
 /*******************************************************************************
-    Copyright (c) 2018 NVIDIA Corporation
+    Copyright (c) 2018-2024 NVIDIA Corporation
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"), to
@@ -41,11 +41,15 @@ typedef struct
     // dst_node_id may be clobbered by uvm_migrate_pageable().
     int                             dst_node_id;
     uvm_populate_permissions_t      populate_permissions;
-    bool                            touch : 1;
+    NvU32                           populate_flags;
     bool                            skip_mapped : 1;
     bool                            populate_on_cpu_alloc_failures : 1;
+    bool                            populate_on_migrate_vma_failures : 1;
     NvU64                           *user_space_start;
     NvU64                           *user_space_length;
+
+    uvm_processor_mask_t            *gpus_to_check_for_nvlink_errors;
+    bool                            fail_on_unresolved_sto_errors;
 } uvm_migrate_args_t;
 
 #if defined(CONFIG_MIGRATE_VMA_HELPER)
@@ -112,18 +116,21 @@ typedef struct
     uvm_tracker_t tracker;
 
     struct {
-        // Array of page IOMMU mappings created during allocate_and_copy.
-        // Required when using SYS aperture. They are freed in
-        // finalize_and_map. Also keep an array with the GPUs for which the
-        // mapping was created.
-        NvU64              addrs[UVM_MIGRATE_VMA_MAX_PAGES];
-        uvm_gpu_t    *addrs_gpus[UVM_MIGRATE_VMA_MAX_PAGES];
-
-        // Mask of pages with entries in the dma address arrays above
-        DECLARE_BITMAP(page_mask, UVM_MIGRATE_VMA_MAX_PAGES);
-
         // Number of pages for which IOMMU mapping were created
-        unsigned  long num_pages;
+        unsigned long num_pages;
+
+        // Scatter list managing the necessary copying GPU's IOMMU mappings
+        // used to populate anon pages.
+        struct sg_table sgt_anon;
+        uvm_gpu_t *sgt_anon_gpu;
+
+        // Scatter list managing the necessary copying GPU's IOMMU mappings
+        // used to copy pages from a source processor.
+        struct sg_table sgt_from[UVM_ID_MAX_PROCESSORS];
+
+        // The copying GPUs that performs the copy from the source processors
+        // for which IOMMU mappings are created.
+        uvm_gpu_t *sgt_from_gpus[UVM_ID_MAX_PROCESSORS];
     } dma;
 
     // Processors where pages are resident before calling migrate_vma
@@ -150,23 +157,6 @@ struct migrate_vma {
     unsigned long           start;
     unsigned long           end;
 };
-
-void uvm_migrate_vma_alloc_and_copy_helper(struct vm_area_struct *vma,
-                                           const unsigned long *src,
-                                           unsigned long *dst,
-                                           unsigned long start,
-                                           unsigned long end,
-                                           void *private);
-
-void uvm_migrate_vma_finalize_and_map_helper(struct vm_area_struct *vma,
-                                             const unsigned long *src,
-                                             const unsigned long *dst,
-                                             unsigned long start,
-                                             unsigned long end,
-                                             void *private);
-#else
-void uvm_migrate_vma_alloc_and_copy(struct migrate_vma *args, migrate_vma_state_t *state);
-void uvm_migrate_vma_finalize_and_map(struct migrate_vma *args, migrate_vma_state_t *state);
 #endif // CONFIG_MIGRATE_VMA_HELPER
 
 // Populates the given VA range and tries to migrate all the pages to dst_id. If
@@ -208,10 +198,6 @@ void uvm_migrate_vma_finalize_and_map(struct migrate_vma *args, migrate_vma_stat
 // userspace API callers to complete the whole migration. Kernel callers are
 // expected to handle this error according to their respective usecases.
 //
-// If touch is true, a touch will be attempted on all pages in the requested
-// range. All pages are only guaranteed to have been touched if
-// NV_WARN_NOTHING_TO_DO or NV_OK is returned.
-//
 // Locking: mmap_lock must be held in read or write mode
 NV_STATUS uvm_migrate_pageable(uvm_migrate_args_t *uvm_migrate_args);
 
@@ -233,9 +219,8 @@ static NV_STATUS uvm_migrate_pageable(uvm_migrate_args_t *uvm_migrate_args)
     status = uvm_populate_pageable(uvm_migrate_args->mm,
                                    uvm_migrate_args->start,
                                    uvm_migrate_args->length,
-                                   0,
-                                   uvm_migrate_args->touch,
-                                   uvm_migrate_args->populate_permissions);
+                                   uvm_migrate_args->populate_permissions,
+                                   uvm_migrate_args->populate_flags);
     if (status != NV_OK)
         return status;
 

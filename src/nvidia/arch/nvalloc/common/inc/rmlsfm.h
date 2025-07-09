@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2011-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2011-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -122,36 +122,40 @@
  * the same Falcon Id, the LSF_FALCON_USES_INSTANCE macro
  * need to be updated.
  */
-#define LSF_FALCON_ID_PMU              (0U)
-#define LSF_FALCON_ID_DPU              (1U)
-#define LSF_FALCON_ID_GSPLITE          LSF_FALCON_ID_DPU
-#define LSF_FALCON_ID_FECS             (2U)
-#define LSF_FALCON_ID_GPCCS            (3U)
-#define LSF_FALCON_ID_NVDEC            (4U)
-#define LSF_FALCON_ID_NVENC            (5U)
-#define LSF_FALCON_ID_NVENC0           (5U)
-#define LSF_FALCON_ID_NVENC1           (6U)
-#define LSF_FALCON_ID_SEC2             (7U)
-#define LSF_FALCON_ID_NVENC2           (8U)
-#define LSF_FALCON_ID_MINION           (9U)
-#define LSF_FALCON_ID_FBFALCON         (10U)
-#define LSF_FALCON_ID_XUSB             (11U)
-#define LSF_FALCON_ID_GSP_RISCV        (12U)
-#define LSF_FALCON_ID_PMU_RISCV        (13U)
-#define LSF_FALCON_ID_SOE              (14U)
-#define LSF_FALCON_ID_NVDEC1           (15U)
-#define LSF_FALCON_ID_OFA              (16U)
-#define LSF_FALCON_ID_SEC2_RISCV       (17U)
-#define LSF_FALCON_ID_NVDEC_RISCV      (18U)
-#define LSF_FALCON_ID_NVDEC_RISCV_EB   (19U)
-#define LSF_FALCON_ID_NVJPG            (20U)
-#define LSF_FALCON_ID_FECS_RISCV       (21U)
-#define LSF_FALCON_ID_GPCCS_RISCV      (22U)
-#define LSF_FALCON_ID_NVJPG_RISCV_EB   (23U)
-#define LSF_FALCON_ID_OFA_RISCV_EB     (24U)
-#define LSF_FALCON_ID_NVENC_RISCV_EB   (25U)
-#define LSF_FALCON_ID_PMU_RISCV_EB     (26U)
-#define LSF_FALCON_ID_END              (27U)
+#define LSF_FALCON_ID_PMU               (0U)
+#define LSF_FALCON_ID_DPU               (1U)
+#define LSF_FALCON_ID_GSPLITE           LSF_FALCON_ID_DPU
+#define LSF_FALCON_ID_FECS              (2U)
+#define LSF_FALCON_ID_GPCCS             (3U)
+#define LSF_FALCON_ID_NVDEC             (4U)
+#define LSF_FALCON_ID_NVENC             (5U)
+#define LSF_FALCON_ID_NVENC0            (5U)
+#define LSF_FALCON_ID_NVENC1            (6U)
+#define LSF_FALCON_ID_SEC2              (7U)
+#define LSF_FALCON_ID_NVENC2            (8U)
+#define LSF_FALCON_ID_MINION            (9U)
+#define LSF_FALCON_ID_FBFALCON          (10U)
+#define LSF_FALCON_ID_XUSB              (11U)
+#define LSF_FALCON_ID_GSP_RISCV         (12U)
+#define LSF_FALCON_ID_PMU_RISCV         (13U)
+#define LSF_FALCON_ID_SOE               (14U)
+#define LSF_FALCON_ID_NVDEC1            (15U)
+#define LSF_FALCON_ID_OFA               (16U)
+#define LSF_FALCON_ID_SEC2_RISCV        (17U)
+#define LSF_FALCON_ID_NVDEC_RISCV       (18U)
+#define LSF_FALCON_ID_NVDEC_RISCV_EB    (19U)
+#define LSF_FALCON_ID_NVJPG             (20U)
+#define LSF_FALCON_ID_FECS_RISCV        (21U)
+#define LSF_FALCON_ID_GPCCS_RISCV       (22U)
+#define LSF_FALCON_ID_NVJPG_RISCV_EB    (23U)
+#define LSF_FALCON_ID_OFA_RISCV_EB      (24U)
+#define LSF_FALCON_ID_NVENC_RISCV_EB    (25U)
+#define LSF_FALCON_ID_PMU_RISCV_EB      (26U)
+#define LSF_FALCON_ID_NVDEC0_RISCV_EB   (27U)
+#define LSF_FALCON_ID_GSPLITE_RISCV_EB  (28U)
+#define LSF_FALCON_ID_DISPLAY_RISCV_EB  (29U)
+#define LSF_FALCON_ID_FBFALCON_RISCV_EB (30U)
+#define LSF_FALCON_ID_END               (31U)
 
 #define LSF_FALCON_ID_INVALID   (0xFFFFFFFFU)
 
@@ -176,6 +180,7 @@
 #define LSF_FALCON_ID_END_17           (17U)
 #define LSF_FALCON_ID_END_18           (18U)
 #define LSF_FALCON_ID_END_21           (21U)
+#define LSF_FALCON_ID_END_30           (30U)
 
 #define LSF_FALCON_INSTANCE_DEFAULT_0           (0x0U)
 #define LSF_FALCON_INSTANCE_COUNT_DEFAULT_1     (0x1U)
@@ -192,11 +197,15 @@
  * to uniquely identify it.
  * @note this macro should be updated as needed whenever LSF_FALCON_ID* defines are added. See Bug: 3833461
  */
-#define LSF_FALCON_USES_INSTANCE(falconId)  ((falconId == LSF_FALCON_ID_NVDEC_RISCV_EB) ||  \
-                                             (falconId == LSF_FALCON_ID_NVJPG)          ||  \
-                                             (falconId == LSF_FALCON_ID_NVJPG_RISCV_EB) ||  \
-                                             (falconId == LSF_FALCON_ID_NVENC_RISCV_EB) ||  \
+#define LSF_FALCON_USES_INSTANCE(falconId)  ((falconId == LSF_FALCON_ID_NVDEC_RISCV_EB)   ||  \
+                                             (falconId == LSF_FALCON_ID_NVJPG)            ||  \
+                                             (falconId == LSF_FALCON_ID_NVJPG_RISCV_EB)   ||  \
+                                             (falconId == LSF_FALCON_ID_NVENC_RISCV_EB)   ||  \
+                                             (falconId == LSF_FALCON_ID_FECS_RISCV_EB)    ||  \
+                                             (falconId == LSF_FALCON_ID_GPCCS_RISCV_EB)   ||  \
+                                             (falconId == LSF_FALCON_ID_GSPLITE_RISCV_EB) ||  \
                                              (falconId == LSF_FALCON_ID_OFA_RISCV_EB))
+
 
 /*!
  * Size in entries of the ucode descriptor's dependency map.
@@ -205,7 +214,7 @@
  *
  * Increasing this number should be done with care.
  */
-#define LSF_FALCON_DEPMAP_SIZE  (11)
+#define LSF_FALCON_DEPMAP_SIZE  (11U)
 
 /*!
  * Falcon Binaries version defines

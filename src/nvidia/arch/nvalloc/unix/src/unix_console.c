@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -87,7 +87,7 @@ RmSaveDisplayState
     NV2080_CTRL_CMD_INTERNAL_DISPLAY_PRE_UNIX_CONSOLE_PARAMS  preUnixConsoleParams = {0};
     NV2080_CTRL_CMD_INTERNAL_DISPLAY_POST_UNIX_CONSOLE_PARAMS  postUnixConsoleParams = {0};
 
-    if (IS_VIRTUAL(pGpu) || pKernelDisplay == NULL)
+    if (IS_VIRTUAL(pGpu) || (pKernelDisplay == NULL) || nv->client_managed_console)
     {
         return;
     }
@@ -103,9 +103,14 @@ RmSaveDisplayState
     preUnixConsoleParams.bSave     = NV_TRUE;
     preUnixConsoleParams.bUseVbios = use_vbios;
 
-    NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR,pRmApi->Control(pRmApi, nv->rmapi.hClient, nv->rmapi.hSubDevice,
+    NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR, pRmApi->Control(pRmApi, nv->rmapi.hClient, nv->rmapi.hSubDevice,
                         NV2080_CTRL_CMD_INTERNAL_DISPLAY_PRE_UNIX_CONSOLE,
                         &preUnixConsoleParams, sizeof(preUnixConsoleParams)), done);
+
+    if (preUnixConsoleParams.bReturnEarly)
+    {
+        goto done;
+    }
 
     if (use_vbios)
     {
@@ -128,10 +133,10 @@ RmSaveDisplayState
     postUnixConsoleParams.bSave     = NV_TRUE;
     postUnixConsoleParams.bUseVbios = use_vbios;
 
-    NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR, pRmApi->Control(pRmApi, nv->rmapi.hClient,
-                        nv->rmapi.hSubDevice,
-                        NV2080_CTRL_CMD_INTERNAL_DISPLAY_POST_UNIX_CONSOLE,
-                        &postUnixConsoleParams, sizeof(postUnixConsoleParams)), done);
+    NV_CHECK_OK(status, LEVEL_ERROR,
+                pRmApi->Control(pRmApi, nv->rmapi.hClient,nv->rmapi.hSubDevice,
+                                NV2080_CTRL_CMD_INTERNAL_DISPLAY_POST_UNIX_CONSOLE,
+                                &postUnixConsoleParams, sizeof(postUnixConsoleParams)));
 
 done:
     os_enable_console_access();
@@ -152,20 +157,12 @@ static void RmRestoreDisplayState
     NV2080_CTRL_CMD_INTERNAL_DISPLAY_PRE_UNIX_CONSOLE_PARAMS  preUnixConsoleParams   = {0};
     NV2080_CTRL_CMD_INTERNAL_DISPLAY_POST_UNIX_CONSOLE_PARAMS  postUnixConsoleParams = {0};
 
-    NV_ASSERT_OR_RETURN_VOID(pKernelDisplay != NULL);
-
     //
-    // vGPU:
+    // Since vGPU does all real hardware management in the host,
+    // there is nothing to do at this point in the guest OS.
     //
-    // Since vGPU does all real hardware management in the
-    // host, there is nothing to do at this point in the
-    // guest OS (where IS_VIRTUAL(pGpu) is true).
-    //
-    if (IS_VIRTUAL(pGpu))
+    if (IS_VIRTUAL(pGpu) || (pKernelDisplay == NULL) || nv->client_managed_console)
     {
-        // we don't have VGA state that's needing to be restored.
-        NV_PRINTF(LEVEL_INFO, "skipping RestoreDisplayState on VGPU (0x%x)\n",
-                  pGpu->gpuId);
         return;
     }
 
@@ -195,6 +192,11 @@ static void RmRestoreDisplayState
                         NV2080_CTRL_CMD_INTERNAL_DISPLAY_PRE_UNIX_CONSOLE,
                         &preUnixConsoleParams, sizeof(preUnixConsoleParams)), done);
 
+    if (preUnixConsoleParams.bReturnEarly)
+    {
+        goto done;
+    }
+
     if (use_vbios)
     {
         eax = 0x4f02;
@@ -209,10 +211,10 @@ static void RmRestoreDisplayState
     postUnixConsoleParams.bSave = NV_FALSE;
     postUnixConsoleParams.bUseVbios = use_vbios;
 
-    NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR, pRmApi->Control(pRmApi, nv->rmapi.hClient,
-                        nv->rmapi.hSubDevice,
-                        NV2080_CTRL_CMD_INTERNAL_DISPLAY_POST_UNIX_CONSOLE,
-                        &postUnixConsoleParams, sizeof(postUnixConsoleParams)), done);
+    NV_CHECK_OK(status, LEVEL_ERROR,
+                pRmApi->Control(pRmApi, nv->rmapi.hClient, nv->rmapi.hSubDevice,
+                                NV2080_CTRL_CMD_INTERNAL_DISPLAY_POST_UNIX_CONSOLE,
+                                &postUnixConsoleParams, sizeof(postUnixConsoleParams)));
 
 done:
     os_enable_console_access();
@@ -360,6 +362,8 @@ NV_STATUS deviceCtrlCmdOsUnixVTGetFBInfo_IMPL
                 nv_get_screen_info(nv, &baseAddr, &width, &height, &depth,
                                    &pitch, &size);
 
+                pParams->baseAddress = baseAddr;
+                pParams->size = size;
                 pParams->width = (NvU16)width;
                 pParams->height = (NvU16)height;
                 pParams->depth = (NvU16)depth;

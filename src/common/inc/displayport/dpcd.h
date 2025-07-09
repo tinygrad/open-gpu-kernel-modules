@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -443,13 +443,17 @@ number of Downstream ports will be limited to 32.
 #define NV_DPCD_TRAINING_LANEX_SET_PREEMPHASIS_MAX_REACHED               5:5  /* RWXUF */
 #define NV_DPCD_TRAINING_LANEX_SET_PREEMPHASIS_MAX_REACHED_TRUE  (0x00000001) /* RWXUV */
 
-#define NV_DPCD_DOWNSPREAD_CTRL                                  (0x00000107) /* RWXUR */
-#define NV_DPCD_DOWNSPREAD_CTRL_SPREAD_AMP                               4:4  /* RWXUF */
-#define NV_DPCD_DOWNSPREAD_CTRL_SPREAD_AMP_NONE                  (0x00000000) /* RWXUV */
-#define NV_DPCD_DOWNSPREAD_CTRL_SPREAD_AMP_LESS_THAN_0_5         (0x00000001) /* RWXUV */
-#define NV_DPCD_DOWNSPREAD_CTRL_MSA_TIMING_PAR_IGNORED                   7:7  /* RWXUF */
-#define NV_DPCD_DOWNSPREAD_CTRL_MSA_TIMING_PAR_IGNORED_FALSE     (0x00000000) /* RWXUV */
-#define NV_DPCD_DOWNSPREAD_CTRL_MSA_TIMING_PAR_IGNORED_TRUE      (0x00000001) /* RWXUV */
+#define NV_DPCD_DOWNSPREAD_CTRL                                               (0x00000107) /* RWXUR */
+#define NV_DPCD_DOWNSPREAD_CTRL_SPREAD_AMP                                            4:4  /* RWXUF */
+#define NV_DPCD_DOWNSPREAD_CTRL_SPREAD_AMP_NONE                               (0x00000000) /* RWXUV */
+#define NV_DPCD_DOWNSPREAD_CTRL_SPREAD_AMP_LESS_THAN_0_5                      (0x00000001) /* RWXUV */
+#define NV_DPCD_DOWNSPREAD_CTRL_FIXED_VTOTAL_AS_SDP_EN_IN_PR_ACTIVE                   6:6  /* RWXUF */
+#define NV_DPCD_DOWNSPREAD_CTRL_FIXED_VTOTAL_AS_SDP_EN_IN_PR_ACTIVE_NO        (0x00000000) /* RWXUV */
+#define NV_DPCD_DOWNSPREAD_CTRL_FIXED_VTOTAL_AS_SDP_EN_IN_PR_ACTIVE_YES       (0x00000001) /* RWXUV */
+#define NV_DPCD_DOWNSPREAD_CTRL_MSA_TIMING_PAR_IGNORED                                7:7  /* RWXUF */
+#define NV_DPCD_DOWNSPREAD_CTRL_MSA_TIMING_PAR_IGNORED_FALSE                  (0x00000000) /* RWXUV */
+#define NV_DPCD_DOWNSPREAD_CTRL_MSA_TIMING_PAR_IGNORED_TRUE                   (0x00000001) /* RWXUV */
+
 
 #define NV_DPCD_MAIN_LINK_CHANNEL_CODING_SET                      (0x00000108) /* RWXUR */
 #define NV_DPCD_MAIN_LINK_CHANNEL_CODING_SET_ANSI_8B_10B                  0:0  /* RWXUF */
@@ -728,28 +732,13 @@ number of Downstream ports will be limited to 32.
 #define NV_DPCD_TEST_REQUEST_TEST_PHY_TEST_PATTERN                       3:3  /* R-XUF */
 #define NV_DPCD_TEST_REQUEST_TEST_PHY_TEST_PATTERN_NO            (0x00000000) /* R-XUV */
 #define NV_DPCD_TEST_REQUEST_TEST_PHY_TEST_PATTERN_YES           (0x00000001) /* R-XUV */
-#define NV_DPCD_TEST_REQUEST_PHY_TEST_CHANNEL_CODING                     5:4  /* R-XUF */
-#define NV_DPCD_TEST_REQUEST_PHY_TEST_CHANNEL_CODING_8B10B       (0x00000000) /* R-XUV */
-#define NV_DPCD_TEST_REQUEST_PHY_TEST_CHANNEL_CODING_128B132B    (0x00000001) /* R-XUV */
-#define NV_DPCD_TEST_REQUEST_TEST_AUDIO_PATTERN_REQ                      6:6  /* R-XUF */
-#define NV_DPCD_TEST_REQUEST_TEST_AUDIO_PATTERN_REQ_NO           (0x00000000) /* R-XUV */
-#define NV_DPCD_TEST_REQUEST_TEST_AUDIO_PATTERN_REQ_YES          (0x00000001) /* R-XUV */
-#define NV_DPCD_TEST_REQUEST_TEST_AUDIO_DISABLED_VIDEO                   7:7  /* R-XUF */
-#define NV_DPCD_TEST_REQUEST_TEST_AUDIO_DISABLED_VIDEO_NO        (0x00000000) /* R-XUV */
-#define NV_DPCD_TEST_REQUEST_TEST_AUDIO_DISABLED_VIDEO_YES       (0x00000001) /* R-XUV */
 
 #define NV_DPCD_TEST_LINK_RATE                                   (0x00000219) /* R-XUR */
 #define NV_DPCD_TEST_LINK_RATE_TYPE                                      7:0  /* R-XUF */
 #define NV_DPCD_TEST_LINK_RATE_TYPE_1_62G                        (0x00000006) /* R-XUV */
 #define NV_DPCD_TEST_LINK_RATE_TYPE_2_70G                        (0x0000000A) /* R-XUV */
 #define NV_DPCD_TEST_LINK_RATE_TYPE_5_40G                        (0x00000014) /* R-XUV */
-//
-// For PHY Test 128b/132b channel coding (PHY_TEST_CHANNEL_CODING field in
-// the TEST_REQUEST register (DPCD Address 00218h, bits 5:4) is programmed to 01b)
-//
-#define NV_DPCD_TEST_LINK_RATE_TYPE_UHBR10                       (0x00000001) /* R-XUV */
-#define NV_DPCD_TEST_LINK_RATE_TYPE_UHBR20                       (0x00000002) /* R-XUV */
-#define NV_DPCD_TEST_LINK_RATE_TYPE_UHBR135                      (0x00000004) /* R-XUV */
+#define NV_DPCD_TEST_LINK_RATE_TYPE_8_10G                        (0x0000001E) /* R-XUV */
 
 // 0021Ah - 0021Fh: RESERVED. Read all 0s
 
@@ -929,16 +918,20 @@ number of Downstream ports will be limited to 32.
 
 // 00283h - 002BFh: RESERVED. Read all 0s.
 
-#define NV_DPCD_PAYLOAD_TABLE_UPDATE_STATUS                      (0x000002C0) /* R-XUR */
-#define NV_DPCD_PAYLOAD_TABLE_UPDATE_STATUS_UPDATED                      0:0  /* R-XUF */
-#define NV_DPCD_PAYLOAD_TABLE_UPDATE_STATUS_UPDATED_NO           (0x00000000) /* R-XUV */
-#define NV_DPCD_PAYLOAD_TABLE_UPDATE_STATUS_UPDATED_YES          (0x00000001) /* R-XUV */
-#define NV_DPCD_PAYLOAD_TABLE_UPDATE_STATUS_ACT_HANDLED                  1:1  /* R-XUF */
-#define NV_DPCD_PAYLOAD_TABLE_UPDATE_STATUS_ACT_HANDLED_NO       (0x00000000) /* R-XUV */
-#define NV_DPCD_PAYLOAD_TABLE_UPDATE_STATUS_ACT_HANDLED_YES      (0x00000001) /* R-XUV */
+#define NV_DPCD_PAYLOAD_TABLE_UPDATE_STATUS                         (0x000002C0) /* R-XUR */
+#define NV_DPCD_PAYLOAD_TABLE_UPDATE_STATUS_UPDATED                         0:0  /* R-XUF */
+#define NV_DPCD_PAYLOAD_TABLE_UPDATE_STATUS_UPDATED_NO              (0x00000000) /* R-XUV */
+#define NV_DPCD_PAYLOAD_TABLE_UPDATE_STATUS_UPDATED_YES             (0x00000001) /* R-XUV */
+#define NV_DPCD_PAYLOAD_TABLE_UPDATE_STATUS_ACT_HANDLED                     1:1  /* R-XUF */
+#define NV_DPCD_PAYLOAD_TABLE_UPDATE_STATUS_ACT_HANDLED_NO          (0x00000000) /* R-XUV */
+#define NV_DPCD_PAYLOAD_TABLE_UPDATE_STATUS_ACT_HANDLED_YES         (0x00000001) /* R-XUV */
+#define NV_DPCD_PAYLOAD_TABLE_UPDATE_STATUS_VC_PAYLOAD_ID_SLOT0_5_0         7:2  /* R-XUF */
 
-#define NV_DPCD_VC_PAYLOAD_ID_SLOT(i)                        (0x000002C1+(i)) /* R--1A */
-#define NV_DPCD_VC_PAYLOAD_ID_SLOT__SIZE                                  63  /* R---S */
+#define NV_DPCD_VC_PAYLOAD_ID_SLOT1                                 (0x000002C1) /* R-XUR */
+#define NV_DPCD_VC_PAYLOAD_ID_SLOT1_VC_PAYLOAD_ID_SLOT0_6                   7:7  /* R-XUF */
+
+#define NV_DPCD_VC_PAYLOAD_ID_SLOT(i)                           (0x000002C1+(i)) /* R--1A */
+#define NV_DPCD_VC_PAYLOAD_ID_SLOT__SIZE                                     63  /* R---S */
 
 // Source Device-Specific Field, Burst write for 00300h-0030Bh
 // 6 hex digits: 0x300~0x302.
@@ -1074,6 +1067,9 @@ number of Downstream ports will be limited to 32.
 #define NV_DPCD_EDP_GENERAL_CAP2_PANEL_LUMINANCE_CONTROL_CAP                4:4  /* R-XUF */
 #define NV_DPCD_EDP_GENERAL_CAP2_PANEL_LUMINANCE_CONTROL_CAP_NO     (0x00000000) /* R-XUV */
 #define NV_DPCD_EDP_GENERAL_CAP2_PANEL_LUMINANCE_CONTROL_CAP_YES    (0x00000001) /* R-XUV */
+#define NV_DPCD_EDP_GENERAL_CAP2_VARIABLE_BKLGHT_CONTROL_CAP                5:5  /* R-XUF */
+#define NV_DPCD_EDP_GENERAL_CAP2_VARIABLE_BKLGHT_CONTROL_CAP_NO     (0x00000000) /* R-XUV */
+#define NV_DPCD_EDP_GENERAL_CAP2_VARIABLE_BKLGHT_CONTROL_CAP_YES    (0x00000001) /* R-XUV */
 #define NV_DPCD_EDP_GENERAL_CAP3                                    (0x00000704) /* R-XUV */
 #define NV_DPCD_EDP_GENERAL_CAP3_X_REGION_CAP                               3:0  /* R-XUF */
 #define NV_DPCD_EDP_GENERAL_CAP3_X_REGION_CAP_NOT_SUPPORTED         (0x00000000) /* R-XUV */
@@ -1099,6 +1095,9 @@ number of Downstream ports will be limited to 32.
 #define NV_DPCD_EDP_DISPLAY_CTL_OVERDRIVE_CTL_AUTONOMOUS_1          (0x00000001) /* RWXUV */
 #define NV_DPCD_EDP_DISPLAY_CTL_OVERDRIVE_CTL_DISABLE               (0x00000002) /* RWXUV */
 #define NV_DPCD_EDP_DISPLAY_CTL_OVERDRIVE_CTL_ENABLE                (0x00000003) /* RWXUV */
+#define NV_DPCD_EDP_DISPLAY_CTL_VARIABLE_BKLGHT_CTRL_DISABLE                6:6  /* RWXUF */
+#define NV_DPCD_EDP_DISPLAY_CTL_VARIABLE_BKLGHT_CTRL_DISABLE_YES    (0x00000001) /* RWXUV */
+#define NV_DPCD_EDP_DISPLAY_CTL_VARIABLE_BKLGHT_CTRL_DISABLE_NO     (0x00000000) /* RWXUV */
 #define NV_DPCD_EDP_DISPLAY_CTL_VBLANK_BKLGHT_UPDATE_EN                     7:7  /* RWXUF */
 #define NV_DPCD_EDP_DISPLAY_CTL_VBLANK_BKLGHT_UPDATE_EN_ENABLED     (0x00000001) /* RWXUV */
 #define NV_DPCD_EDP_DISPLAY_CTL_VBLANK_BKLGHT_UPDATE_EN_DISABLED    (0x00000000) /* RWXUV */
@@ -1151,6 +1150,9 @@ number of Downstream ports will be limited to 32.
 #define NV_DPCD_EDP_BKLGHT_CTL_STATUS_FAULT_CONDITION_INIT          (0x00000000) /* R-XUV */
 #define NV_DPCD_EDP_BKLGHT_CTL_STATUS_FAULT_CONDITION_FAULT         (0x00000001) /* R-XUV */
 #define NV_DPCD_EDP_BKLGHT_CTL_STATUS_FAULT_CONDITION_NORMAL        (0x00000000) /* R-XUV */
+#define NV_DPCD_EDP_BKLGHT_CTL_STATUS_VARIABLE_BKLGHT_STATUS                   1:1  /* R-XUF */
+#define NV_DPCD_EDP_BKLGHT_CTL_STATUS_VARIABLE_BKLGHT_STATUS_DISABLED  (0x00000000) /* R-XUV */
+#define NV_DPCD_EDP_BKLGHT_CTL_STATUS_VARIABLE_BKLGHT_STATUS_ENABLED   (0x00000001) /* R-XUV */
 #define NV_DPCD_EDP_BKLGHT_FREQ_SET                                 (0x00000728) /* RWXUR */
 #define NV_DPCD_EDP_BKLGHT_FREQ_SET_VAL                                     7:0  /* RWXUF */
 #define NV_DPCD_EDP_BKLGHT_FREQ_SET_VAL_INIT                        (0x00000000) /* RWXUV */

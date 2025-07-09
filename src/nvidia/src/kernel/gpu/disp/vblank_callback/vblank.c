@@ -25,10 +25,9 @@
 
 #include "kernel/gpu/disp/head/kernel_head.h"
 #include "kernel/gpu/disp/kern_disp.h"
+#include "kernel/gpu/timer/objtmr.h"
 #include "kernel/gpu/gpu.h"
 #include "kernel/os/os.h"
-
-#include "objtmr.h"
 
 void
 kheadAddVblankCallback_IMPL
@@ -448,6 +447,7 @@ kheadProcessVblankCallbacks_IMPL
     NvU32     state
 )
 {
+    KernelDisplay    *pKernelDisplay = GPU_GET_KERNEL_DISPLAY(pGpu);
     OBJTMR           *pTmr      = GPU_GET_TIMER(pGpu);
     VBLANKCALLBACK   *pCallback = NULL;
     VBLANKCALLBACK   *pNext     = NULL;
@@ -504,12 +504,7 @@ kheadProcessVblankCallbacks_IMPL
             {
                 pNext = pCallback->Next;
 
-                if (  (pCallback->Flags & VBLANK_CALLBACK_FLAG_LOW_LATENCY__ISR_ONLY) && !(state & VBLANK_STATE_PROCESS_CALLED_FROM_ISR)  )
-                {
-                    // someone doesn't want this low-latency callback being processed at DPC time.
-                    ppPrev = &pCallback->Next;
-                }
-                else if (pCallback->Flags & VBLANK_CALLBACK_FLAG_SPECIFIED_TIMESTAMP)
+                if (pCallback->Flags & VBLANK_CALLBACK_FLAG_SPECIFIED_TIMESTAMP)
                 {
                     //
                     // Time stamp based call backs don't have a valid vblank count
@@ -537,11 +532,18 @@ kheadProcessVblankCallbacks_IMPL
                         // We better have something to do if we are wasting time reading TS
                         NV_ASSERT(pCallback->Proc);
 
-                        pCallback->Proc(pGpu,
-                                        pCallback->pObject,
-                                        pCallback->Param1,
-                                        pCallback->Param2,
-                                        pCallback->Status);
+                        //
+                        // We need to avoid calling the _vblank_callback during Panel Replay
+                        // as it will be taken care during _RG_VBLANK interrupt handling
+                        //
+                        if (pCallback != (VBLANKCALLBACK *)pKernelDisplay->pRgVblankCb && !pKernelDisplay->bIsPanelReplayEnabled)
+                        {
+                            pCallback->Proc(pGpu,
+                                    pCallback->pObject,
+                                    pCallback->Param1,
+                                    pCallback->Param2,
+                                    pCallback->Status);
+                        }
                         bQueueDpc = NV_TRUE;
                     }
                     else

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2015-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2015-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -53,6 +53,7 @@
 #include "nv-procfs.h"
 #include "nv-kthread-q.h"
 #include "nv-time.h"
+#include "nv-timer.h"
 #include "nv-lock.h"
 #include "nv-chardev-numbers.h"
 
@@ -77,14 +78,20 @@ module_param_named(disable_hdmi_frl, disable_hdmi_frl, bool, 0400);
 static bool disable_vrr_memclk_switch = false;
 module_param_named(disable_vrr_memclk_switch, disable_vrr_memclk_switch, bool, 0400);
 
-static bool hdmi_deepcolor = false;
+static bool hdmi_deepcolor = true;
 module_param_named(hdmi_deepcolor, hdmi_deepcolor, bool, 0400);
 
-static bool vblank_sem_control = false;
+static bool vblank_sem_control = true;
 module_param_named(vblank_sem_control, vblank_sem_control, bool, 0400);
 
 static bool opportunistic_display_sync = true;
 module_param_named(opportunistic_display_sync, opportunistic_display_sync, bool, 0400);
+
+static enum NvKmsDebugForceColorSpace debug_force_color_space = NVKMS_DEBUG_FORCE_COLOR_SPACE_NONE;
+module_param_named(debug_force_color_space, debug_force_color_space, uint, 0400);
+
+static bool enable_overlay_layers = true;
+module_param_named(enable_overlay_layers, enable_overlay_layers, bool, 0400);
 
 /* These parameters are used for fault injection tests.  Normally the defaults
  * should be used. */
@@ -96,18 +103,49 @@ MODULE_PARM_DESC(malloc_verbose, "Report information about malloc calls on modul
 static bool malloc_verbose = false;
 module_param_named(malloc_verbose, malloc_verbose, bool, 0400);
 
+MODULE_PARM_DESC(conceal_vrr_caps, 
+                 "Conceal all display VRR capabilities");
+static bool conceal_vrr_caps = false;
+module_param_named(conceal_vrr_caps, conceal_vrr_caps, bool, 0400);
+
+/* Fail allocating the RM core channel for NVKMS using the i-th method (see
+ * FailAllocCoreChannelMethod). Failures not using the i-th method are ignored. */
+MODULE_PARM_DESC(fail_alloc_core_channel, "Control testing for hardware core channel allocation failure");
+static int fail_alloc_core_channel_method = -1;
+module_param_named(fail_alloc_core_channel, fail_alloc_core_channel_method, int, 0400);
+
 #if NVKMS_CONFIG_FILE_SUPPORTED
 /* This parameter is used to find the dpy override conf file */
 #define NVKMS_CONF_FILE_SPECIFIED (nvkms_conf != NULL)
 
 MODULE_PARM_DESC(config_file,
-                 "Path to the nvidia-modeset configuration file "
-                 "(default: disabled)");
+                 "Path to the nvidia-modeset configuration file (default: disabled)");
 static char *nvkms_conf = NULL;
 module_param_named(config_file, nvkms_conf, charp, 0400);
 #endif
 
 static atomic_t nvkms_alloc_called_count;
+
+NvBool nvkms_test_fail_alloc_core_channel(
+    enum FailAllocCoreChannelMethod method
+)
+{
+    if (method != fail_alloc_core_channel_method) {
+        // don't fail if it's not the currently specified method
+        return NV_FALSE;
+    } 
+
+    printk(KERN_INFO NVKMS_LOG_PREFIX 
+        "Failing core channel allocation using method %d", 
+        fail_alloc_core_channel_method);    
+
+    return NV_TRUE;
+}
+
+NvBool nvkms_conceal_vrr_caps(void)
+{
+    return conceal_vrr_caps;
+}
 
 NvBool nvkms_output_rounding_fix(void)
 {
@@ -137,6 +175,33 @@ NvBool nvkms_vblank_sem_control(void)
 NvBool nvkms_opportunistic_display_sync(void)
 {
     return opportunistic_display_sync;
+}
+
+enum NvKmsDebugForceColorSpace nvkms_debug_force_color_space(void)
+{
+    if (debug_force_color_space >= NVKMS_DEBUG_FORCE_COLOR_SPACE_MAX) {
+        return NVKMS_DEBUG_FORCE_COLOR_SPACE_NONE;
+    }
+    return debug_force_color_space;
+}
+
+NvBool nvkms_enable_overlay_layers(void)
+{
+    return enable_overlay_layers;
+}
+
+NvBool nvkms_kernel_supports_syncpts(void)
+{
+/*
+ * Note this only checks that the kernel has the prerequisite
+ * support for syncpts; callers must also check that the hardware
+ * supports syncpts.
+ */
+#if (defined(CONFIG_TEGRA_GRHOST) || defined(NV_LINUX_HOST1X_NEXT_H_PRESENT))
+    return NV_TRUE;
+#else
+    return NV_FALSE;
+#endif
 }
 
 #define NVKMS_SYNCPT_STUBS_NEEDED
@@ -684,7 +749,7 @@ static void nvkms_kthread_q_callback(void *arg)
      * pending timers and than waiting for workqueue callbacks.
      */
     if (timer->kernel_timer_created) {
-        del_timer_sync(&timer->kernel_timer);
+        nv_timer_delete_sync(&timer->kernel_timer);
     }
 
     /*
@@ -996,6 +1061,11 @@ nvkms_register_backlight(NvU32 gpu_id, NvU32 display_id, void *drv_priv,
 
 #if defined(NV_ACPI_VIDEO_BACKLIGHT_USE_NATIVE)
     if (!acpi_video_backlight_use_native()) {
+#if defined(NV_ACPI_VIDEO_REGISTER_BACKLIGHT)
+        nvkms_log(NVKMS_LOG_LEVEL_INFO, NVKMS_LOG_PREFIX,
+                  "ACPI reported no NVIDIA native backlight available; attempting to use ACPI backlight.");
+        acpi_video_register_backlight();
+#endif
         return NULL;
     }
 #endif
@@ -1070,7 +1140,7 @@ static void nvkms_kapi_event_kthread_q_callback(void *arg)
     nvKmsKapiHandleEventQueueChange(device);
 }
 
-struct nvkms_per_open *nvkms_open_common(enum NvKmsClientType type,
+static struct nvkms_per_open *nvkms_open_common(enum NvKmsClientType type,
                                          struct NvKmsKapiDevice *device,
                                          int *status)
 {
@@ -1122,7 +1192,7 @@ failed:
     return NULL;
 }
 
-void nvkms_close_pm_locked(struct nvkms_per_open *popen)
+static void nvkms_close_pm_locked(struct nvkms_per_open *popen)
 {
     /*
      * Don't use down_interruptible(): we need to free resources
@@ -1185,7 +1255,7 @@ static void nvkms_close_popen(struct nvkms_per_open *popen)
     }
 }
 
-int nvkms_ioctl_common
+static int nvkms_ioctl_common
 (
     struct nvkms_per_open *popen,
     NvU32 cmd, NvU64 address, const size_t size
@@ -1232,6 +1302,26 @@ struct nvkms_per_open* nvkms_open_from_kapi
 void nvkms_close_from_kapi(struct nvkms_per_open *popen)
 {
     nvkms_close_pm_unlocked(popen);
+}
+
+NvBool nvkms_ioctl_from_kapi_try_pmlock
+(
+    struct nvkms_per_open *popen,
+    NvU32 cmd, void *params_address, const size_t param_size
+)
+{
+    NvBool ret;
+
+    if (nvkms_read_trylock_pm_lock()) {
+        return NV_FALSE;
+    }
+
+    ret = nvkms_ioctl_common(popen,
+                             cmd,
+                             (NvU64)(NvUPtr)params_address, param_size) == 0;
+    nvkms_read_unlock_pm_lock();
+
+    return ret;
 }
 
 NvBool nvkms_ioctl_from_kapi
@@ -1418,6 +1508,8 @@ static size_t nvkms_config_file_open
     loff_t pos = 0;
 #endif
 
+    *buff = NULL;
+    
     if (!nvkms_fs_mounted()) {
         printk(KERN_ERR NVKMS_LOG_PREFIX "ERROR: Filesystems not mounted\n");
         return 0;
@@ -1438,6 +1530,11 @@ static size_t nvkms_config_file_open
     file_size = file_inode->i_size;
     if (file_size > NVKMS_READ_FILE_MAX_SIZE) {
         printk(KERN_WARNING NVKMS_LOG_PREFIX "WARNING: File exceeds maximum size\n");
+        goto done;
+    }
+
+    // Do not alloc a 0 sized buffer
+    if (file_size == 0) {
         goto done;
     }
 
@@ -1523,6 +1620,48 @@ NvBool nvKmsKapiGetFunctionsTable
     return nvKmsKapiGetFunctionsTableInternal(funcsTable);
 }
 EXPORT_SYMBOL(nvKmsKapiGetFunctionsTable);
+
+NvU32 nvKmsKapiF16ToF32(NvU16 a)
+{
+    return nvKmsKapiF16ToF32Internal(a);
+}
+EXPORT_SYMBOL(nvKmsKapiF16ToF32);
+
+NvU16 nvKmsKapiF32ToF16(NvU32 a)
+{
+    return nvKmsKapiF32ToF16Internal(a);
+}
+EXPORT_SYMBOL(nvKmsKapiF32ToF16);
+
+NvU32 nvKmsKapiF32Mul(NvU32 a, NvU32 b)
+{
+    return nvKmsKapiF32MulInternal(a, b);
+}
+EXPORT_SYMBOL(nvKmsKapiF32Mul);
+
+NvU32 nvKmsKapiF32Div(NvU32 a, NvU32 b)
+{
+    return nvKmsKapiF32DivInternal(a, b);
+}
+EXPORT_SYMBOL(nvKmsKapiF32Div);
+
+NvU32 nvKmsKapiF32Add(NvU32 a, NvU32 b)
+{
+    return nvKmsKapiF32AddInternal(a, b);
+}
+EXPORT_SYMBOL(nvKmsKapiF32Add);
+
+NvU32 nvKmsKapiF32ToUI32RMinMag(NvU32 a, NvBool exact)
+{
+    return nvKmsKapiF32ToUI32RMinMagInternal(a, exact);
+}
+EXPORT_SYMBOL(nvKmsKapiF32ToUI32RMinMag);
+
+NvU32 nvKmsKapiUI32ToF32(NvU32 a)
+{
+    return nvKmsKapiUI32ToF32Internal(a);
+}
+EXPORT_SYMBOL(nvKmsKapiUI32ToF32);
 
 /*************************************************************************
  * File operation callback functions.
@@ -1794,7 +1933,11 @@ restart:
              * completion, and we wait for queue completion with
              * nv_kthread_q_stop below.
              */
+#if !defined(NV_BSD) && NV_IS_EXPORT_SYMBOL_PRESENT_timer_delete_sync
+            if (timer_delete_sync(&timer->kernel_timer) == 1) {
+#else
             if (del_timer_sync(&timer->kernel_timer) == 1) {
+#endif
                 /*  We've deactivated timer so we need to clean after it */
                 list_del(&timer->timers_list);
 

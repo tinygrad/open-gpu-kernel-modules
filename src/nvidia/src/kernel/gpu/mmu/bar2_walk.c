@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2013-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2013-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -155,6 +155,15 @@ _bar2WalkCBFillEntries
             portMemSet(&entryValue, 0, sizeof(entryValue));
             break;
         case MMU_WALK_FILL_SPARSE:
+        {
+            // Fake sparse entry is needed for GH100 in CC mode for PDE2-PDE4. Ref: Bug 3341692
+            NvU8 *pFakeSparse = kgmmuGetFakeSparseEntry_HAL(pGpu, pKernelGmmu, pLevelFmt);
+
+            if (pFakeSparse != NULL)
+            {
+                portMemCopy(entryValue.v8, pLevelFmt->entrySize, pFakeSparse, pLevelFmt->entrySize);
+                break;
+            }
             if (pLevelFmt->numSubLevels > 0)
             {
                 // Select sparse entry template based on number of sub-levels.
@@ -173,6 +182,7 @@ _bar2WalkCBFillEntries
                 entryValue = pFam->sparsePte;
             }
             break;
+        }
         // case MMU_WALK_FILL_NV4K not supported on bar2 gmmu
         default:
             NV_ASSERT(0);
@@ -186,7 +196,7 @@ _bar2WalkCBFillEntries
             MemoryManager   *pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
             TRANSFER_SURFACE surf           = {0};
             NvU32            sizeOfEntries;
-
+            NvU32            transferFlags = TRANSFER_FLAGS_SHADOW_ALLOC;
             NV_ASSERT_OR_RETURN_VOID(pKernelBus->virtualBar2[gfid].pPageLevels == NULL);
 
             surf.pMemDesc = pMemDesc;
@@ -194,8 +204,12 @@ _bar2WalkCBFillEntries
 
             sizeOfEntries = (entryIndexHi - entryIndexLo + 1) * pLevelFmt->entrySize;
 
+            if (pKernelGmmu->bBug4686457WAR)
+            {
+                transferFlags |= TRANSFER_FLAGS_FLUSH_CPU_CACHE_WAR_BUG4686457;
+            }
             pMap = memmgrMemBeginTransfer(pMemoryManager, &surf, sizeOfEntries,
-                                          TRANSFER_FLAGS_SHADOW_ALLOC);
+                                          transferFlags);
 
             for (entryIndex = entryIndexLo; entryIndex <= entryIndexHi; entryIndex++)
             {
@@ -205,7 +219,7 @@ _bar2WalkCBFillEntries
             }
 
             memmgrMemEndTransfer(pMemoryManager, &surf, sizeOfEntries,
-                                 TRANSFER_FLAGS_SHADOW_ALLOC);
+                                 transferFlags);
         }
         else if (pKernelBus->bar2[gfid].bBootstrap)
         {
@@ -390,6 +404,7 @@ _bar2WalkCBUpdatePde
         {
             MemoryManager   *pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
             TRANSFER_SURFACE surf           = {0};
+            NvU32            transferFlags = TRANSFER_FLAGS_NONE;
 
             NV_ASSERT_OR_RETURN(pKernelBus->virtualBar2[gfid].pPageLevels == NULL,
                                 NV_FALSE);
@@ -397,9 +412,14 @@ _bar2WalkCBUpdatePde
             surf.pMemDesc = pMemDesc;
             surf.offset = entryOffset;
 
+            if (pKernelGmmu->bBug4686457WAR)
+            {
+                transferFlags |= TRANSFER_FLAGS_FLUSH_CPU_CACHE_WAR_BUG4686457;
+            }
+
             NV_ASSERT_OR_RETURN(memmgrMemWrite(pMemoryManager, &surf,
                                                entry.v8, pLevelFmt->entrySize,
-                                               TRANSFER_FLAGS_NONE) ==  NV_OK,
+                                               transferFlags) ==  NV_OK,
                                 NV_FALSE);
         }
         // If we are setting up BAR2, we need special handling.
@@ -519,7 +539,14 @@ _bar2WalkCBLevelAlloc
                                       !pMemorySystemConfig->bL2PreFill;
     NV_STATUS         status = NV_OK;
 
-    NV_ASSERT_OK_OR_RETURN(vgpuGetCallingContextGfid(pGpu, &gfid));
+    if (vgpuGetCallingContextDevice(pGpu) != NULL)
+    {
+        NV_ASSERT_OK_OR_RETURN(vgpuGetCallingContextGfid(pGpu, &gfid));
+    }
+    else
+    {
+        gfid = GPU_GFID_PF;
+    }
 
     // Abort early if level is not targeted or already allocated.
     if (!bTarget || (NULL != *ppMemDesc))
@@ -566,7 +593,7 @@ _bar2WalkCBLevelAlloc
     {
             NV_ASSERT(pKernelBus->bar2[gfid].bBootstrap || IS_GFID_VF(gfid) ||
                       KBUS_BAR0_PRAMIN_DISABLED(pGpu) ||
-                      KBUS_CPU_VISIBLE_BAR12_DISABLED(pGpu) ||
+                      kbusIsCpuVisibleBar2Disabled(pKernelBus) ||
                       kbusIsBarAccessBlocked(pKernelBus));
             pdeBase = pKernelBus->bar2[gfid].pdeBase;
             pteBase = pKernelBus->bar2[gfid].pteBase;
@@ -649,7 +676,7 @@ _bar2WalkCBLevelAlloc
             {
                 NV_ASSERT(pKernelBus->bar2[gfid].bBootstrap || IS_GFID_VF(gfid) ||
                           KBUS_BAR0_PRAMIN_DISABLED(pGpu) ||
-                          KBUS_CPU_VISIBLE_BAR12_DISABLED(pGpu) ||
+                          kbusIsCpuVisibleBar2Disabled(pKernelBus) ||
                           kbusIsBarAccessBlocked(pKernelBus));
                 pKernelBus->bar2[gfid].pdeBase = memdescGetPhysAddr(pMemDesc, AT_GPU, 0);
                 pKernelBus->bar2[gfid].pPDEMemDesc = pMemDesc;
@@ -735,7 +762,7 @@ _bar2WalkCBLevelAlloc
             {
                 NV_ASSERT(pKernelBus->bar2[gfid].bBootstrap || IS_GFID_VF(gfid) ||
                           KBUS_BAR0_PRAMIN_DISABLED(pGpu) ||
-                          KBUS_CPU_VISIBLE_BAR12_DISABLED(pGpu) ||
+                          kbusIsCpuVisibleBar2Disabled(pKernelBus) ||
                           kbusIsBarAccessBlocked(pKernelBus));
                 pKernelBus->bar2[gfid].pteBase = memdescGetPhysAddr(pMemDesc,
                                                                     AT_GPU, 0);
@@ -781,6 +808,7 @@ _bar2WalkCBWriteBuffer
 {
     OBJGPU            *pGpu               = pUserCtx->pGpu;
     KernelBus         *pKernelBus         = GPU_GET_KERNEL_BUS(pGpu);
+    KernelGmmu        *pKernelGmmu        = GPU_GET_KERNEL_GMMU(pGpu);
     NvU32              gfid;
     MEMORY_DESCRIPTOR *pStagingBufferDesc = (MEMORY_DESCRIPTOR*) pStagingBuffer;
     MEMORY_DESCRIPTOR *pOutputBufferDesc  = (MEMORY_DESCRIPTOR*) pLevelBuffer;
@@ -812,21 +840,27 @@ _bar2WalkCBWriteBuffer
     {
         MemoryManager   *pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
         TRANSFER_SURFACE surf           = {0};
+        NvU32            transferFlags = TRANSFER_FLAGS_SHADOW_ALLOC;
 
         NV_ASSERT_OR_RETURN_VOID(pKernelBus->virtualBar2[gfid].pPageLevels == NULL);
 
         surf.pMemDesc = pOutputBufferDesc;
         surf.offset = firstEntryOffset;
 
+        if (pKernelGmmu->bBug4686457WAR)
+        {
+            transferFlags |= TRANSFER_FLAGS_FLUSH_CPU_CACHE_WAR_BUG4686457;
+        }
+
         pOutputBufferMapping = memmgrMemBeginTransfer(pMemoryManager, &surf,
                                                       entryRangeSize,
-                                                      TRANSFER_FLAGS_SHADOW_ALLOC);
+                                                      transferFlags);
 
         portMemCopy(pOutputBufferMapping, entryRangeSize,
                     pStagingBufferMapping, entryRangeSize);
 
         memmgrMemEndTransfer(pMemoryManager, &surf, entryRangeSize,
-                             TRANSFER_FLAGS_SHADOW_ALLOC);
+                             transferFlags);
 
         goto unmap_and_exit;
     }

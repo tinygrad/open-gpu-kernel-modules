@@ -109,6 +109,7 @@
 #include <class/cla0b5.h>
 #include <class/clb0b5sw.h>
 #include <class/clc7b5.h>
+#include "class/clcab5.h" // BLACKWELL_DMA_COPY_B
 #include <ctrl/ctrl2080/ctrl2080ce.h>
 #include <ctrl/ctrl2080/ctrl2080lpwr.h>
 
@@ -125,6 +126,7 @@
  */
 typedef struct _NVDIFRStateEvoRec {
     NVDevEvoPtr pDevEvo;
+    NvU32 copyEngineClass;
     NvU32 copyEngineType;
 
     /*
@@ -168,10 +170,6 @@ static NvBool PrefetchHelperSurfaceEvo(NVDIFRStateEvoPtr pDifr,
                                        size_t *cacheRemaining,
                                        NVSurfaceEvoPtr pSurfaceEvo,
                                        NvU32 *status);
-static NvBool PrefetchHelperLutSurface(NVDIFRStateEvoPtr pDifr,
-                                       size_t *cacheRemaining,
-                                       NVLutSurfaceEvoPtr pLutSurface,
-                                       NvU32 *status);
 
 static NvBool SetDisabledState(NVDIFRStateEvoPtr pDifr,
                                NvBool shouldDisable);
@@ -201,6 +199,10 @@ NVDIFRStateEvoPtr nvDIFRAllocate(NVDevEvoPtr pDevEvo)
                          NV2080_CTRL_CMD_LPWR_DIFR_CTRL,
                          &params,
                          sizeof(params));
+
+    if (ret == NV_ERR_NOT_SUPPORTED) {
+        return NULL;
+    }
 
     if (ret != NV_OK) {
         nvEvoLogDev(pDevEvo,
@@ -332,14 +334,14 @@ NvU32 nvDIFRPrefetchSurfaces(NVDIFRStateEvoPtr pDifr, size_t l2CacheSize)
              * Prefetch per-layer LUTs, if any, but skip null LUTs and
              * duplicates already prefetched.
              */
-            if (!PrefetchHelperLutSurface(pDifr,
+            if (!PrefetchHelperSurfaceEvo(pDifr,
                                           &cacheRemaining,
                                           pHeadState->layer[layer].inputLut.pLutSurfaceEvo,
                                           &status)) {
                 goto out;
             }
 
-            if (!PrefetchHelperLutSurface(pDifr,
+            if (!PrefetchHelperSurfaceEvo(pDifr,
                                           &cacheRemaining,
                                           pHeadState->layer[layer].tmoLut.pLutSurfaceEvo,
                                           &status)) {
@@ -351,7 +353,7 @@ NvU32 nvDIFRPrefetchSurfaces(NVDIFRStateEvoPtr pDifr, size_t l2CacheSize)
     /*
      * Finally prefetch the known main LUTs.
      */
-    if (!PrefetchHelperLutSurface(pDifr,
+    if (!PrefetchHelperSurfaceEvo(pDifr,
                                   &cacheRemaining,
                                   pDevEvo->lut.defaultLut,
                                   &status)) {
@@ -360,7 +362,7 @@ NvU32 nvDIFRPrefetchSurfaces(NVDIFRStateEvoPtr pDifr, size_t l2CacheSize)
 
     for (apiHead = 0; apiHead < pDevEvo->numApiHeads; apiHead++) {
         for (i = 0; i < ARRAY_LEN(pDevEvo->lut.apiHead[apiHead].LUT); i++) {
-            if (!PrefetchHelperLutSurface(pDifr,
+            if (!PrefetchHelperSurfaceEvo(pDifr,
                                           &cacheRemaining,
                                           pDevEvo->lut.apiHead[apiHead].LUT[i],
                                           &status)) {
@@ -454,12 +456,25 @@ static NvBool AllocDIFRCopyEngine(NVDIFRStateEvoPtr pDifr)
     NVB0B5_ALLOCATION_PARAMETERS allocParams = { 0 };
     NVDevEvoPtr pDevEvo = pDifr->pDevEvo;
     NvU32 ret;
+    NvU32 ceClass = 0, i;
 
-    /*
-     * We will only be called if NV2080_CTRL_CMD_LPWR_DIFR_CTRL says DIFR is
-     * supported in which case we assume the chip supports this CE class.
-     */
-    nvAssert(nvRmEvoClassListCheck(pDevEvo, AMPERE_DMA_COPY_B));
+    static const NvU32 ceClasses[] = {
+        BLACKWELL_DMA_COPY_B,
+        AMPERE_DMA_COPY_B,
+    };
+
+    for (i = 0; i < ARRAY_LEN(ceClasses); i++) {
+        if (nvRmEvoClassListCheck(pDevEvo, ceClasses[i])) {
+            ceClass = ceClasses[i];
+            break;
+        }
+    }
+
+    if (ceClass == 0) {
+        nvEvoLogDevDebug(pDevEvo, EVO_LOG_ERROR,
+                         "Failed to find a supported DIFR CE class.");
+        return NV_FALSE;
+    }
 
     pDifr->prefetchEngine = nvGenerateUnixRmHandle(&pDevEvo->handleAllocator);
     if (pDifr->prefetchEngine == 0) {
@@ -472,11 +487,17 @@ static NvBool AllocDIFRCopyEngine(NVDIFRStateEvoPtr pDifr)
     ret = nvRmApiAlloc(nvEvoGlobal.clientHandle,
                        pDifr->prefetchPushChannel.channelHandle[0],
                        pDifr->prefetchEngine,
-                       AMPERE_DMA_COPY_B,
+                       ceClass,
                        &allocParams);
     if (ret != NVOS_STATUS_SUCCESS) {
+        nvFreeUnixRmHandle(&pDifr->pDevEvo->handleAllocator,
+                           pDifr->prefetchEngine);
+        pDifr->prefetchEngine = 0;
         return NV_FALSE;
     }
+
+    // For Ampere vs Blackwell+ differentiation later
+    pDifr->copyEngineClass = ceClass;
 
     return NV_TRUE;
 }
@@ -491,6 +512,7 @@ static void FreeDIFRCopyEngine(NVDIFRStateEvoPtr pDifr)
 
     nvFreeUnixRmHandle(&pDifr->pDevEvo->handleAllocator,
                        pDifr->prefetchEngine);
+    pDifr->prefetchEngine = 0;
 }
 
 static NvU32 PrefetchSingleSurface(NVDIFRStateEvoPtr pDifr,
@@ -504,6 +526,7 @@ static NvU32 PrefetchSingleSurface(NVDIFRStateEvoPtr pDifr,
     const NvKmsSurfaceMemoryFormatInfo *finfo =
         nvKmsGetSurfaceMemoryFormatInfo(pParams->surfFormat);
     NvU32 componentSizes;
+    NvU32 dataTransferType;
     NvU32 line_length_in;
     NvU32 line_count;
     NvU64 starttime;
@@ -607,10 +630,21 @@ static NvU32 PrefetchSingleSurface(NVDIFRStateEvoPtr pDifr,
     nvPushSetMethodData(p, line_count);
     nvAssert(pParams->surfPitchBytes * line_count == pParams->surfSizeBytes);
 
+    if (pDifr->copyEngineClass != AMPERE_DMA_COPY_B) {
+        nvPushMethod(p, NVA06F_SUBCHANNEL_COPY_ENGINE, NVCAB5_REQ_ATTR, 1);
+        nvPushSetMethodData
+            (p, DRF_DEF(CAB5, _REQ_ATTR,   _PREFETCH_L2_CLASS, _EVICT_LAST));
+
+        dataTransferType = DRF_DEF(CAB5, _LAUNCH_DMA, _DATA_TRANSFER_TYPE, _PREFETCH);
+    } else
+    {
+        dataTransferType = DRF_DEF(A0B5, _LAUNCH_DMA, _DATA_TRANSFER_TYPE, _PIPELINED);
+    }
+
     nvPushMethod(p, NVA06F_SUBCHANNEL_COPY_ENGINE, NVA0B5_LAUNCH_DMA, 1);
     nvPushSetMethodData
         (p,
-         DRF_DEF(A0B5, _LAUNCH_DMA, _DATA_TRANSFER_TYPE, _PIPELINED) |
+         dataTransferType                                            |
          DRF_DEF(A0B5, _LAUNCH_DMA, _FLUSH_ENABLE,       _TRUE)      |
          DRF_DEF(A0B5, _LAUNCH_DMA, _SEMAPHORE_TYPE,     _NONE)      |
          DRF_DEF(A0B5, _LAUNCH_DMA, _INTERRUPT_TYPE,     _NONE)      |
@@ -707,40 +741,6 @@ static NvBool PrefetchHelperSurfaceEvo(NVDIFRStateEvoPtr pDifr,
     if (pSurfaceEvo->layout == NvKmsSurfaceMemoryLayoutBlockLinear) {
         params.surfPitchBytes *= NVKMS_BLOCK_LINEAR_GOB_WIDTH;
     }
-
-    *status = PrefetchSingleSurface(pDifr, &params, cacheRemaining);
-
-    return *status == NV2080_CTRL_LPWR_DIFR_PREFETCH_SUCCESS;
-}
-
-static NvBool PrefetchHelperLutSurface(NVDIFRStateEvoPtr pDifr,
-                                       size_t *cacheRemaining,
-                                       NVLutSurfaceEvoPtr pLutSurface,
-                                       NvU32 *status)
-{
-    NVDIFRPrefetchParams params;
-
-    nvAssert(*status == NV2080_CTRL_LPWR_DIFR_PREFETCH_SUCCESS);
-
-    if (!pLutSurface) {
-        return TRUE;
-    }
-
-    /*
-     * LUTs are often shared so we only want to prefetch (or consider) each
-     * LUT at most once during the prefetch process.
-     */
-    if (pLutSurface->difrLastPrefetchPass == pDifr->prefetchPass) {
-        return TRUE;
-    }
-
-    pLutSurface->difrLastPrefetchPass = pDifr->prefetchPass;
-
-    /* Collect copy parameters and do the prefetch. */
-    params.surfGpuAddress = (NvUPtr)pLutSurface->gpuAddress;
-    params.surfSizeBytes = pLutSurface->size;
-    params.surfPitchBytes = pLutSurface->size;
-    params.surfFormat = NvKmsSurfaceMemoryFormatI8;
 
     *status = PrefetchSingleSurface(pDifr, &params, cacheRemaining);
 

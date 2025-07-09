@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2019-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2019-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -31,7 +31,6 @@
 #include "ctrl/ctrl2080/ctrl2080fb.h"
 #include "ctrl/ctrl2080/ctrl2080gpu.h" // NV2080_CTRL_CMD_GPU_GET_INFO
 #include "ctrl/ctrl2080/ctrl2080perf.h" // NV2080_CTRL_CMD_PERF_*
-#include "ctrl/ctrl0080/ctrl0080perf.h" // NV0080_CTRL_CMD_PERF_GET_CAPS
 #include "ctrl/ctrl0080/ctrl0080bsp.h" // NV0080_CTRL_CMD_BSP_GET_CAPS
 #include "ctrl/ctrl0080/ctrl0080msenc.h" // NV0080_CTRL_CMD_MSENC_GET_CAPS
 #include "ctrl/ctrl0073/ctrl0073dp.h" // NV0073_CTRL_CMD_DP_SET_MSA_PROPERTIES
@@ -73,28 +72,27 @@ typedef struct
 {
     NvU32                       cmd;      // NVXXXX_CTRL_CMD_* value
     RmDeprecatedControlHandler  func;     // pointer to handler
-    NvBool                      bSkipVGPU;// Do not apply to vGPU - GSP-TODO for better solution.
 } RmDeprecatedControlEntry;
 
 
 static const RmDeprecatedControlEntry rmDeprecatedControlTable[] =
 {
-    { NV0000_CTRL_CMD_SYSTEM_GET_BUILD_VERSION,     V2_CONVERTER(_NV0000_CTRL_CMD_SYSTEM_GET_BUILD_VERSION),     NV_FALSE},
-    { NV2080_CTRL_CMD_BIOS_GET_INFO,                V2_CONVERTER(_NV2080_CTRL_CMD_BIOS_GET_INFO),                NV_FALSE},
-    { NV2080_CTRL_CMD_BUS_GET_INFO,                 V2_CONVERTER(_NV2080_CTRL_CMD_BUS_GET_INFO),                 NV_FALSE},
-    { NV0080_CTRL_CMD_BSP_GET_CAPS,                 V2_CONVERTER(_NV0080_CTRL_CMD_BSP_GET_CAPS),                 NV_FALSE},
-    { NV2080_CTRL_CMD_GPU_GET_INFO,                 V2_CONVERTER(_NV2080_CTRL_CMD_GPU_GET_INFO),                 NV_FALSE},
-    { NV0073_CTRL_CMD_DP_SET_MSA_PROPERTIES,        V2_CONVERTER(_NV0073_CTRL_CMD_DP_SET_MSA_PROPERTIES),        NV_FALSE},
-    { NV0080_CTRL_CMD_MSENC_GET_CAPS,               V2_CONVERTER(_NV0080_CTRL_CMD_MSENC_GET_CAPS),                 NV_FALSE},
-    { NV2080_CTRL_CMD_FB_GET_INFO,                  V2_CONVERTER(_NV2080_CTRL_CMD_FB_GET_INFO),                 NV_FALSE},
-    { 0, NULL, NV_FALSE }
+    { NV0000_CTRL_CMD_SYSTEM_GET_BUILD_VERSION,             V2_CONVERTER(_NV0000_CTRL_CMD_SYSTEM_GET_BUILD_VERSION)             },
+    { NV2080_CTRL_CMD_BIOS_GET_INFO,                        V2_CONVERTER(_NV2080_CTRL_CMD_BIOS_GET_INFO)                        },
+    { NV2080_CTRL_CMD_BUS_GET_INFO,                         V2_CONVERTER(_NV2080_CTRL_CMD_BUS_GET_INFO)                         },
+    { NV0080_CTRL_CMD_BSP_GET_CAPS,                         V2_CONVERTER(_NV0080_CTRL_CMD_BSP_GET_CAPS)                         },
+    { NV2080_CTRL_CMD_GPU_GET_INFO,                         V2_CONVERTER(_NV2080_CTRL_CMD_GPU_GET_INFO)                         },
+    { NV0073_CTRL_CMD_DP_SET_MSA_PROPERTIES,                V2_CONVERTER(_NV0073_CTRL_CMD_DP_SET_MSA_PROPERTIES)                },
+    { NV0080_CTRL_CMD_MSENC_GET_CAPS,                       V2_CONVERTER(_NV0080_CTRL_CMD_MSENC_GET_CAPS)                       },
+    { NV2080_CTRL_CMD_FB_GET_INFO,                          V2_CONVERTER(_NV2080_CTRL_CMD_FB_GET_INFO)                          },
+    { 0, NULL }
 };
 
 /*!
  * Check whether the cmd is part of the GSS legacy
  * commands.
  */
-static NvBool IsGssLegacyCall(NvU32 cmd)
+NvBool IsGssLegacyCall(NvU32 cmd)
 {
     return !!(cmd & RM_GSS_LEGACY_MASK);
 }
@@ -104,7 +102,7 @@ RmDeprecatedControlHandler RmDeprecatedGetControlHandler(NVOS54_PARAMETERS *pArg
     NvU32     i;
     NV_STATUS nvStatus;
     RsClient *pClient     = NULL;
-    POBJGPU   pGpu        = NULL;
+    OBJGPU   *pGpu        = NULL;
     NvBool gssLegacyVgpuCall = NV_FALSE;
 
     NV_CHECK_OK_OR_ELSE(nvStatus,
@@ -124,16 +122,6 @@ RmDeprecatedControlHandler RmDeprecatedGetControlHandler(NVOS54_PARAMETERS *pArg
 
             NV_ASSERT_OR_ELSE_STR(pArgs->flags == 0, "IRQL and BYPASS_LOCK control calls currently unsupported for deprecated control calls",
                                   return NULL);
-
-            //
-            // Do not deprecate for vGPU
-            // GSP-TODO: short-term only; we need to find a better way than this exclusion or
-            // updating the ugly file  resman/kernel/inc/vgpu/rm_plugin_shared_code.h
-            //
-            if (pGpu && IS_VIRTUAL(pGpu) && rmDeprecatedControlTable[i].bSkipVGPU)
-            {
-                return NULL;
-            }
 
             return rmDeprecatedControlHandler;
         }
@@ -787,7 +775,7 @@ static NV_STATUS V2_CONVERTER(_NV0080_CTRL_CMD_MSENC_GET_CAPS)
                      {
                         if (pParams->capsTblSize != NV0080_CTRL_MSENC_CAPS_TBL_SIZE)
                         {
-                            NV_PRINTF(LEVEL_ERROR, "pParams capsTblSize %d invalid\n",
+                            NV_PRINTF(LEVEL_NOTICE, "pParams capsTblSize %d invalid\n",
                                        pParams->capsTblSize);
                             portMemFree(pParams2);
                             ctrlparamRelease(pSecInfo, &token, pArgs);

@@ -85,8 +85,15 @@
     DRM_DEBUG_DRIVER("[GPU ID 0x%08x] " __fmt,     \
                      __dev->gpu_info.gpu_id, ##__VA_ARGS__)
 
+enum nv_drm_input_color_space {
+    NV_DRM_INPUT_COLOR_SPACE_NONE,
+    NV_DRM_INPUT_COLOR_SPACE_SCRGB_LINEAR,
+    NV_DRM_INPUT_COLOR_SPACE_BT2100_PQ
+};
+
 struct nv_drm_device {
     nv_gpu_info_t gpu_info;
+    MIGDeviceId gpu_mig_device;
 
     struct drm_device *dev;
 
@@ -147,28 +154,58 @@ struct nv_drm_device {
     NvBool hasVideoMemory;
 
     NvBool supportsSyncpts;
+    NvBool requiresVrrSemaphores;
     NvBool subOwnershipGranted;
     NvBool hasFramebufferConsole;
 
-    /**
-     * @drmMasterChangedSinceLastAtomicCommit:
-     *
-     * This flag is set in nv_drm_master_set and reset after a completed atomic
-     * commit. It is used to restore or recommit state that is lost by the
-     * NvKms modeset owner change, such as the CRTC color management
-     * properties.
-     */
-    NvBool drmMasterChangedSinceLastAtomicCommit;
-
     struct drm_property *nv_out_fence_property;
     struct drm_property *nv_input_colorspace_property;
+
+    struct {
+        NvU32 count;
+        NvU32 next_index;
+    } display_semaphores;
 
 #if defined(NV_DRM_HAS_HDR_OUTPUT_METADATA)
     struct drm_property *nv_hdr_output_metadata_property;
 #endif
 
+    struct drm_property *nv_plane_lms_ctm_property;
+    struct drm_property *nv_plane_lms_to_itp_ctm_property;
+    struct drm_property *nv_plane_itp_to_lms_ctm_property;
+    struct drm_property *nv_plane_blend_ctm_property;
+
+    struct drm_property *nv_plane_degamma_tf_property;
+    struct drm_property *nv_plane_degamma_lut_property;
+    struct drm_property *nv_plane_degamma_lut_size_property;
+    struct drm_property *nv_plane_degamma_multiplier_property;
+
+    struct drm_property *nv_plane_tmo_lut_property;
+    struct drm_property *nv_plane_tmo_lut_size_property;
+
+    struct drm_property *nv_crtc_regamma_tf_property;
+    struct drm_property *nv_crtc_regamma_lut_property;
+    struct drm_property *nv_crtc_regamma_lut_size_property;
+    struct drm_property *nv_crtc_regamma_divisor_property;
+
     struct nv_drm_device *next;
+
+    NvU64 vtFbBaseAddress;
+    NvU64 vtFbSize;
 };
+
+static inline NvU32 nv_drm_next_display_semaphore(
+    struct nv_drm_device *nv_dev)
+{
+    NvU32 current_index = nv_dev->display_semaphores.next_index++;
+
+    if (nv_dev->display_semaphores.next_index >=
+        nv_dev->display_semaphores.count) {
+        nv_dev->display_semaphores.next_index = 0;
+    }
+
+    return current_index;
+}
 
 static inline struct nv_drm_device *to_nv_device(
     struct drm_device *dev)

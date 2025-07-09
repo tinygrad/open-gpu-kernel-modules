@@ -36,27 +36,27 @@ nvGetAllowedDpyVrrType(const NVDpyEvoRec *pDpyEvo,
                        enum NvKmsStereoMode stereoMode,
                        const NvBool allowGsync,
                        const enum NvKmsAllowAdaptiveSync allowAdaptiveSync);
-void nvAdjustHwModeTimingsForVrrEvo(NVHwModeTimingsEvoPtr pTimings,
-                                    const enum NvKmsDpyVRRType vrrType,
-                                    const NvU32 edidTimeoutMicroseconds,
-                                    const NvU32 vrrOverrideMinRefreshRate,
-                                    const NvBool needsSwFramePacing);
-NvU16 nvPrepareNextVrrNotifier(NVEvoChannelPtr pChannel, NvU32 sd, NvU32 head);
-void nvTrackAndDelayFlipForVrrSwFramePacing(NVDispEvoPtr pDispEvo,
-    const struct NvKmsVrrFramePacingInfo *pVrrFramePacingInfo,
-    NVFlipChannelEvoHwState *pFlip);
+void nvAdjustHwModeTimingsForVrrEvo(
+    const NVDpyEvoRec *pDpyEvo,
+    const enum NvKmsDpyVRRType vrrType,
+    const NvU32 vrrOverrideMinRefreshRate,
+    NVHwModeTimingsEvoPtr pTimings);
 
 void nvAllocVrrEvo(NVDevEvoPtr pDevEvo);
 void nvFreeVrrEvo(NVDevEvoPtr pDevEvo);
 void nvDisableVrr(NVDevEvoPtr pDevEvo);
 void nvEnableVrr(NVDevEvoPtr pDevEvo);
-void nvCancelVrrFrameReleaseTimers(NVDevEvoPtr pDevEvo);
-void nvSetVrrActive(NVDevEvoPtr pDevEvo, NvBool active);
+void nvCancelVrrFrameReleaseTimers(NVDevEvoPtr pDevEvo,
+                                   const NvU32 applyAllowVrrApiHeadMasks[NVKMS_MAX_SUBDEVICES]);
+void nvSetVrrActive(NVDevEvoPtr pDevEvo, 
+                    const NvU32 applyAllowVrrApiHeadMasks[NVKMS_MAX_SUBDEVICES], 
+                    const NvU32 vrrActiveApiHeadMasks[NVKMS_MAX_SUBDEVICES]);
 void nvApplyVrrBaseFlipOverrides(const NVDispEvoRec *pDispEvo, NvU32 head,
                                  const NVFlipChannelEvoHwState *pOld,
                                  NVFlipChannelEvoHwState *pNew);
 enum NvKmsVrrFlipType nvGetActiveVrrType(const NVDevEvoRec *pDevEvo);
-NvS32 nvIncVrrSemaphoreIndex(NVDevEvoPtr pDevEvo);
+NvS32 nvIncVrrSemaphoreIndex(NVDevEvoPtr pDevEvo,
+                             const NvU32 applyAllowVrrApiHeadMasks[NVKMS_MAX_SUBDEVICES]);
 void nvTriggerVrrUnstallMoveCursor(NVDispEvoPtr pDispEvo);
 void nvTriggerVrrUnstallSetCursorImage(NVDispEvoPtr pDispEvo,
                                        NvBool elvReleased);
@@ -70,6 +70,8 @@ void nvGetDpyMinRefreshRateValidValues(
 NvBool nvDispSupportsVrr(const NVDispEvoRec *pDispEvo);
 
 NvBool nvExportVrrSemaphoreSurface(const NVDevEvoRec *pDevEvo, int fd);
+
+void nvVrrSignalSemaphore(NVDevEvoPtr pDevEvo, NvS32 vrrSemaphoreIndex);
 
 #ifdef __cplusplus
 };

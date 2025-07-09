@@ -159,6 +159,10 @@ kgraphicsAllocGrGlobalCtxBuffers_GM200
         ppMemDesc = &pCtxBuffers->memDesc[GR_GLOBALCTX_BUFFER_BUNDLE_CB];
         bPhysicallyContiguous = pCtxAttr[GR_GLOBALCTX_BUFFER_BUNDLE_CB].pAllocList == ADDRLIST_FBMEM_ONLY;
 
+        if (pMemoryManager->bug64kPage5123775War) {
+            circularBufferSize = RM_ALIGN_UP(circularBufferSize, 0x10000);
+        }
+
         NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
             memdescCreate(ppMemDesc, pGpu,
                           circularBufferSize,
@@ -254,6 +258,8 @@ kgraphicsAllocGrGlobalCtxBuffers_GM200
                                   ADDR_UNKNOWN,
                                   pCtxAttr[GR_GLOBALCTX_BUFFER_PRIV_ACCESS_MAP].cpuAttr,
                                   flags));
+                if (kgraphicsIsOverrideContextBuffersToGpuCached(pGpu, pKernelGraphics))
+                    memdescSetGpuCacheAttrib(*ppMemDesc, NV_MEMORY_CACHED);
 
                 if ((flags & MEMDESC_FLAGS_OWNED_BY_CTX_BUF_POOL) != 0)
                 {
@@ -285,6 +291,9 @@ kgraphicsAllocGrGlobalCtxBuffers_GM200
                                   ADDR_UNKNOWN,
                                   pCtxAttr[GR_GLOBALCTX_BUFFER_UNRESTRICTED_PRIV_ACCESS_MAP].cpuAttr,
                                   flags));
+
+                if (kgraphicsIsOverrideContextBuffersToGpuCached(pGpu, pKernelGraphics))
+                    memdescSetGpuCacheAttrib(*ppMemDesc, NV_MEMORY_CACHED);
 
                 if ((flags & MEMDESC_FLAGS_OWNED_BY_CTX_BUF_POOL) != 0)
                 {

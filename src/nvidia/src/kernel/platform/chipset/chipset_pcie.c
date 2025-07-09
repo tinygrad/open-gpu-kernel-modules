@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2000-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2000-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -29,7 +29,7 @@
 *                                                                           *
 ****************************************************************************/
 
-#include "nvRmReg.h"
+#include "nvrm_registry.h"
 #include "core/core.h"
 #include "os/os.h"
 #include "platform/platform.h"
@@ -38,7 +38,7 @@
 #include "nvpcie.h"
 #include "gpu_mgr/gpu_mgr.h"
 #include "gpu/gpu.h"
-#include "objtmr.h"
+#include "gpu/timer/objtmr.h"
 #include "gpu/bif/kernel_bif.h"
 #include "gpu/gsp/gsp_static_config.h"
 #include "virtualization/hypervisor/hypervisor.h"
@@ -47,6 +47,7 @@
 #include "core/thread_state.h"
 #include "Nvcm.h"
 #include "nvdevid.h"
+#include "nvmisc.h"
 
 #include "published/maxwell/gm107/dev_nv_xve.h" // NV_XVE_VCCAP_CTRL0*
 #include "published/pcie_switch/pcie_switch_ref.h"
@@ -248,18 +249,19 @@ objClBuildPcieAtomicsAllowList(OBJGPU *pGpu, OBJCL *pCl)
 NV_STATUS
 objClInitPcieChipset(OBJGPU *pGpu, OBJCL *pCl)
 {
-    OBJSYS   *pSys = SYS_GET_INSTANCE();
-    OBJOS    *pOS  = SYS_GET_OS(pSys);
-    OBJPFM   *pPfm = SYS_GET_PFM(pSys);
-    NvU32     i;
-    NvU32     domain;
-    NvU16     chipsetInfoIndex;
-    NvU32     devCap2;
-    NvU32     devCtrl2;
-    NvBool    rootPortLtrSupported;
-    NvBool    tempLtrSupported;
-    NvBool    needsNosnoopWAR = NV_FALSE;
-    NV_STATUS status;
+    OBJSYS    *pSys       = SYS_GET_INSTANCE();
+    OBJOS     *pOS        = SYS_GET_OS(pSys);
+    OBJPFM    *pPfm       = SYS_GET_PFM(pSys);
+    KernelBif *pKernelBif = GPU_GET_KERNEL_BIF(pGpu);
+    NvU32      i;
+    NvU32      domain;
+    NvU16      chipsetInfoIndex;
+    NvU32      devCap2;
+    NvU32      devCtrl2;
+    NvBool     rootPortLtrSupported;
+    NvBool     tempLtrSupported;
+    NvBool     needsNosnoopWAR = NV_FALSE;
+    NV_STATUS  status;
 
     if (pGpu != NULL)
     {
@@ -344,8 +346,9 @@ objClInitPcieChipset(OBJGPU *pGpu, OBJCL *pCl)
         // Skip reading MCFG table for old SLI chipsets.
         //
 
-        if (!(pCl->getProperty(pCl, PDB_PROP_CL_PCIE_CONFIG_ACCESSIBLE) &&
-             (pCl->getProperty(pCl, PDB_PROP_CL_PCIE_CONFIG_SKIP_MCFG_READ))))
+        if (!(pCl->getProperty(pCl, PDB_PROP_CL_PCIE_CONFIG_ACCESSIBLE)       &&
+             (pCl->getProperty(pCl, PDB_PROP_CL_PCIE_CONFIG_SKIP_MCFG_READ))) &&
+             !(IS_SIM_MODS(GPU_GET_OS(pGpu))))
         {
             if (clStorePcieConfigSpaceBaseFromMcfg(pCl) == NV_OK)
             {
@@ -513,6 +516,9 @@ objClInitPcieChipset(OBJGPU *pGpu, OBJCL *pCl)
             NV_PRINTF(LEVEL_INFO, "LTR capability not supported.\n");
         }
     }
+
+    // Cache L1SS enablement info from chipset side
+    kbifCacheChipsetL1SubstatesEnable(pGpu, pKernelBif);
 
     return NV_OK;
 }
@@ -871,7 +877,7 @@ gpuDevIdIsMultiGpuBoard
     NvU32 i, j;
     NvBool bFound = NV_FALSE, bInvalidSubIds = NV_FALSE;
 
-    for (i = 0; i < sizeof(multiGpuBoards) / sizeof(NV_MULTI_GPU_BOARD_CONFIGS);
+    for (i = 0; i < NV_ARRAY_ELEMENTS(multiGpuBoards);
          i++)
     {
         bInvalidSubIds = NV_FALSE;
@@ -977,6 +983,11 @@ clUpdatePcieConfig_IMPL(OBJGPU *pGpu, OBJCL *pCl)
     // discovery to build the allow list for enabling PCIe atomics feature.
     //
     kbifProbePcieReqAtomicCaps_HAL(pGpu, pKernelBif);
+    //
+    // Read device atomic completer capabilities early so they can be
+    // passed to GSP.
+    //
+    kbifProbePcieCplAtomicCaps_HAL(pGpu, pKernelBif);
 
     //
     // Passthrough configurations do not typically present the upstream
@@ -999,13 +1010,13 @@ clUpdatePcieConfig_IMPL(OBJGPU *pGpu, OBJCL *pCl)
     }
 
     // Initialize ASPM L1 mask state for Upstream port
-    if (clIsL1MaskEnabledForUpstreamPort(pGpu, pCl))
+    if (clIsL1SupportedForUpstreamPort(pGpu, pCl))
     {
-        pCl->setProperty(pCl, PDB_PROP_CL_ASPM_UPSTREAM_PORT_L1_MASK_ENABLED, NV_TRUE);
+        pCl->setProperty(pCl, PDB_PROP_CL_ASPM_L1_UPSTREAM_PORT_SUPPORTED, NV_TRUE);
     }
     else
     {
-        pCl->setProperty(pCl, PDB_PROP_CL_ASPM_UPSTREAM_PORT_L1_MASK_ENABLED, NV_FALSE);
+        pCl->setProperty(pCl, PDB_PROP_CL_ASPM_L1_UPSTREAM_PORT_SUPPORTED, NV_FALSE);
     }
 
     NV_PRINTF(LEVEL_INFO,
@@ -1146,7 +1157,7 @@ objClInitGpuPortData
     if (pGpu->gpuClData.upstreamPort.addr.valid)
         return NV_TRUE;
 
-    NV_ASSERT(gpuGetDBDF(pGpu));
+    NV_ASSERT(gpuIsDBDFValid(pGpu));
 
     domain = gpuGetDomain(pGpu);
     gpuBus = gpuGetBus(pGpu);
@@ -1556,7 +1567,7 @@ objClGpuMapEnhCfgSpace
     NV_ASSERT_OR_RETURN_VOID(!pOS->getProperty(pOS, PDB_PROP_OS_DOES_NOT_ALLOW_DIRECT_PCIE_MAPPINGS));
 
     if (!pCl->getProperty(pCl, PDB_PROP_CL_PCIE_CONFIG_ACCESSIBLE) ||
-        (pGpu->gpuCfgAddr != NULL) || (gpuGetDBDF(pGpu) == 0))
+        (pGpu->gpuCfgAddr != NULL) || !gpuIsDBDFValid(pGpu))
     {
         return;
     }
@@ -1705,6 +1716,9 @@ objClSetPortPcieEnhancedCapsOffsets
             case PCIE_CAP_ID_L1_PM_SUBSTATES:
                 pPort->PCIEL1SsCapPtr = cap_next;
                 break;
+            case PCIE_CAP_ID_ACS:
+                pPort->PCIEAcsCapPtr = cap_next;
+                break;
         }
         cap_next = REF_VAL(PCIE_CAP_HEADER_NEXT, value);
     }
@@ -1729,7 +1743,7 @@ clPcieReadPortConfigReg_IMPL
         return NV_ERR_GENERIC;
     }
 
-    if ((offset >= CL_PCIE_BEGIN) && (offset + sizeof(NvU32) <= CL_PCIE_END))
+    if ((offset >= CL_PCIE_BEGIN) && (offset <= CL_PCIE_END))
     {
         if (pPort->PCIECapPtr)
             *value = osPciReadDword(pPort->addr.handle,
@@ -1737,11 +1751,11 @@ clPcieReadPortConfigReg_IMPL
         else
             return NV_ERR_GENERIC;
     }
-    else if ((offset >= CL_AER_BEGIN) && (offset + sizeof(NvU32) <= CL_AER_END))
+    else if ((offset >= CL_AER_BEGIN) && (offset <= CL_AER_END))
     {
         if (pCl->getProperty(pCl, PDB_PROP_CL_PCIE_CONFIG_ACCESSIBLE) && pPort->PCIEErrorCapPtr)
             *value = clPcieReadDword(pCl,
-                pPort->addr.domain,
+                                     pPort->addr.domain,
                                      pPort->addr.bus,
                                      pPort->addr.device,
                                      pPort->addr.func,
@@ -1749,7 +1763,7 @@ clPcieReadPortConfigReg_IMPL
         else
             return NV_ERR_GENERIC;
     }
-    else if ((offset >= CL_VC_BEGIN) && (offset + sizeof(NvU32) <= CL_VC_END))
+    else if ((offset >= CL_VC_BEGIN) && (offset <= CL_VC_END))
     {
         if (pCl->getProperty(pCl, PDB_PROP_CL_PCIE_CONFIG_ACCESSIBLE) && pPort->PCIEVCCapPtr)
             *value = clPcieReadDword(pCl,
@@ -1761,7 +1775,7 @@ clPcieReadPortConfigReg_IMPL
         else
             return NV_ERR_GENERIC;
     }
-    else if ((offset >= CL_L1_SS_BEGIN) && (offset + sizeof(NvU32) <= CL_L1_SS_END))
+    else if ((offset >= CL_L1_SS_BEGIN) && (offset <= CL_L1_SS_END))
     {
         if (pCl->getProperty(pCl, PDB_PROP_CL_PCIE_CONFIG_ACCESSIBLE) && pPort->PCIEL1SsCapPtr)
             *value = clPcieReadDword(pCl,
@@ -1770,6 +1784,39 @@ clPcieReadPortConfigReg_IMPL
                                      pPort->addr.device,
                                      pPort->addr.func,
                                      offset - CL_L1_SS_BEGIN + pPort->PCIEL1SsCapPtr);
+        else
+            return NV_ERR_GENERIC;
+    }
+    else if ((offset >= CL_ACS_BEGIN) && (offset <= CL_ACS_END))
+    {
+        if (pCl->getProperty(pCl, PDB_PROP_CL_PCIE_CONFIG_ACCESSIBLE) && pPort->PCIEAcsCapPtr)
+        {
+            // ACS config space registers are a mix of 16 and 32 bit registers.
+            switch (offset)
+            {
+                case CL_ACS_BEGIN:
+                case CL_ACS_EGRESS_CTL_V:
+                {
+                    *value = clPcieReadDword(pCl,
+                                             pPort->addr.domain,
+                                             pPort->addr.bus,
+                                             pPort->addr.device,
+                                             pPort->addr.func,
+                                             offset - CL_ACS_BEGIN + pPort->PCIEAcsCapPtr);
+                    break;
+                }
+                case CL_ACS_CAP:
+                case CL_ACS_CTRL:
+                {
+                    *value = (NvU32) clPcieReadWord(pCl,
+                                                    pPort->addr.domain,
+                                                    pPort->addr.bus,
+                                                    pPort->addr.device,
+                                                    pPort->addr.func,
+                                                    offset - CL_ACS_BEGIN + pPort->PCIEAcsCapPtr);
+                }
+            }
+        }
         else
             return NV_ERR_GENERIC;
     }
@@ -2595,7 +2642,8 @@ clStoreBusTopologyCache_IMPL
                 pBusTopologyInfo->busInfo.revisionID  = osPciReadByte(handle, PCI_HEADER_TYPE0_REVISION_ID);
 
                 if ((pciSubBaseClass == PCI_COMMON_CLASS_SUBBASECLASS_P2P) ||
-                    (pciSubBaseClass == PCI_COMMON_CLASS_SUBBASECLASS_HOST))
+                    (pciSubBaseClass == PCI_COMMON_CLASS_SUBBASECLASS_HOST) ||
+                    (pciSubBaseClass == PCI_COMMON_CLASS_SUBBASECLASS_3DCTRL))
                 {
                     pBusTopologyInfo->secBus = (NvU8)osPciReadByte(handle, PCI_TYPE_1_SECONDARY_BUS_NUMBER);
                     pBusTopologyInfo->bVgaAdapter = NV_FALSE;
@@ -2928,7 +2976,7 @@ objClPcieMapEnhCfgSpace
             return pGpu->gpuClData.rootPort.vAddr;
         }
         else if ((pGpu->gpuCfgAddr != NULL) &&
-                 (gpuGetDBDF(pGpu) != 0) &&
+                 (gpuIsDBDFValid(pGpu)) &&
                  (domain == gpuGetDomain(pGpu)) &&
                  (bus == gpuGetBus(pGpu)) &&
                  (device == gpuGetDevice(pGpu)) &&
@@ -3203,7 +3251,6 @@ NV_STATUS Intel_RP0C0X_setupFunc(OBJGPU *pGpu, OBJCL *pCl)
 NV_STATUS Intel_RP2F0X_setupFunc(OBJGPU *pGpu, OBJCL *pCl)
 {
     OBJSYS *pSys = SYS_GET_INSTANCE();
-    OBJOS *pOS = SYS_GET_OS(pSys);
     OBJHYPERVISOR *pHypervisor = SYS_GET_HYPERVISOR(pSys);
     NvU32 domain;
     // Socket 0 default PCIE location is bus = 0x7f, device = 0x1e, func = 0x3
@@ -3217,7 +3264,7 @@ NV_STATUS Intel_RP2F0X_setupFunc(OBJGPU *pGpu, OBJCL *pCl)
     NvBool bC0orC1CPUID = NV_FALSE;
 
     // Determine if CPU is C0/C1 Stepping by CPUID
-    if (pOS->osNv_cpuid(pOS, 1, 0, &eax, &ebx, &ecx, &edx))
+    if (osNv_cpuid(1, 0, &eax, &ebx, &ecx, &edx))
     {
         // CPUID is returned to eax
         bC0orC1CPUID = (eax == INTEL_C0_OR_C1_CPUID);
@@ -4509,18 +4556,7 @@ clPcieGetDownstreamPortLinkCap2_IMPL
 
     PCIECapPtr = pGpu->gpuClData.upstreamPort.PCIECapPtr;
 
-    //
-    // CL_PCIE_END is a misnomer, we actually want to use CL_PCIE_LINK_CAP_2.
-    // But it is not present in chipset.h and the offset of what-would-be
-    // CL_PCIE_LINK_CAP_2 (0x2c) is overlapping with CL_PCIE_END.
-    // Before replacing CL_PCIE_END with CL_PCIE_LINK_CAP_2, we would need to
-    // first understand why CL_PCIE_END was restricted to 0x2c and then
-    // changing it to CL_PCIE_LINK_CAP_2 would require discussion and time.
-    // Todo by anaikwade: Correct this issue. Bug 200659585.
-    //                    Also investigate more correct way if there is any to
-    //                    check pcie 4.0 spec support
-    //
-    *pLinkCaps2 = osPciReadDword(pHandle, CL_PCIE_END - CL_PCIE_BEGIN + PCIECapPtr);
+    *pLinkCaps2 = osPciReadDword(pHandle, CL_PCIE_LINK_CAP_2 - CL_PCIE_BEGIN + PCIECapPtr);
 
     return NV_OK;
 }
@@ -5282,7 +5318,7 @@ NvU16 _clPcieGetDiagnosticData(OBJGPU *pGpu, CL_PCIE_DC_DIAGNOSTIC_COLLECTION_EN
  * @brief   Retrieve diagnostic information to be used to identify the cause of GPU Lost
  *
  * @param[in]   pGpu        GPU object pointer
- * @param[in]   pBif        BIF object pointer
+ * @param[in]   pCl         CL object pointer
  * @param[out]  pBuffer     pointer to diagnostic output buffer
  * @param[in]   bufferSize  size of diagnostic output buffer
  *
@@ -5304,4 +5340,62 @@ NvU16 clPcieGetGpuLostDiagnosticData_IMPL(OBJGPU *pGpu, OBJCL *pCl, NvU8 * pBuff
     return _clPcieGetDiagnosticData(pGpu,
         gpuLostCollectionScript, NV_ARRAY_ELEMENTS(gpuLostCollectionScript),
         pBuffer, size);
+}
+
+/*!
+ * @brief Parse config space for ACS redirect configuration.
+ *
+ * @param[in]  pGpu                GPU object pointer
+ * @param[in]  pCl                 CL object pointer
+ * @param[in]  domain              DBDF domain
+ * @param[in]  bus                 DBDF bus
+ * @param[in]  device              DBDF device
+ * @param[in]  func                DBDF function
+ * @param[out] pAcsRoutingConfig  ACS routing ctrl value filtered by capability field.
+ *
+ * @returns NV_OK on success, NV_ERR_INVALID_STATE in case config space is inaccessible, NV_ERR_GENERIC if ACS is unsupported.
+ */
+NV_STATUS
+clGetPortAcsRedirectConfig_IMPL
+(
+    OBJGPU *pGpu,
+    OBJCL  *pCl,
+    NvU32   domain,
+    NvU8    bus,
+    NvU8    device,
+    NvU8    func,
+    NvU32  *pAcsRoutingConfig
+)
+{
+    PORTDATA portData = {0};
+    NvU32 acsCtrl;
+    NvU32 acsCap;
+
+    *pAcsRoutingConfig = 0;
+
+    // Initialize portData struct for the PCI node.
+    portData.addr.domain = domain;
+    portData.addr.bus    = bus;
+    portData.addr.device = device;
+    portData.addr.func   = func;
+    portData.addr.valid  = 0x1;
+    portData.addr.handle = osPciInitHandle(domain, bus, device, func, 0, 0);
+
+    // This could be faster if RM implemented caching of extended config space.
+    NV_ASSERT_OK_OR_RETURN(objClSetPortPcieEnhancedCapsOffsets(pCl, &portData));
+
+    // If ACS is not implemented by the bridge or RC, RM will return here. This is not an error.
+    if (clPcieReadPortConfigReg(pGpu, pCl, &portData, CL_ACS_CAP, &acsCap) != NV_OK)
+    {
+        return NV_OK;
+    }
+    if (clPcieReadPortConfigReg(pGpu, pCl, &portData, CL_ACS_CTRL, &acsCtrl) != NV_OK)
+    {
+        return NV_OK;
+    }
+
+    // Ctrl bits set without a corresponding capability bit are filtered.
+    *pAcsRoutingConfig = acsCtrl & acsCap;
+
+    return NV_OK;
 }

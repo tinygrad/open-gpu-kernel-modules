@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2022-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -31,7 +31,10 @@
 #include "gpu/spdm/spdm.h"
 #include "spdm/rmspdmtransport.h"
 #include "spdm/rmspdmvendordef.h"
-#include "objtmr.h"
+#include "gpu/timer/objtmr.h"
+#include "gpu/gpu.h"
+#include "core/locks.h"
+#include "rmapi/client_resource.h"
 #include "gpu/gsp/kernel_gsp.h"
 #include "gpu/bus/kern_bus.h"
 #include "gpu/mem_mgr/mem_mgr.h"
@@ -43,6 +46,7 @@
 #include "platform/sli/sli.h"
 #include "nvspdm_rmconfig.h"
 #include "published/hopper/gh100/dev_falcon_v4.h"
+#include "nvmisc.h"
 #include "gpu/conf_compute/conf_compute.h"
 
 /* ------------------------ Macros ----------------------------------------- */
@@ -82,14 +86,12 @@ static SPDM_ALGO_CHECK_ENTRY g_SpdmAlgoCheckTable_GH100[] =
     { LIBSPDM_DATA_AEAD_CIPHER_SUITE,      SPDM_ALGORITHMS_AEAD_CIPHER_SUITE_AES_256_GCM },
     { LIBSPDM_DATA_KEY_SCHEDULE,           SPDM_ALGORITHMS_KEY_SCHEDULE_HMAC_HASH },
     { LIBSPDM_DATA_OTHER_PARAMS_SUPPORT,   0 },
-#if LIBSPDM_ENABLE_CAPABILITY_MUT_AUTH_CAP
     { LIBSPDM_DATA_REQ_BASE_ASYM_ALG,      SPDM_ALGORITHMS_BASE_ASYM_ALGO_TPM_ALG_RSAPSS_3072 }
-#endif
 };
 
 /* ------------------------ Static Function Prototypes --------------------- */
 static void _spdmSendHeartbeat(NvU32 gpuInstance, void *pArgs);
-static NV_STATUS _spdmTriggerHeartbeat(OBJGPU *pGpu, OBJTMR *pTmr, PTMR_EVENT pTmrEvent);
+static NV_STATUS _spdmTriggerHeartbeat(OBJGPU *pGpu, OBJTMR *pTmr, TMR_EVENT *pTmrEvent);
 
 //
 // Static transport layer functions which we pass to libspdm as function pointers.
@@ -199,6 +201,7 @@ ErrorExit:
         // Ideally we don't have dependency on Confidential Compute object here,
         // but that's the best we can do without unnecessary code duplication.
         //
+        NV_PRINTF(LEVEL_FATAL, "SPDM: Fatal heartbeat failure detected 0x%x\n", status);
         confComputeSetErrorState(pGpu, pConfCompute);
     }
 }
@@ -220,7 +223,7 @@ _spdmTriggerHeartbeat
 (
     OBJGPU     *pGpu,
     OBJTMR     *pTmr,
-    PTMR_EVENT  pTmrEvent
+    TMR_EVENT *pTmrEvent
 )
 {
     NV_STATUS  status = NV_OK;
@@ -235,7 +238,7 @@ _spdmTriggerHeartbeat
     status = osQueueWorkItemWithFlags(pGpu, _spdmSendHeartbeat, pTmrEvent->pUserData,
                                         OS_QUEUE_WORKITEM_FLAGS_DONT_FREE_PARAMS |
                                         OS_QUEUE_WORKITEM_FLAGS_LOCK_API_RW      |
-                                        OS_QUEUE_WORKITEM_FLAGS_LOCK_GPUS_RW);
+                                        OS_QUEUE_WORKITEM_FLAGS_LOCK_GPUS);
 
     ErrorExit:
     if (status != NV_OK && pGpu != NULL)
@@ -246,6 +249,7 @@ _spdmTriggerHeartbeat
         // Ideally we don't have dependency on Confidential Compute object here,
         // but that's the best we can do without unnecessary code duplication.
         //
+        NV_PRINTF(LEVEL_FATAL, "SPDM: Fatal heartbeat failure detected 0x%x\n", status);
         confComputeSetErrorState(pGpu, pConfCompute);
     }
     return status;
@@ -314,8 +318,8 @@ _spdmEncodeMessageGsp
         return LIBSPDM_STATUS_INVALID_PARAMETER;
     }
 
-    // Only support sending requester SPDM/Secured messages.
-    if (!is_requester || is_app_message)
+    // Only support sending requester messages. Application messages must only be sent in session.
+    if (!is_requester || (is_app_message && session_id == NULL))
     {
         return LIBSPDM_STATUS_INVALID_PARAMETER;
     }
@@ -349,7 +353,8 @@ _spdmEncodeMessageGsp
     // Determine whether message is secured.
     if (session_id != NULL)
     {
-        pNvSpdmDescHdr->msgType = NV_SPDM_MESSAGE_TYPE_SECURED;
+        pNvSpdmDescHdr->msgType = is_app_message ? NV_SPDM_MESSAGE_TYPE_APPLICATION :
+                                                   NV_SPDM_MESSAGE_TYPE_SECURED;
 
         pSecuredMessageContext =
             libspdm_get_secured_message_context_via_session_id(spdm_context, *session_id);
@@ -500,8 +505,11 @@ _spdmDecodeMessageGsp
     // Decode message, based on type.
     switch (pNvSpdmDescHdr->msgType)
     {
+        case NV_SPDM_MESSAGE_TYPE_APPLICATION:
         case NV_SPDM_MESSAGE_TYPE_SECURED:
         {
+            *is_app_message = (pNvSpdmDescHdr->msgType == NV_SPDM_MESSAGE_TYPE_APPLICATION);
+
             //
             // Double-check the payload fits a secured message header.
             // Our implementation of a secure message header only includes
@@ -547,8 +555,9 @@ _spdmDecodeMessageGsp
 
         case NV_SPDM_MESSAGE_TYPE_NORMAL:
         {
-            // Indicate the message is unsecured.
-            *session_id = NULL;
+            // Indicate the message is an unsecured SPDM message.
+            *session_id     = NULL;
+            *is_app_message = NV_FALSE;
 
             //
             // We both check that the buffer is large enough, and that the
@@ -571,9 +580,6 @@ _spdmDecodeMessageGsp
             return LIBSPDM_STATUS_INVALID_MSG_FIELD;
         }
     }
-
-    // We don't expect app message for any scenario.
-    *is_app_message = NV_FALSE;
 
     return LIBSPDM_STATUS_SUCCESS;
 }
@@ -877,8 +883,8 @@ spdmMessageProcess_GH100
         // Prepare GSP-CMD and send to GSP-SPDM partition
         portMemSet(&params, 0, sizeof(params));
         params.cmd.cmdType = RM_GSP_SPDM_CMD_ID_CC_CTRL;
+        status = spdmSendCtrlCall(pGpu, pSpdm, &params);
 
-        status = spdmCtrlSpdmPartition(pGpu, &params);
         if (params.msg.status != NV_OK)
         {
             NV_PRINTF(LEVEL_ERROR, "SPDM: RPC failed! RPC status = 0x%x\n",
@@ -1015,7 +1021,10 @@ spdmCheckConnection_GH100
         return NV_ERR_INVALID_STATE;
     }
 
+    //
     // Check all capabilities match expected.
+    // NOTE: Even if Requester doesn't support Mutual Auth, we expect Responder will report it as capable.
+    //
     expectedFlags = SPDM_CAPABILITIES_FLAGS_GH100;
 
     dataSize = sizeof(capabilitiesFlags);
@@ -1029,11 +1038,17 @@ spdmCheckConnection_GH100
     }
 
     // Check all crypto algorithms match expected.
-    algoCheckCount = sizeof(g_SpdmAlgoCheckTable_GH100)/sizeof(SPDM_ALGO_CHECK_ENTRY);
+    algoCheckCount = NV_ARRAY_ELEMENTS(g_SpdmAlgoCheckTable_GH100);
 
     for (i = 0; i < algoCheckCount; i++)
     {
         pCheckEntry = &g_SpdmAlgoCheckTable_GH100[i];
+
+        if (pCheckEntry->dataType == LIBSPDM_DATA_REQ_BASE_ASYM_ALG && !spdmMutualAuthSupported(pGpu, pSpdm))
+        {
+            // If mutual auth not supported, skip this entry
+            continue;
+        }
 
         actualAlgo = 0;
         dataSize   = sizeof(actualAlgo);
@@ -1172,7 +1187,8 @@ spdmSendInitRmDataCommand_GH100
 
     gpuSetTimeout(pGpu, GPU_TIMEOUT_DEFAULT, &timeout, 0);
 
-    status = spdmCtrlSpdmPartition(pGpu, &params);
+    status = spdmSendCtrlCall(pGpu, pSpdm, &params);
+
     if (status != NV_OK)
     {
         NV_PRINTF(LEVEL_ERROR, "SPDM: Send/receive error in INIT_RM_DATA command\n");
@@ -1289,7 +1305,7 @@ spdmRegisterForHeartbeats_GH100
     pTmr = GPU_GET_TIMER(pGpu);
 
     // Create the timer event and schedule the first heartbeat callback
-    status = tmrEventCreate(pTmr, &pSpdm->pHeartbeatEvent, _spdmTriggerHeartbeat, pSpdm, TMR_FLAGS_NONE);
+    status = tmrEventCreate(pTmr, &pSpdm->pHeartbeatEvent, _spdmTriggerHeartbeat, pSpdm, TMR_FLAG_USE_OS_TIMER);
     if (status != NV_OK)
     {
         return status;
@@ -1304,7 +1320,7 @@ spdmRegisterForHeartbeats_GH100
     params.cmd.ccHeartbeatCtrl.bEnable = NV_TRUE;
 
     gpuSetTimeout(pGpu, GPU_TIMEOUT_DEFAULT, &timeout, 0);
-    status = spdmCtrlSpdmPartition(pGpu, &params);
+    status = spdmSendCtrlCall(pGpu, pSpdm, &params);
     if (status != NV_OK)
     {
         NV_PRINTF(LEVEL_ERROR, "SPDM: Send/receive error in CC_HEARTBEAT_CTRL command! Status = 0x%0x\n", status);
@@ -1349,7 +1365,7 @@ spdmUnregisterFromHeartbeats_GH100
     params.cmd.ccHeartbeatCtrl.bEnable = NV_FALSE;
 
     gpuSetTimeout(pGpu, GPU_TIMEOUT_DEFAULT, &timeout, 0);
-    status = spdmCtrlSpdmPartition(pGpu, &params);
+    status = spdmSendCtrlCall(pGpu, pSpdm, &params);
     if (status != NV_OK)
     {
         NV_PRINTF(LEVEL_ERROR, "SPDM: Send/receive error in CC_HEARTBEAT_CTRL command! Status = 0x%0x\n", status);
@@ -1368,10 +1384,52 @@ spdmUnregisterFromHeartbeats_GH100
 
 ErrorExit:
     // In any case, cancel any further heartbeats that might occur. Handles NULL gracefully.
-    tmrEventCancel(pTmr, pSpdm->pHeartbeatEvent);
     tmrEventDestroy(pTmr, pSpdm->pHeartbeatEvent);
     pSpdm->pHeartbeatEvent    = NULL;
     pSpdm->heartbeatPeriodSec = 0;
 
     return status;
 }
+
+/*!
+ * @brief     Control call function that send request GSP-SPDM partition
+ *
+ * @param[in]      pGpu        : OBJGPU Pointer
+ * @SpdmProxy[in]  pSpdm       : Spdm  pointer
+ * @param[in]      pParams     : SPDM RPC structure pointer
+ *
+ * @return    NV_OK if success, Error otherwise.
+ */
+NV_STATUS
+spdmSendCtrlCall_GH100
+(
+    OBJGPU                                     *pGpu,
+    Spdm                                       *pSpdm,
+    NV2080_CTRL_INTERNAL_SPDM_PARTITION_PARAMS *pParams
+)
+{
+    NV_STATUS status;
+
+    if (IS_VIRTUAL(pGpu))
+    {
+        // The control call currently doesn't support the vGPU environment, therefore return NV_ERR_NOT_SUPPORTED.
+        return NV_ERR_NOT_SUPPORTED;
+    }
+    else
+    {
+        RM_API *pRmApi   = GPU_GET_PHYSICAL_RMAPI(pGpu);
+
+        NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
+
+        // Calls the subdeviceCtrlCmdSpdmPartition_IMPL control call in Physical RM mode.
+        status = pRmApi->Control(pRmApi,
+                                 pGpu->hInternalClient,
+                                 pGpu->hInternalSubdevice,
+                                 NV2080_CTRL_INTERNAL_SPDM_PARTITION,
+                                 pParams,
+                                 sizeof(NV2080_CTRL_INTERNAL_SPDM_PARTITION_PARAMS));
+    }
+
+    return status;
+}
+

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -23,6 +23,7 @@
 
 #include "kernel/gpu/fifo/kernel_fifo.h"
 #include "kernel/gpu/mem_mgr/virt_mem_allocator.h"
+#include "kernel/gpu/mmu/kern_gmmu.h"
 #include "gpu/mem_mgr/mem_mgr.h"
 
 #include "published/hopper/gh100/dev_fault.h"
@@ -147,13 +148,11 @@ kfifoPrintInternalEngine_GH100
 {
     NV_STATUS status = NV_OK;
     KernelGmmu *pKernelGmmu = GPU_GET_KERNEL_GMMU(pGpu);
-    NvU32 pbdmaId;
     NvU32 engTag;
 
     if (kfifoIsMmuFaultEngineIdPbdma(pGpu, pKernelFifo, engineID))
     {
-        NV_ASSERT_OR_RETURN(kfifoGetPbdmaIdFromMmuFaultId(pGpu, pKernelFifo, engineID, &pbdmaId) == NV_OK, "UNKNOWN");
-        return kfifoPrintPbdmaId_HAL(pGpu, pKernelFifo, pbdmaId);
+        return kfifoPrintFaultingPbdmaEngineName(pGpu, pKernelFifo, engineID);
     }
 
     if (kgmmuIsFaultEngineBar1_HAL(pKernelGmmu, engineID))
@@ -409,6 +408,10 @@ kfifoGetClientIdStringCommon_GH100
                 return "HUBCLIENT_PTP_X4";
             case NV_PFAULT_CLIENT_HUB_PTP_X5:
                 return "HUBCLIENT_PTP_X5";
+            case NV_PFAULT_CLIENT_HUB_PTP_X6:
+                return "HUBCLIENT_PTP_X6";
+            case NV_PFAULT_CLIENT_HUB_PTP_X7:
+                return "HUBCLIENT_PTP_X7";
             case NV_PFAULT_CLIENT_HUB_NVENC2:
                 return "HUBCLIENT_NVENC2";
             case NV_PFAULT_CLIENT_HUB_VPR_SCRUBBER0:
@@ -554,4 +557,23 @@ kfifoGetClientIdString_GH100
                 return kfifoGetClientIdStringCommon_HAL(pGpu, pKernelFifo, pMmuExceptionInfo);
         }
     }
+}
+
+/*!
+ * @brief Update the usermode doorbell register with work submit token to notify
+ *        host that work is available on this channel.
+ *
+ * @param[in] pGpu
+ * @param[in] pFifo
+ * @param[in] pKernelChannel  Channel to ring the doorbell for
+ */
+NV_STATUS
+kfifoRingChannelDoorBell_GH100
+(
+    OBJGPU          *pGpu,
+    KernelFifo      *pKernelFifo,
+    KernelChannel   *pKernelChannel
+)
+{
+    return kfifoRingChannelDoorBell_GV100(pGpu, pKernelFifo, pKernelChannel);
 }

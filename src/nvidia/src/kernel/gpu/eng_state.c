@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2013-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2013-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -25,12 +25,6 @@
 #include "gpu/eng_state.h"
 #include "core/hal.h"
 #include "core/locks.h"
-
-#include "gpu/bus/kern_bus.h"
-
-// Function pointer wrapper
-#define engstateStatePreInitUnlocked_Fnptr(pEngstate)      pEngstate->__engstateStatePreInitUnlocked__
-#define engstateStateInitUnlocked_Fnptr(pEngstate)         pEngstate->__engstateStateInitUnlocked__
 
 NV_STATUS
 engstateConstructBase_IMPL
@@ -157,24 +151,6 @@ engstateGetName_IMPL
 #endif
 }
 
-void
-engstateLogStateStatus_IMPL
-(
-    OBJENGSTATE   *pEngstate,
-    ENGSTATE_STATE targetState,
-    NV_STATUS      targetStatus
-)
-{
-    ENGSTATE_STATUS *status = &pEngstate->status[targetState];
-    NV_ASSERT_OR_RETURN_VOID(targetState < ENGSTATE_STATE_COUNT);
-
-    status->engStatus = targetStatus;
-
-#if NV_PRINTF_STRINGS_ALLOWED
-    portStringCopy(status->name, sizeof(status->name), engstateGetName(pEngstate), portStringLength(engstateGetName(pEngstate)) + 1);
-#endif
-}
-
 /*!
  * @brief generic constructor
  */
@@ -219,10 +195,10 @@ engstateInitMissing_IMPL
 NV_STATUS
 engstateStatePreInit_IMPL(OBJGPU *pGpu, OBJENGSTATE *pEngstate)
 {
-    LOCK_ASSERT_AND_RETURN(rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     /* Check if we overrode the unlocked variant */
-    if ((engstateStatePreInitUnlocked_Fnptr(pEngstate)      !=
+    if ((engstateStatePreInitUnlocked_FNPTR(pEngstate)      !=
          engstateStatePreInitUnlocked_IMPL))
     {
         NV_STATUS status, lockStatus;
@@ -267,10 +243,10 @@ engstateStatePreInitUnlocked_IMPL(OBJGPU *pGpu, OBJENGSTATE *pEngstate)
 NV_STATUS
 engstateStateInit_IMPL(OBJGPU *pGpu, OBJENGSTATE *pEngstate)
 {
-    LOCK_ASSERT_AND_RETURN(rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     /* Check if we overrode the unlocked variant */
-    if (engstateStateInitUnlocked_Fnptr(pEngstate) != engstateStateInitUnlocked_IMPL)
+    if (engstateStateInitUnlocked_FNPTR(pEngstate) != engstateStateInitUnlocked_IMPL)
     {
         NV_STATUS status, lockStatus;
 
@@ -430,10 +406,7 @@ engstateIsPresent_IMPL
     OBJENGSTATE *pEngstate
 )
 {
-    KernelBus *pKernelBus = GPU_GET_KERNEL_BUS(pGpu);
-
-    NV_ASSERT(pEngstate != NULL);
-    return kbusCheckEngine_HAL(pGpu, pKernelBus, pEngstate->engDesc);
+    return gpuCheckEngine_HAL(pGpu, pEngstate->engDesc);
 }
 
 

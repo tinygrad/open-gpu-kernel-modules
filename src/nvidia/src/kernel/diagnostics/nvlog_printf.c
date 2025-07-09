@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2002-2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2002-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -223,7 +223,8 @@ _nvDbgPrepareString
 // Temporary helper to map LEVEL_xxx constants to a platform specific level.
 //
 #if PORT_IS_FUNC_SUPPORTED(portDbgExPrintfLevel)
-static NvU32 _nvDbgLevelToPlatformLevel(NvBool bForce,  NvU32 level)
+
+static NvU32 _nvDbgForceLevel(NvBool bForce, NvU32 level)
 {
     return bForce ? LEVEL_FATAL : level;
 }
@@ -249,12 +250,12 @@ void nvDbg_vPrintf
     if (nvDbg_PrintMsg(filename, linenumber, function, debuglevel, printf_format, &force, &prefix))
     {
         portSyncSpinlockAcquire(_nv_dbg_lock);
-          _nvDbgPrepareString(filename, linenumber, function, printf_format, prefix, arglist);
+        _nvDbgPrepareString(filename, linenumber, function, printf_format, prefix, arglist);
 #if PORT_IS_FUNC_SUPPORTED(portDbgExPrintfLevel)
-          portDbgExPrintfLevel(_nvDbgLevelToPlatformLevel(force, debuglevel),
-                               "%.*s", MAX_ERROR_STRING, _nv_dbg_string);
+        portDbgExPrintfLevel(_nvDbgForceLevel(force, debuglevel),
+                             "%.*s", MAX_ERROR_STRING, _nv_dbg_string);
 #else
-          portDbgPrintString(_nv_dbg_string, MAX_ERROR_STRING);
+        portDbgPrintString(_nv_dbg_string, MAX_ERROR_STRING);
 #endif
         portSyncSpinlockRelease(_nv_dbg_lock);
     }
@@ -754,193 +755,6 @@ static int uinttohexfmtstr(NvU64 uval,  char *dest, int fieldwidth, int flags)
     return(destcount);  // Return the character count, not including the null
 }
 
-
-#if 0
-
-//======================================================================================
-//
-// float64todecfmtstr()
-//
-//  This takes a 64-bit floating-point value and converts it to a formatted decimal
-//  string, using options (field width, precision, and flags) like those provided by
-//  sprintf().  Look at the code for dbugsprintf() above to see which formatting options
-//  are implemented.
-//
-//======================================================================================
-static int float64todecfmtstr(F064 f64val, NvU8 *dest, int fieldwidth, int precision, int flags)
-{
-    int i, firstcount, destcount;
-    int sign, signchar, decpt;
-    int fillcount;
-    int pad_options;
-    int reducecount, loopdigits, digitsleft;
-    NvU32 u32val, quotient, remainder;
-    F064 f64mant9 = 0.0, f64mant9factor = 0.0, fone = 0.0, ften = 0.0, fbillion = 0.0, powerof10 = 0.0;
-    NvU8 *digp;
-    NvU8 nbuf[NUMBUFSIZE];  // This only needs to hold the first 9 digits of the integer part
-
-    // Process the sign-related options
-    sign = 1;   // Assume at first we'll have a sign character
-    if (f64val < 0.0) {
-        signchar = '-';
-        f64val = -f64val;   // Make the number positive now so we can 'digitize' it
-    } else {    // f64val >= 0.0
-        if (flags & PLUSSIGN_F)
-            signchar = '+';
-        else if (flags & SPACESIGN_F)
-            signchar = ' ';
-        else
-            sign = 0;   // No sign character
-    }
-
-    // Round the number to N decimal places.  We add 0.5 x 10^(-N), which is
-    //  equivalent to adding 1 / (2*10^N).  We'll use this latter formula.
-    fone = 1.0;     // Keep the compiler from always loading these constants from memory
-    ften = 10.0;
-    powerof10 = fone;   // 10 ^ 0
-    for (i = 0; i < precision; i++)
-        powerof10 *= ften;  // Build 10 ^ N
-    f64val += fone / (2.0 * powerof10);
-    // f64val now contains the properly rounded number
-
-    f64mant9 = f64val;  // Start hunting for the mantissa's 9 uppermost decimal digits
-    fbillion = 1e9;     // Keep it in a register
-    f64mant9factor = fone;
-    // Reduce the mantissa to less than 1 billion, so it will fit in a 32-bit integer
-    for (reducecount = 0; f64mant9 >= fbillion; reducecount++) {
-        f64mant9 /= fbillion;
-        f64mant9factor *= fbillion;
-    }
-
-    // Process the highest 32-bits of the mantissa so we can count those digits first
-
-    f64mant9 = f64val / f64mant9factor; // Grab highest 9 integer decimal digits
-    u32val = (NvU32) f64mant9;   // Drop any fraction
-    f64mant9 = u32val;  // Now we have a float with only an integer part
-    f64val -= f64mant9 * f64mant9factor;    // Subtract out the previous high digits
-    f64mant9factor /= fbillion;     // Adjust our division factor
-
-    // Convert the binary into ASCII decimal digits in our local buffer, counting them
-    digp = &nbuf[NUMBUFSIZE];   // Point past the last char. of these 9 digits
-    firstcount = 0; // No digits of the first 32-bit integer part yet
-    do {
-        quotient = u32val / 10;
-        remainder = u32val - quotient * 10;
-        *--digp = (NvU8) (remainder + '0'); // Put the digit into the next lower buffer slot
-        firstcount++;
-        u32val = quotient;
-    } while (u32val > 0);
-
-    // Figure out whether we'll have a decimal point
-    decpt = (precision > 0);    // Don't use a decimal point if no fractional part
-
-    // Process the field-padding options
-    pad_options = 0;    // Assume we won't be doing any padding
-    // We have the information we need to calculate how many output characters we'll have
-    fillcount = fieldwidth - (sign + firstcount + (reducecount * 9) + decpt + precision);
-    if (fillcount > 0) {    // We need to do left or right padding
-        if (flags & LEFTALIGN_F) {
-            pad_options = POSTSPACE_O;
-        } else {    // Right-aligned, fill with zeros or spaces
-            if (flags & ZEROFILL_F)
-                pad_options = PREZERO_O;
-            else
-                pad_options = PRESPACE_O;
-        }
-    }
-
-    destcount = 0;  // Nothing written out to the destination yet
-
-    // Copy any leading spaces
-    if (pad_options & PRESPACE_O) {
-        for (i = 0; i < fillcount; i++) // Copy the pad character(s)
-            *dest++ = ' ';
-        destcount += fillcount;
-    }
-    // Copy the sign character, if any
-    if (sign) {
-        *dest++ = signchar;
-        destcount++;
-    }
-    // Copy any leading zeros
-    if (pad_options & PREZERO_O) {
-        for (i = 0; i < fillcount; i++) // Copy the pad character(s)
-            *dest++ = '0';
-        destcount += fillcount;
-    }
-    // Copy the highest chunk of integer digits from the local buffer
-    for (i = 0; i < firstcount; i++)
-        *dest++ = *digp++;
-    destcount += firstcount;
-
-    // Now we need to convert the remaining integer digits, if any
-    for (i = 0; i < reducecount; i++) {
-        f64mant9 = f64val / f64mant9factor; // Grab 9 more decimal digits
-        u32val = (NvU32) f64mant9;       // Drop any fraction
-        f64mant9 = u32val;      // Now we have a float with only an integer part
-        f64val -= f64mant9 * f64mant9factor;    // Subtract out the previous high digits
-        f64mant9factor /= fbillion;         // Adjust our division factor
-        // Convert the integer part into ASCII decimal digits, directly to the destination
-        dest += 9;              // Point past the last char. of this 9-digit chunk
-        digp = dest;
-        for (loopdigits = 0; loopdigits < 9; loopdigits++) {
-            quotient = u32val / 10;
-            remainder = u32val - quotient * 10;
-            *--digp = (NvU8) (remainder + '0'); // Put the digit into the next lower buffer slot
-            u32val = quotient;
-        }
-        destcount += 9;
-    }
-    // f64val has only the fractional part now
-
-    if (!decpt)
-        goto checktrailing; // Skip the laborious fraction-processing part
-
-    // Copy the decimal point
-    *dest++ = '.';
-    destcount++;
-
-    // Similar to how we handled the integer part processing, we'll process up to
-    //  9 digits at a time, by multiplying the fraction by a power of 10,
-    //  converting to an integer, and converting digits to the destination.
-
-    digitsleft = precision;
-    do {
-        loopdigits = digitsleft;
-        if (loopdigits > 9)
-            loopdigits = 9;
-        powerof10 = fone;   // 10 ^ 0
-        for (i = 0; i < loopdigits; i++)
-            powerof10 *= ften;  // Build 10 ^ N
-        f64val *= powerof10;    // Push some fractional digits into the integer part
-        u32val = (NvU32) f64val; // Conversion truncates any remaining fraction
-        f64val -= u32val;   // Remove the integer part, leave remaining fraction digits
-        digp = dest + loopdigits;   // Point past the last char. of this chunk
-        for (i = 0; i < loopdigits; i++) {
-            quotient = u32val / 10;
-            remainder = u32val - quotient * 10;
-            *--digp = (NvU8) (remainder + '0'); // Put the digit into the next lower buffer slot
-            u32val = quotient;
-        }
-        dest += loopdigits;
-        destcount += loopdigits;
-        digitsleft -= loopdigits;
-    } while (digitsleft > 0);
-
-checktrailing:
-    // Copy any trailing spaces
-    if (pad_options & POSTSPACE_O) {
-        for (i = 0; i < fillcount; i++) // Copy the pad character(s)
-            *dest++ = ' ';
-        destcount += fillcount;
-    }
-    if ((flags & DONTTERMINATE) == 0)   // Null-terminate the string unless requested not to
-        *dest = 0;
-    return(destcount);  // Return the character count, not including the null
-}
-
-#endif // 0
-
 //======================================================================================
 //
 // strtofmtstr()
@@ -1256,11 +1070,15 @@ nvDbgRmMsgCheck
         if (((nv_strnstr(filename, noun, nounlen) != NULL) ||
              (nv_strnstr(function, noun, nounlen) != NULL)) &&
             (linenumber >= startline) &&
-            (linenumber <= endline) &&
-            (debuglevel >= level))
+            (linenumber <= endline))
         {
             status = inc ? NVRM_MSG_PRINT : NVRM_MSG_HIDE;
             prefix = tempPrefix;
+
+            if (status == NVRM_MSG_PRINT && debuglevel < level)
+            {
+                status = NVRM_MSG_HIDE;
+            }
         }
 
         if (*p == '\0')

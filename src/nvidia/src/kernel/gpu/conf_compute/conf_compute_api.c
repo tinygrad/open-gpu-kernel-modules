@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -38,6 +38,7 @@
 #include "gpu/conf_compute/conf_compute_api.h"
 #include "gpu/subdevice/subdevice.h"
 #include "class/clcb33.h" // NV_CONFIDENTIAL_COMPUTE
+#include "nvrm_registry.h"
 
 NV_STATUS
 confComputeApiConstruct_IMPL
@@ -73,13 +74,21 @@ confComputeApiCtrlCmdSystemGetCapabilities_IMPL
     OBJSYS    *pSys = SYS_GET_INSTANCE();
     CONF_COMPUTE_CAPS *pCcCaps = pConfComputeApi->pCcCaps;
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     pParams->cpuCapability = NV_CONF_COMPUTE_SYSTEM_CPU_CAPABILITY_NONE;
     if ((sysGetStaticConfig(pSys))->bOsCCEnabled)
     {
         pParams->cpuCapability = NV_CONF_COMPUTE_SYSTEM_CPU_CAPABILITY_AMD_SEV;
-        if ((sysGetStaticConfig(pSys))->bOsCCTdxEnabled)
+        if ((sysGetStaticConfig(pSys))->bOsCCSevSnpEnabled)
+        {
+            pParams->cpuCapability = NV_CONF_COMPUTE_SYSTEM_CPU_CAPABILITY_AMD_SEV_SNP;
+        }
+        else if ((sysGetStaticConfig(pSys))->bOsCCSnpVtomEnabled)
+        {
+            pParams->cpuCapability = NV_CONF_COMPUTE_SYSTEM_CPU_CAPABILITY_AMD_SNP_VTOM;
+        }
+        else if ((sysGetStaticConfig(pSys))->bOsCCTdxEnabled)
         {
             pParams->cpuCapability = NV_CONF_COMPUTE_SYSTEM_CPU_CAPABILITY_INTEL_TDX;
         }
@@ -125,7 +134,13 @@ confComputeApiCtrlCmdSystemGetCapabilities_IMPL
 
     if (pCcCaps->bMultiGpuProtectedPcieModeEnabled)
     {
+        // Do not advertise HCC as ON to callers when PPCIe is ON
+        pParams->ccFeature = NV_CONF_COMPUTE_SYSTEM_FEATURE_DISABLED;
         pParams->multiGpuMode = NV_CONF_COMPUTE_SYSTEM_MULTI_GPU_MODE_PROTECTED_PCIE;
+    }
+    else if (pCcCaps->bMultiGpuNvleModeEnabled)
+    {
+        pParams->multiGpuMode = NV_CONF_COMPUTE_SYSTEM_MULTI_GPU_MODE_NVLE;
     }
 
     return NV_OK;
@@ -138,7 +153,7 @@ confComputeApiCtrlCmdSystemGetGpusState_IMPL
     NV_CONF_COMPUTE_CTRL_CMD_SYSTEM_GET_GPUS_STATE_PARAMS *pParams
 )
 {
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     pParams->bAcceptClientRequest = pConfComputeApi->pCcCaps->bAcceptClientRequest;
 
@@ -159,7 +174,7 @@ confComputeApiCtrlCmdSystemSetGpusState_IMPL
     NV_STATUS  status = NV_OK;
     NV2080_CTRL_CMD_INTERNAL_CONF_COMPUTE_SET_GPU_STATE_PARAMS params = {0};
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     // Make sure 'ready state' can't be set after being set to false once.
     if (pConfComputeApi->pCcCaps->bFatalFailure)
@@ -210,7 +225,7 @@ confComputeApiCtrlCmdGpuGetVidmemSize_IMPL
     NvU64             totalProtectedBytes   = 0;
     NvU64             totalUnprotectedBytes = 0;
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     NV_CHECK_OK_OR_RETURN(LEVEL_INFO,
         subdeviceGetByHandle(RES_GET_CLIENT(pConfComputeApi),
@@ -254,7 +269,7 @@ confComputeApiCtrlCmdGpuSetVidmemSize_IMPL
     NV_CONF_COMPUTE_CTRL_CMD_GPU_SET_VIDMEM_SIZE_PARAMS *pParams
 )
 {
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     return NV_OK;
 }
@@ -269,38 +284,41 @@ confComputeApiCtrlCmdGetGpuCertificate_IMPL
     Subdevice           *pSubdevice   = NULL;
     OBJGPU              *pGpu         = NULL;
     ConfidentialCompute *pConfCompute = NULL;
+    Spdm                *pSpdm        = NULL;
     NV_STATUS            status       = NV_OK;
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     NV_CHECK_OK_OR_RETURN(LEVEL_INFO,
         subdeviceGetByHandle(RES_GET_CLIENT(pConfComputeApi),
                              pParams->hSubDevice, &pSubdevice));
     pGpu         = GPU_RES_GET_GPU(pSubdevice);
     pConfCompute = GPU_GET_CONF_COMPUTE(pGpu);
+    pSpdm        = GPU_GET_SPDM(pGpu);
 
-    if (pConfCompute != NULL && pConfCompute->pSpdm != NULL &&
-        pConfCompute->getProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_SPDM_ENABLED))
+    if (pConfCompute != NULL && confComputeIsSpdmEnabled(pGpu, pConfCompute))
     {
-        // Set max size of certificate buffers before calling SPDM.
-        pParams->certChainSize            = NV_CONF_COMPUTE_CERT_CHAIN_MAX_SIZE;
-        pParams->attestationCertChainSize = NV_CONF_COMPUTE_ATTESTATION_CERT_CHAIN_MAX_SIZE;
-
-        status = spdmGetCertChains_HAL(pGpu,
-                                       pConfCompute->pSpdm,
-                                       pParams->certChain,
-                                       &pParams->certChainSize,
-                                       pParams->attestationCertChain,
-                                       &pParams->attestationCertChainSize);
-        if (status != NV_OK)
+        if (pSpdm->getProperty(pSpdm, PDB_PROP_SPDM_ENABLED))
         {
-            // Attestation failure, tear down the CC system.
-            confComputeSetErrorState(pGpu, pConfCompute);
+            // Set max size of certificate buffers before calling SPDM.
+            pParams->certChainSize            = NV_CONF_COMPUTE_CERT_CHAIN_MAX_SIZE;
+            pParams->attestationCertChainSize = NV_CONF_COMPUTE_ATTESTATION_CERT_CHAIN_MAX_SIZE;
+
+            status = spdmGetCertChains_HAL(pGpu,
+                                           pSpdm,
+                                           pParams->certChain,
+                                           &pParams->certChainSize,
+                                           pParams->attestationCertChain,
+                                           &pParams->attestationCertChainSize);
+            if (status != NV_OK)
+            {
+                // Attestation failure, tear down the CC system.
+                confComputeSetErrorState(pGpu, pConfCompute);
+            }
+
+            return status;
         }
-
-        return status;
     }
-
     return NV_ERR_OBJECT_NOT_FOUND;
 }
 
@@ -314,25 +332,29 @@ confComputeApiCtrlCmdGetGpuAttestationReport_IMPL
     Subdevice           *pSubdevice   = NULL;
     OBJGPU              *pGpu         = NULL;
     ConfidentialCompute *pConfCompute = NULL;
+    Spdm                *pSpdm        = NULL;
     NV_STATUS            status       = NV_OK;
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     NV_CHECK_OK_OR_RETURN(LEVEL_INFO,
         subdeviceGetByHandle(RES_GET_CLIENT(pConfComputeApi),
                              pParams->hSubDevice, &pSubdevice));
+
     pGpu         = GPU_RES_GET_GPU(pSubdevice);
+    pSpdm        = GPU_GET_SPDM(pGpu);
     pConfCompute = GPU_GET_CONF_COMPUTE(pGpu);
 
-    if (pConfCompute != NULL && pConfCompute->pSpdm != NULL &&
-        pConfCompute->getProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_SPDM_ENABLED))
+    if (pConfCompute != NULL &&
+        confComputeIsSpdmEnabled(pGpu, pConfCompute) &&
+        pSpdm->getProperty(pSpdm, PDB_PROP_SPDM_ENABLED))
     {
         // Set max size of report buffers before calling SPDM.
         pParams->attestationReportSize    = NV_CONF_COMPUTE_GPU_ATTESTATION_REPORT_MAX_SIZE;
         pParams->cecAttestationReportSize = NV_CONF_COMPUTE_GPU_CEC_ATTESTATION_REPORT_MAX_SIZE;
 
         status = spdmGetAttestationReport(pGpu,
-                                          pConfCompute->pSpdm,
+                                          pSpdm,
                                           pParams->nonce,
                                           pParams->attestationReport,
                                           &pParams->attestationReportSize,
@@ -362,7 +384,7 @@ confComputeApiCtrlCmdGpuGetNumSecureChannels_IMPL
     OBJGPU     *pGpu;
     KernelFifo *pKernelFifo;
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     NV_CHECK_OK_OR_RETURN(LEVEL_INFO,
         subdeviceGetByHandle(RES_GET_CLIENT(pConfComputeApi),
@@ -384,7 +406,14 @@ confComputeApiCtrlCmdSystemGetSecurityPolicy_IMPL
     NV_CONF_COMPUTE_CTRL_GET_SECURITY_POLICY_PARAMS *pParams
 )
 {
-    return NV_ERR_NOT_SUPPORTED;
+    OBJSYS    *pSys = SYS_GET_INSTANCE();
+    OBJGPUMGR *pGpuMgr = SYS_GET_GPUMGR(pSys);
+
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
+
+    pParams->attackerAdvantage = pGpuMgr->ccAttackerAdvantage;
+
+    return NV_OK;
 }
 
 NV_STATUS
@@ -394,6 +423,103 @@ confComputeApiCtrlCmdSystemSetSecurityPolicy_IMPL
     NV_CONF_COMPUTE_CTRL_SET_SECURITY_POLICY_PARAMS *pParams
 )
 {
-    return NV_ERR_NOT_SUPPORTED;
+    OBJSYS    *pSys = SYS_GET_INSTANCE();
+    OBJGPUMGR *pGpuMgr = SYS_GET_GPUMGR(pSys);
+    OBJGPU    *pGpu;
+    NvU32      gpuMask;
+    NvU32      gpuInstance = 0;
+    RM_API    *pRmApi      = NULL;
+    NV_STATUS  status = NV_OK;
+    NV2080_CTRL_CMD_INTERNAL_CONF_COMPUTE_SET_SECURITY_POLICY_PARAMS params = {0};
+
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
+
+    // CC security policy can only be set before GpuReadyState is set.
+    NV_CHECK_OR_RETURN(LEVEL_INFO, pConfComputeApi->pCcCaps->bAcceptClientRequest == NV_FALSE,
+                       NV_ERR_INVALID_STATE);
+
+    if ((pParams->attackerAdvantage < SET_SECURITY_POLICY_ATTACKER_ADVANTAGE_MIN) ||
+        (pParams->attackerAdvantage > SET_SECURITY_POLICY_ATTACKER_ADVANTAGE_MAX))
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    params.attackerAdvantage = pParams->attackerAdvantage;
+    (void)gpumgrGetGpuAttachInfo(NULL, &gpuMask);
+
+    while ((pGpu = gpumgrGetNextGpu(gpuMask, &gpuInstance)) != NULL)
+    {
+        pRmApi = GPU_GET_PHYSICAL_RMAPI(pGpu);
+        ConfidentialCompute* pConfCompute = GPU_GET_CONF_COMPUTE(pGpu);
+
+        status = pRmApi->Control(pRmApi,
+                                pGpu->hInternalClient,
+                                pGpu->hInternalSubdevice,
+                                NV2080_CTRL_CMD_INTERNAL_CONF_COMPUTE_SET_SECURITY_POLICY,
+                                &params,
+                                sizeof(params));
+        if (status != NV_OK)
+            return status;
+
+        NV_ASSERT_OK_OR_RETURN(confComputeSetKeyRotationThreshold(pConfCompute,
+                                                                  pParams->attackerAdvantage));
+    }
+
+    pGpuMgr->ccAttackerAdvantage = pParams->attackerAdvantage;
+
+    return status;
 }
 
+NV_STATUS
+confComputeApiCtrlCmdGpuGetKeyRotationState_IMPL
+(
+    ConfidentialComputeApi                                     *pConfComputeApi,
+    NV_CONF_COMPUTE_CTRL_CMD_GPU_GET_KEY_ROTATION_STATE_PARAMS *pParams
+)
+{
+    Subdevice           *pSubdevice;
+    OBJGPU              *pGpu;
+    ConfidentialCompute *pConfCompute;
+    NvBool               bKernelKeyRotation = NV_FALSE;
+    NvBool               bUserKeyRotation = NV_FALSE;
+
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
+
+    NV_CHECK_OK_OR_RETURN(LEVEL_INFO,
+        subdeviceGetByHandle(RES_GET_CLIENT(pConfComputeApi),
+        pParams->hSubDevice, &pSubdevice));
+
+    pGpu = GPU_RES_GET_GPU(pSubdevice);
+    pConfCompute = GPU_GET_CONF_COMPUTE(pGpu);
+
+    if ((pConfCompute == NULL) ||
+        !pConfCompute->getProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_KEY_ROTATION_SUPPORTED) ||
+        !pConfCompute->getProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_KEY_ROTATION_ENABLED))
+    {
+        pParams->keyRotationState = NV_CONF_COMPUTE_CTRL_CMD_GPU_KEY_ROTATION_DISABLED;
+        return NV_OK;
+    }
+
+    bKernelKeyRotation = FLD_TEST_DRF(_REG_STR, _RM_CONF_COMPUTE_KEY_ROTATION, _KERNEL_KEYS, _YES,
+                                      pConfCompute->keyRotationEnableMask);
+
+    bUserKeyRotation = FLD_TEST_DRF(_REG_STR, _RM_CONF_COMPUTE_KEY_ROTATION, _USER_KEYS, _YES,
+                                    pConfCompute->keyRotationEnableMask);
+    if (bKernelKeyRotation && bUserKeyRotation)
+    {
+        pParams->keyRotationState = NV_CONF_COMPUTE_CTRL_CMD_GPU_KEY_ROTATION_BOTH_ENABLED;
+    }
+    else if (bKernelKeyRotation && !bUserKeyRotation)
+    {
+        pParams->keyRotationState = NV_CONF_COMPUTE_CTRL_CMD_GPU_KEY_ROTATION_KERN_ENABLED;
+    }
+    else if (!bKernelKeyRotation && bUserKeyRotation)
+    {
+        pParams->keyRotationState = NV_CONF_COMPUTE_CTRL_CMD_GPU_KEY_ROTATION_USER_ENABLED;
+    }
+    else
+    {
+        pParams->keyRotationState = NV_CONF_COMPUTE_CTRL_CMD_GPU_KEY_ROTATION_DISABLED;
+    }
+    return NV_OK;
+}

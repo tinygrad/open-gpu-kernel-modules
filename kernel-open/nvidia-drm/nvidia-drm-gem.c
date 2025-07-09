@@ -144,6 +144,12 @@ void nv_drm_gem_object_init(struct nv_drm_device *nv_dev,
 #endif
 
     drm_gem_private_object_init(dev, &nv_gem->base, size);
+
+    /* Create mmap offset early for drm_gem_prime_mmap(), if possible. */
+    if (nv_gem->ops->create_mmap_offset) {
+        uint64_t offset;
+        nv_gem->ops->create_mmap_offset(nv_dev, nv_gem, &offset);
+    }
 }
 
 struct drm_gem_object *nv_drm_gem_prime_import(struct drm_device *dev,
@@ -166,8 +172,11 @@ struct drm_gem_object *nv_drm_gem_prime_import(struct drm_device *dev,
              */
             gem_dst = nv_gem_src->ops->prime_dup(dev, nv_gem_src);
 
-            if (gem_dst)
-                return gem_dst;
+            if (gem_dst == NULL) {
+                return ERR_PTR(-ENOTSUPP);
+            }
+
+            return gem_dst;
         }
     }
 #endif /* NV_DMA_BUF_OWNER_PRESENT */
@@ -232,6 +241,7 @@ int nv_drm_gem_map_offset_ioctl(struct drm_device *dev,
         return -EINVAL;
     }
 
+    /* mmap offset creation is idempotent, fetch it by creating it again. */
     if (nv_gem->ops->create_mmap_offset) {
         ret = nv_gem->ops->create_mmap_offset(nv_dev, nv_gem, &params->offset);
     } else {
@@ -319,7 +329,7 @@ int nv_drm_gem_identify_object_ioctl(struct drm_device *dev,
     struct nv_drm_gem_object *nv_gem = NULL;
 
     if (!drm_core_check_feature(dev, DRIVER_MODESET)) {
-        return -EINVAL;
+        return -EOPNOTSUPP;
     }
 
     nv_dma_buf = nv_drm_gem_object_dma_buf_lookup(dev, filep, p->handle);

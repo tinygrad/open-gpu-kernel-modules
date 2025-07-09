@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2019-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2019-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -83,12 +83,16 @@
 #include <gpu/kern_gpu_power.h>
 #include <gpu_mgr/gpu_mgr.h>
 #include <core/locks.h>
+#include <pex.h>
+#include <acpidsmguids.h>
 #include "kernel/gpu/intr/intr.h"
 
 #include <gpu/mem_sys/kern_mem_sys.h>
 #include <gpu/subdevice/subdevice.h>
+#include <ctrl/ctrl0080/ctrl0080gpu.h>
 #include <ctrl/ctrl2080/ctrl2080unix.h>
-#include <objtmr.h>
+#include <gpu/timer/objtmr.h>
+
 
 //
 // Schedule timer based callback, to check for the complete GPU Idleness.
@@ -125,6 +129,12 @@
 // than this value then it will be capped to this value.
 //
 #define GCOFF_DYNAMIC_PM_MAX_FB_SIZE_MB      1024
+
+//
+// Safe/Fallback value of PEX reset delay for GCOFF/GPUOFF.
+// Used when programming upstream port as per sku specific PEX reset delay from vbios fails
+//
+#define DEFAULT_GCOFF_PEXRST_DELAY 0
 
 static void RmScheduleCallbackForIdlePreConditions(OBJGPU *);
 static void RmScheduleCallbackForIdlePreConditionsUnderGpuLock(OBJGPU *);
@@ -251,21 +261,28 @@ static NvBool RmCanEnterGcxUnderGpuLock(
     OBJGPU *pGpu
 )
 {
+    nv_state_t    *nv  = NV_GET_NV_STATE(pGpu);
+    nv_priv_t     *nvp = NV_GET_NV_PRIV(nv);
+
     NV_ASSERT(rmDeviceGpuLockIsOwner(pGpu->gpuInstance));
 
     /*
-     * If GPU does not support GC6 and the actual FB utilization is higher than the threshold,
-     * then the GPU can neither enter GC6 nor GCOFF. So, return from here.
+     * If GC6 cannot be achieved (either GC6 is unsupported or the upstream port is not configured),
+     * Check for GCOFF prerequisites
      */
-    if (!pGpu->getProperty(pGpu, PDB_PROP_GPU_RTD3_GC6_SUPPORTED))
+    if (!pGpu->getProperty(pGpu, PDB_PROP_GPU_RTD3_GC6_SUPPORTED) ||
+        !nvp->gc6_upstream_port_configured)
     {
         NvU64          usedFbSize     = 0;
-        nv_state_t    *nv             = NV_GET_NV_STATE(pGpu);
-        nv_priv_t     *nvp            = NV_GET_NV_PRIV(nv);
         MemoryManager *pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
 
+        /*
+         * In order to enter GCOFF, the FB memory threshold should be less than gcoff_max_fb_size
+         * and clients of RM should not hold the refcount to prevent GCOFF.
+         */
         if (!((memmgrGetUsedRamSize(pGpu, pMemoryManager, &usedFbSize) == NV_OK) &&
-            (usedFbSize <= nvp->dynamic_power.gcoff_max_fb_size)))
+              (usedFbSize <= nvp->dynamic_power.gcoff_max_fb_size) &&
+              (nvp->dynamic_power.clients_gcoff_disallow_refcount == 0)))
         {
             return NV_FALSE;
         }
@@ -565,134 +582,42 @@ subdeviceCtrlCmdOsUnixAudioDynamicPower_IMPL
 }
 
 /*!
- * @brief: Function to indicate if Video Memory is powered off or not by
- * checking if GPU is in GCOFF state.
- *
- * @param[in]   sp     nvidia_stack_t pointer.
- * @param[in]   pNv    nv_state_t pointer.
- *
- * @return      String indicating Video Memory power status.
- */
-
-const char* NV_API_CALL rm_get_vidmem_power_status(
-    nvidia_stack_t *sp,
-    nv_state_t     *pNv
-)
-{
-    THREAD_STATE_NODE threadState;
-    void              *fp;
-    GPU_MASK          gpuMask;
-    const char        *pVidmemPowerStatus = "?";
-
-    NV_ENTER_RM_RUNTIME(sp,fp);
-    threadStateInit(&threadState, THREAD_STATE_FLAGS_NONE);
-
-    // LOCK: acquire API lock
-    if ((rmapiLockAcquire(API_LOCK_FLAGS_NONE, RM_LOCK_MODULES_DYN_POWER)) == NV_OK)
-    {
-        OBJGPU *pGpu = NV_GET_NV_PRIV_PGPU(pNv);
-
-        // LOCK: acquire per device lock
-        if ((pGpu != NULL) &&
-           ((rmGpuGroupLockAcquire(pGpu->gpuInstance, GPU_LOCK_GRP_SUBDEVICE,
-                                   GPUS_LOCK_FLAGS_NONE, RM_LOCK_MODULES_DYN_POWER,
-                                   &gpuMask)) == NV_OK))
-        {
-            if (pGpu->getProperty(pGpu, PDB_PROP_GPU_GCOFF_STATE_ENTERED))
-            {
-                pVidmemPowerStatus = "Off";
-            }
-            else
-            {
-                pVidmemPowerStatus = "Active";
-            }
-
-            // UNLOCK: release per device lock
-            rmGpuGroupLockRelease(gpuMask, GPUS_LOCK_FLAGS_NONE);
-        }
-
-        // UNLOCK: release API lock
-        rmapiLockRelease();
-    }
-
-    threadStateFree(&threadState, THREAD_STATE_FLAGS_NONE);
-    NV_EXIT_RM_RUNTIME(sp,fp);
-
-    return pVidmemPowerStatus;
-}
-
-/*!
  * @brief: Function to indicate if GC6/GC-OFF is supported
  * or not on the SKU.
  *
- * @param[in]   sp             nvidia_stack_t pointer.
- * @param[in]   pNv            nv_state_t pointer.
+ * @param[in]   pGpu           OBJGPU pointer.
  * @param[in]   bGcxTypeGc6    If true, returns string indicating GC6 support
  *                             otherwise returns GC-OFF support.
  *
  * @return      String indicating GC6/GC-OFF support status.
  */
-const char* NV_API_CALL rm_get_gpu_gcx_support(
-    nvidia_stack_t *sp,
-    nv_state_t     *pNv,
-    NvBool         bGcxTypeGC6
+static const char* RmGetGpuGcxSupport(
+    OBJGPU *pGpu,
+    NvBool  bGcxTypeGC6
 )
 {
-    THREAD_STATE_NODE threadState;
-    void              *fp;
-    GPU_MASK          gpuMask;
-    const char        *pSupported = "?";
-
-    NV_ENTER_RM_RUNTIME(sp,fp);
-    threadStateInit(&threadState, THREAD_STATE_FLAGS_NONE);
-
-    // LOCK: acquire API lock
-    if ((rmapiLockAcquire(API_LOCK_FLAGS_NONE, RM_LOCK_MODULES_DYN_POWER)) == NV_OK)
+    if (!pGpu->getProperty(pGpu, PDB_PROP_GPU_UNIX_DYNAMIC_POWER_SUPPORTED))
     {
-        OBJGPU *pGpu = NV_GET_NV_PRIV_PGPU(pNv);
-
-        // LOCK: acquire per device lock
-        if ((pGpu != NULL) &&
-            ((rmGpuGroupLockAcquire(pGpu->gpuInstance, GPU_LOCK_GRP_SUBDEVICE,
-                                    GPUS_LOCK_FLAGS_NONE, RM_LOCK_MODULES_DYN_POWER,
-                                    &gpuMask)) == NV_OK))
-        {
-            pSupported = "Not Supported";
-
-            if (!pGpu->getProperty(pGpu, PDB_PROP_GPU_UNIX_DYNAMIC_POWER_SUPPORTED))
-            {
-                goto done;
-            }
-
-            if (bGcxTypeGC6)
-            {
-                if (pGpu->getProperty(pGpu, PDB_PROP_GPU_RTD3_GC6_SUPPORTED))
-                {
-                    pSupported = "Supported";
-                }
-            }
-            else
-            {
-                if ((pGpu->getProperty(pGpu, PDB_PROP_GPU_RTD3_GCOFF_SUPPORTED)) ||
-                    (pGpu->getProperty(pGpu, PDB_PROP_GPU_LEGACY_GCOFF_SUPPORTED)))
-                {
-                    pSupported = "Supported";
-                }
-            }
-
-done:
-            // UNLOCK: release per device lock
-            rmGpuGroupLockRelease(gpuMask, GPUS_LOCK_FLAGS_NONE);
-        }
-
-        //UNLOCK: release API lock
-        rmapiLockRelease();
+        return "Not Supported";
     }
 
-    threadStateFree(&threadState, THREAD_STATE_FLAGS_NONE);
-    NV_EXIT_RM_RUNTIME(sp,fp);
+    if (bGcxTypeGC6)
+    {
+        if (pGpu->getProperty(pGpu, PDB_PROP_GPU_RTD3_GC6_SUPPORTED))
+        {
+            return "Supported";
+        }
+    }
+    else
+    {
+        if ((pGpu->getProperty(pGpu, PDB_PROP_GPU_RTD3_GCOFF_SUPPORTED)) ||
+            (pGpu->getProperty(pGpu, PDB_PROP_GPU_LEGACY_GCOFF_SUPPORTED)))
+        {
+            return "Supported";
+        }
+    }
 
-    return pSupported;
+    return "Not Supported";
 }
 
 /*!
@@ -824,7 +749,7 @@ rmReadAndParseDynamicPowerRegkey
         return NV_OK;
     }
 
-    chipId = DRF_VAL(_PMC, _BOOT_42, _CHIP_ID, pNvp->pmc_boot_42);
+    chipId = decodePmcBoot42ChipId(pNvp->pmc_boot_42);
 
     // From GA102+, we enable RTD3 only if system is found to be Notebook
     if ((chipId >= NV_PMC_BOOT_42_CHIP_ID_GA102) &&
@@ -886,6 +811,7 @@ void NV_API_CALL rm_init_dynamic_power_management(
         nvp->dynamic_power.dynamic_power_regkey = regkeyValue;
     }
 
+    nvp->pr3_acpi_method_present = bPr3AcpiMethodPresent;
     if (!nv_dynamic_power_available(nv) || !bPr3AcpiMethodPresent ||
         (status != NV_OK))
     {
@@ -1165,6 +1091,63 @@ os_ref_dynamic_power(
     return status;
 }
 
+/*
+ * @brief This function queries the dynamic boost support.
+ * This function returns -1 in case it failed to query the
+ * dynamic boost support. It returns 1 if dynamic boost is
+ * supported and returns 0 if dynamic boost is not supported.
+ *
+ * The caller must hold the API lock before calling this
+ * function.
+ *
+ * @param[in]   nv      nv_state_t pointer.
+ */
+static int os_get_dynamic_boost_support(
+    nv_state_t *nv    
+)
+{
+    NV_STATUS status = NV_OK;
+    RM_API *pRmApi = rmapiGetInterface(RMAPI_GPU_LOCK_INTERNAL);
+    NV0000_CTRL_SYSTEM_NVPCF_GET_POWER_MODE_INFO_PARAMS *pNvpcfParams;
+    OBJGPU *pGpu;
+    int ret;
+
+    status = os_alloc_mem((void**)&pNvpcfParams, sizeof(*pNvpcfParams));
+    if (status != NV_OK)
+    {
+        NV_PRINTF(LEVEL_ERROR, "Failed to allocate memory\n");
+        ret = -1;
+        goto end;
+    }
+
+    pGpu = NV_GET_NV_PRIV_PGPU(nv);
+    pNvpcfParams->gpuId = pGpu->gpuId;
+    pNvpcfParams->subFunc = 
+        NVPCF0100_CTRL_CONFIG_DSM_2X_FUNC_GET_SUPPORTED_CASE;
+    status = pRmApi->Control(pRmApi,
+                           nv->rmapi.hClient,
+                           nv->rmapi.hClient,
+                           NV0000_CTRL_CMD_SYSTEM_NVPCF_GET_POWER_MODE_INFO,
+                           (void*)pNvpcfParams,
+                           sizeof(*pNvpcfParams));
+    if (status == NV_OK)
+    {
+        ret = 1;
+    }
+    else if (status == NV_ERR_NOT_SUPPORTED)
+    {
+        ret = 0;
+    }
+    else
+    {
+        ret = -1;
+    }
+
+    os_free_mem(pNvpcfParams);
+end:
+    return ret;
+}
+
 /*!
  * @brief Wrapper around os_ref_dynamic_power() suitable for use from the
  * per-OS layers.
@@ -1350,7 +1333,7 @@ static NvBool RmCheckForGcxSupportOnCurrentState(
  * finished.
  *
  * Queue with lock flags:
- *     OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_SUBDEVICE_RW
+ *     OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_SUBDEVICE
  *
  * @param[in]   gpuInstance     GPU instance ID.
  * @param[in]   pArgs           Unused callback closure.
@@ -1389,12 +1372,20 @@ static void timerCallbackToRemoveIdleHoldoff(
     void *pCallbackData
 )
 {
-    OBJGPU *pGpu   = reinterpretCast(pCallbackData, OBJGPU *);
+    NV_STATUS  status = NV_OK;
+    OBJGPU    *pGpu   = reinterpretCast(pCallbackData, OBJGPU *);
 
-    osQueueWorkItemWithFlags(pGpu,
-                             RmRemoveIdleHoldoff,
-                             NULL,
-                             OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_SUBDEVICE_RW);
+    status = osQueueWorkItemWithFlags(pGpu,
+                                      RmRemoveIdleHoldoff,
+                                      NULL,
+                                      OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_SUBDEVICE);
+
+    if (status != NV_OK)
+    {
+        NV_PRINTF(LEVEL_ERROR,
+                  "Queuing of remove idle holdoff work item failed with status : 0x%x\n",
+                  status);
+    }
 }
 
 /*!
@@ -1944,7 +1935,9 @@ static void RmScheduleCallbackToRemoveIdleHoldoff(
  * @param[in]   pGpu    OBJGPU pointer.
  */
 static NvBool RmCheckRtd3GcxSupport(
-    nv_state_t *pNv
+    nv_state_t *pNv,
+    NvBool     *bGC6Support,
+    NvBool     *bGCOFFSupport
 )
 {
     nv_priv_t *nvp = NV_GET_NV_PRIV(pNv);
@@ -1952,31 +1945,21 @@ static NvBool RmCheckRtd3GcxSupport(
     RM_API    *pRmApi = rmapiGetInterface(RMAPI_GPU_LOCK_INTERNAL);
     NV_STATUS  status;
     NV0080_CTRL_GPU_GET_VIRTUALIZATION_MODE_PARAMS virtModeParams = { 0 };
-    NvBool     bGC6Support   = NV_FALSE;
-    NvBool     bGCOFFSupport = NV_FALSE;
-
     if (!pGpu->getProperty(pGpu, PDB_PROP_GPU_UNIX_DYNAMIC_POWER_SUPPORTED))
     {
-        NV_PRINTF(LEVEL_NOTICE, "RTD3/GC6 is not supported for this arch\n");
+        NV_PRINTF(LEVEL_NOTICE, "RTD3 is not supported for this arch\n");
         return NV_FALSE;
     }
 
-    if (nvp->b_mobile_config_enabled)
-    {
-        bGC6Support = pGpu->getProperty(pGpu, PDB_PROP_GPU_RTD3_GC6_SUPPORTED);
-        bGCOFFSupport = bGC6Support;
-    }
-    else
-    {
-        bGC6Support = pGpu->getProperty(pGpu, PDB_PROP_GPU_RTD3_GC6_SUPPORTED);
-        bGCOFFSupport = pGpu->getProperty(pGpu, PDB_PROP_GPU_RTD3_GCOFF_SUPPORTED);
-    }
+    *bGC6Support = pGpu->getProperty(pGpu, PDB_PROP_GPU_RTD3_GC6_SUPPORTED);
+    *bGCOFFSupport = nvp->b_mobile_config_enabled ? *bGC6Support :
+                     pGpu->getProperty(pGpu, PDB_PROP_GPU_RTD3_GCOFF_SUPPORTED);
 
-    if (!bGC6Support && !bGCOFFSupport)
+    if (!(*bGC6Support) && !(*bGCOFFSupport))
     {
         NV_PRINTF(LEVEL_NOTICE,
                   "Disabling RTD3. [GC6 support=%d GCOFF support=%d]\n",
-                  bGC6Support, bGCOFFSupport);
+                  *bGC6Support, *bGCOFFSupport);
         return NV_FALSE;
     }
 
@@ -1995,7 +1978,13 @@ static NvBool RmCheckRtd3GcxSupport(
     if ((virtModeParams.virtualizationMode != NV0080_CTRL_GPU_VIRTUALIZATION_MODE_NONE) &&
         (virtModeParams.virtualizationMode != NV0080_CTRL_GPU_VIRTUALIZATION_MODE_NMOS))
     {
-        NV_PRINTF(LEVEL_NOTICE, "RTD3/GC6 is not supported on VM\n");
+        NV_PRINTF(LEVEL_NOTICE, "RTD3 is not supported on VM\n");
+        return NV_FALSE;
+    }
+
+    if (!nvp->pr3_acpi_method_present)
+    {
+        NV_PRINTF(LEVEL_NOTICE, "RTD3 ACPI support is not available.\n");
         return NV_FALSE;
     }
 
@@ -2008,47 +1997,42 @@ static NvBool RmCheckRtd3GcxSupport(
  *
  * @param[in]   nv      nv_state_t pointer.
  */
-void RmInitDeferredDynamicPowerManagement(
-    nv_state_t *nv
+static void RmInitDeferredDynamicPowerManagement(
+    nv_state_t *nv,
+    NvBool      bRtd3Support
 )
 {
     NV_STATUS  status;
     nv_priv_t *nvp  = NV_GET_NV_PRIV(nv);
 
-    // LOCK: acquire GPUs lock
-    if ((status = rmGpuLocksAcquire(GPUS_LOCK_FLAGS_NONE, RM_LOCK_MODULES_DYN_POWER)) == NV_OK)
+    if (nvp->dynamic_power.mode == NV_DYNAMIC_PM_FINE)
     {
-        if (nvp->dynamic_power.mode == NV_DYNAMIC_PM_FINE)
+        OBJGPU *pGpu = NV_GET_NV_PRIV_PGPU(nv);
+
+        if (!bRtd3Support)
         {
-            OBJGPU *pGpu = NV_GET_NV_PRIV_PGPU(nv);
-
-            if (!RmCheckRtd3GcxSupport(nv))
-            {
-                 nvp->dynamic_power.mode = NV_DYNAMIC_PM_NEVER;
-                 nvp->dynamic_power.b_fine_not_supported = NV_TRUE;
-                 NV_PRINTF(LEVEL_NOTICE, "RTD3/GC6 is not supported\n");
-                 goto unlock;
-            }
-            osAddGpuDynPwrSupported(gpuGetInstance(pGpu));
-            nvp->dynamic_power.b_fine_not_supported = NV_FALSE;
-            status = CreateDynamicPowerCallbacks(pGpu);
-
-            if (status == NV_OK)
-            {
-                RmScheduleCallbackForIdlePreConditionsUnderGpuLock(pGpu);
-
-                nvp->dynamic_power.deferred_idle_enabled = NV_TRUE;
-                // RM's default is GCOFF allow
-                nvp->dynamic_power.clients_gcoff_disallow_refcount = 0;
-            }
+             nvp->dynamic_power.mode = NV_DYNAMIC_PM_NEVER;
+             nvp->dynamic_power.b_fine_not_supported = NV_TRUE;
+             NV_PRINTF(LEVEL_NOTICE, "RTD3 is not supported.\n");
+             return;
         }
-unlock:
-        // UNLOCK: release GPUs lock
-        rmGpuLocksRelease(GPUS_LOCK_FLAGS_NONE, NULL);
-    }
+        osAddGpuDynPwrSupported(gpuGetInstance(pGpu));
+        nvp->dynamic_power.b_fine_not_supported = NV_FALSE;
+        status = CreateDynamicPowerCallbacks(pGpu);
 
-    if (status != NV_OK)
-       NV_PRINTF(LEVEL_ERROR, "Failed to register for dynamic power callbacks\n");
+        if (status == NV_OK)
+        {
+            RmScheduleCallbackForIdlePreConditionsUnderGpuLock(pGpu);
+
+            nvp->dynamic_power.deferred_idle_enabled = NV_TRUE;
+            // RM's default is GCOFF allow
+            nvp->dynamic_power.clients_gcoff_disallow_refcount = 0;
+        }
+        else
+        {
+            NV_PRINTF(LEVEL_ERROR, "Failed to register for dynamic power callbacks\n");
+        }
+    }
 }
 
 /*!
@@ -2126,7 +2110,7 @@ RmUpdateFixedFbsrModes(OBJGPU *pGpu)
 }
 
 static NV_STATUS
-RmPowerManagementInternal(
+RmPowerManagement(
     OBJGPU *pGpu,
     nv_pm_action_t pmAction
 )
@@ -2216,19 +2200,6 @@ RmPowerManagementInternal(
     return rmStatus;
 }
 
-static NV_STATUS
-RmPowerManagement(
-    OBJGPU *pGpu,
-    nv_pm_action_t pmAction
-)
-{
-    NV_STATUS   rmStatus;
-
-    rmStatus = RmPowerManagementInternal(pGpu, pmAction);
-
-    return rmStatus;
-}
-
 /*!
  * @brief Call core RM to perform the GCx (GC6/GCOF) entry sequence (before
  * powering off the GPU) or exit sequence (after powering the GPU back on).
@@ -2252,6 +2223,7 @@ NV_STATUS RmGcxPowerManagement(
 {
     KernelMemorySystem *pKernelMemorySystem = GPU_GET_KERNEL_MEMORY_SYSTEM(pGpu);
     nv_state_t         *nv                  = NV_GET_NV_STATE(pGpu);
+    nv_priv_t          *nvp                 = NV_GET_NV_PRIV(nv);
     NV_STATUS           status              = NV_OK;
 
     if (pGpu->acpiMethodData.jtMethodData.bSBIOSCaps &&
@@ -2282,7 +2254,8 @@ NV_STATUS RmGcxPowerManagement(
         // 2. For system PM with s2idle, GC6 can be used if it is
         //    supported by the GPU.
         //
-        if (pGpu->getProperty(pGpu, PDB_PROP_GPU_RTD3_GC6_SUPPORTED))
+        if (pGpu->getProperty(pGpu, PDB_PROP_GPU_RTD3_GC6_SUPPORTED) &&
+            nvp->gc6_upstream_port_configured)
         {
             bCanUseGc6 = bIsDynamicPM ? NV_TRUE : nv_s2idle_pm_configured();
         }
@@ -2299,10 +2272,14 @@ NV_STATUS RmGcxPowerManagement(
             pGpu->setProperty(pGpu, PDB_PROP_GPU_GCOFF_STATE_ENTERING, NV_TRUE);
 
             //
-            // Set 'bPreserveComptagBackingStoreOnSuspendDef' so that comptag
+            // Set 'bPreserveComptagBackingStoreOnSuspend' so that comptag
             // related handling can be done during state unload/load.
             //
-            pKernelMemorySystem->bPreserveComptagBackingStoreOnSuspend = NV_TRUE;
+            if (!pMemoryManager->bUseVirtualCopyOnSuspend)
+            {
+                pKernelMemorySystem->bPreserveComptagBackingStoreOnSuspend = NV_TRUE;
+            }
+
             status = RmPowerManagement(pGpu, NV_PM_ACTION_STANDBY);
             pGpu->setProperty(pGpu, PDB_PROP_GPU_GCOFF_STATE_ENTERING, NV_FALSE);
 
@@ -2421,11 +2398,12 @@ NV_STATUS NV_API_CALL rm_power_management(
     NV_STATUS rmStatus = NV_OK;
     void *fp;
     NvBool bTryAgain = NV_FALSE;
+    NvBool bConsoleDisabled = NV_FALSE;
 
     NV_ENTER_RM_RUNTIME(sp,fp);
-    threadStateInit(&threadState, THREAD_STATE_FLAGS_NONE);
+    threadStateInit(&threadState, THREAD_STATE_FLAGS_DEVICE_INIT);
 
-    NV_ASSERT_OK(os_flush_work_queue(pNv->queue));
+    NV_ASSERT_OK(os_flush_work_queue(pNv->queue, pmAction != NV_PM_ACTION_RESUME));
 
     // LOCK: acquire API lock
     if ((rmStatus = rmapiLockAcquire(API_LOCK_FLAGS_NONE, RM_LOCK_MODULES_DYN_POWER)) == NV_OK)
@@ -2439,6 +2417,16 @@ NV_STATUS NV_API_CALL rm_power_management(
                 // LOCK: acquire GPUs lock
                 if ((rmStatus = rmGpuLocksAcquire(GPUS_LOCK_FLAGS_NONE, RM_LOCK_MODULES_DYN_POWER)) == NV_OK)
                 {
+                    //
+                    // For GPU driving console, disable console access here, to ensure no console
+                    // writes through BAR1 can interfere with physical RM's setup of BAR1
+                    //
+                    if (pNv->client_managed_console)
+                    {
+                        os_disable_console_access();
+                        bConsoleDisabled = NV_TRUE;
+                    }
+
                     nv_priv_t *nvp = NV_GET_NV_PRIV(pNv);
 
                     //
@@ -2473,6 +2461,11 @@ NV_STATUS NV_API_CALL rm_power_management(
                         rmStatus = RmPowerManagement(pGpu, pmAction);
                     }
 
+                    if (bConsoleDisabled)
+                    {
+                        os_enable_console_access();
+                    }
+
                     // UNLOCK: release GPUs lock
                     rmGpuLocksRelease(GPUS_LOCK_FLAGS_NONE, NULL);
                 }
@@ -2483,7 +2476,7 @@ NV_STATUS NV_API_CALL rm_power_management(
         rmapiLockRelease();
     }
 
-    NV_ASSERT_OK(os_flush_work_queue(pNv->queue));
+    NV_ASSERT_OK(os_flush_work_queue(pNv->queue, pmAction != NV_PM_ACTION_RESUME));
 
     threadStateFree(&threadState, THREAD_STATE_FLAGS_NONE);
     NV_EXIT_RM_RUNTIME(sp,fp);
@@ -2555,7 +2548,11 @@ NV_STATUS NV_API_CALL rm_transition_dynamic_power(
     status = rmGpuLocksAcquire(GPUS_LOCK_FLAGS_NONE, RM_LOCK_MODULES_DYN_POWER);
     if (status == NV_OK)
     {
+        rmapiEnterRtd3PmPath();
+
         status = RmTransitionDynamicPower(pGpu, bEnter, bTryAgain);
+
+        rmapiLeaveRtd3PmPath();
 
         // UNLOCK: release GPUs lock
         rmGpuLocksRelease(GPUS_LOCK_FLAGS_NONE, NULL);
@@ -2630,66 +2627,74 @@ void RmHandleDisplayChange(
 }
 
 /*!
+ * @brief RmGetDynamicBoostSupport() gets the notebook DB
+ * support. DB support is static information for vast majority
+ * of notebooks and hence we fetch it only once (during the first 
+ * call to this function). This way, the GPU remains in RTD3 state
+ * when procfs read is done.
+ *
+ *  @param[in]   nv    nv_state_t pointer.
+ */
+static const char* RmGetDynamicBoostSupport(
+    nv_state_t *pNv
+)
+{
+    nv_priv_t *pNvp = NV_GET_NV_PRIV(pNv);
+    const char* DbStatus = "?";
+
+    if (pNvp->db_supported == -1)
+    {
+        pNvp->db_supported = os_get_dynamic_boost_support(pNv);
+    }
+    
+    if (pNvp->db_supported == 0)
+    {
+        DbStatus = "Not Supported";
+    }
+    else if (pNvp->db_supported == 1)
+    { 
+        DbStatus = "Supported";
+    }
+    return DbStatus;
+}
+
+/*!
  * @brief: Function to query Dynamic Power Management
  *
- * @param[in]   sp     nvidia_stack_t pointer.
- * @param[in]   pNv    nv_state_t pointer.
+ * @param[in]   nvp     nv_priv_t pointer.
  *
  * @return      String indicating Dynamic Power Management status.
  */
-const char* NV_API_CALL rm_get_dynamic_power_management_status(
-    nvidia_stack_t *sp,
-    nv_state_t     *pNv
+static const char* RmGetDynamicPowerManagementStatus(
+        nv_priv_t *nvp
 )
 {
-    void              *fp;
-    nv_priv_t         *nvp = NV_GET_NV_PRIV(pNv);
-    const char        *returnString = "?";
-
-    NV_ENTER_RM_RUNTIME(sp,fp);
-
-    // LOCK: acquire API lock
-    if ((rmapiLockAcquire(API_LOCK_FLAGS_NONE, RM_LOCK_MODULES_DYN_POWER)) == NV_OK)
+   /*
+    * If the platform/driver does not support Dynamic Power Management,
+    * we set mode as NV_DYNAMIC_PM_NEVER. Hence, after RmInit if the
+    * mode is still NV_DYNAMIC_PM_FINE, we are sure that it is
+    * supported and enabled. Also see NOTE.
+    */
+    if (nvp->dynamic_power.mode == NV_DYNAMIC_PM_FINE)
     {
-        OBJGPU *pGpu = NV_GET_NV_PRIV_PGPU(pNv);
+        return "Enabled (fine-grained)";
+    }
+    else if (nvp->dynamic_power.mode == NV_DYNAMIC_PM_COARSE)
+    {
+        return "Enabled (coarse-grained)";
+    }
+    else if (nvp->dynamic_power.mode == NV_DYNAMIC_PM_NEVER)
+    {
 
-        // Check if RM is inited
-        if (pGpu != NULL)
-        {
-           /*
-            * If the platform/driver does not support Dynamic Power Management,
-            * we set mode as NV_DYNAMIC_PM_NEVER. Hence, after RmInit if the
-            * mode is still NV_DYNAMIC_PM_FINE, we are sure that it is
-            * supported and enabled. Also see NOTE.
-            */
-            if (nvp->dynamic_power.mode == NV_DYNAMIC_PM_FINE)
-            {
-                returnString = "Enabled (fine-grained)";
-            }
-            else if (nvp->dynamic_power.mode == NV_DYNAMIC_PM_COARSE)
-            {
-                returnString = "Enabled (coarse-grained)";
-            }
-            else if (nvp->dynamic_power.mode == NV_DYNAMIC_PM_NEVER)
-            {
-
-                if (nvp->dynamic_power.dynamic_power_regkey ==
-                    NV_REG_DYNAMIC_POWER_MANAGEMENT_NEVER)
-                    returnString = "Disabled";
-                else if (nvp->dynamic_power.dynamic_power_regkey ==
-                         NV_REG_DYNAMIC_POWER_MANAGEMENT_DEFAULT)
-                    returnString = "Disabled by default";
-                else
-                    returnString = "Not supported";
-            }
-        }
-        //UNLOCK: release API lock
-        rmapiLockRelease();
+        if (nvp->dynamic_power.dynamic_power_regkey ==
+            NV_REG_DYNAMIC_POWER_MANAGEMENT_NEVER)
+            return "Disabled";
+        else if (nvp->dynamic_power.dynamic_power_regkey ==
+                 NV_REG_DYNAMIC_POWER_MANAGEMENT_DEFAULT)
+            return "Disabled by default";
     }
 
-    NV_EXIT_RM_RUNTIME(sp,fp);
-
-    return returnString;
+    return "Not supported";
 }
 
 static void RmHandleIdleSustained(
@@ -2722,7 +2727,7 @@ static void RmQueueIdleSustainedWorkitem(
         status = osQueueWorkItemWithFlags(pGpu,
                                           RmHandleIdleSustained,
                                           NULL,
-                                          OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_SUBDEVICE_RW);
+                                          OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_SUBDEVICE);
         if (status != NV_OK)
         {
             NV_PRINTF(LEVEL_WARNING,
@@ -2737,28 +2742,20 @@ static void RmQueueIdleSustainedWorkitem(
 /*
  * Allocate resources needed for S0ix-based system power management.
  */
-void
+static void
 RmInitS0ixPowerManagement(
-    nv_state_t *nv
+    nv_state_t *nv,
+    NvBool bRtd3Support,
+    NvBool bGC6Support
 )
 {
     nv_priv_t  *nvp = NV_GET_NV_PRIV(nv);
     NvU32       data;
-    NvBool      bRtd3Gc6Support = NV_FALSE;
 
     // S0ix-based S2Idle, on desktops, is not supported yet. Return early for desktop SKUs
     if (!nvp->b_mobile_config_enabled)
     {
         return;
-    }
-
-    // LOCK: acquire GPUs lock
-    if (rmGpuLocksAcquire(GPUS_LOCK_FLAGS_NONE, RM_LOCK_MODULES_INIT) == NV_OK)
-    {
-        bRtd3Gc6Support = RmCheckRtd3GcxSupport(nv);
-
-        // UNLOCK: release GPUs lock
-        rmGpuLocksRelease(GPUS_LOCK_FLAGS_NONE, NULL);
     }
 
     /*
@@ -2769,7 +2766,7 @@ RmInitS0ixPowerManagement(
      * 2. The platform has support for s0ix.
      * 3. Feature regkey EnableS0ixPowerManagement is enabled.
      */
-    if (bRtd3Gc6Support &&
+    if (bRtd3Support && bGC6Support &&
         nv_platform_supports_s0ix() &&
         (osReadRegistryDword(NULL, NV_REG_ENABLE_S0IX_POWER_MANAGEMENT,
                              &data) == NV_OK) && (data == 1))
@@ -2789,3 +2786,200 @@ RmInitS0ixPowerManagement(
         }
     }
 }
+
+/*!
+ * @brief: Helper function to abstract the execution and return value verification
+ *         of PEX DSM methods, necessary for GC6 to work in Desktops.
+ *
+ * This function is capable to invoke three _DSM methods, as listed below:
+ *   0x0: _DSM for "Query supported functions"
+ *        (for more details, refer to section 9.1.1 of the ACPI 6.3 Specification).
+ *   0xA: _DSM for "Requesting D3cold Aux Power Limit"
+ *        (for more details, refer to section 4.6.10 of PCI Firmware Specification v3.3)
+ *   0xB: _DSM for "Adding PERST# Assertion Delay"
+ *        (for more details, refer to section 4.6.11 of PCI Firmware Specification v3.3)
+ *
+ * @param[in]   nv                 nv_state_t pointer.
+ * @param[in]   dsmSubFunc         subfunction to invoke.
+ * @param[in]   data               input data for dsmSubFunc.
+ *
+ * @return      TRUE if dsmSubFunc executed successfully and return value is as expected;
+ *              FALSE otherwise.
+ */
+static NvBool RmAcpiD3ColdDsm
+(
+    nv_state_t *nv,
+    NvU32       dsmSubFunc,
+    NvU32       data
+)
+{
+    NvU32 inData = data;
+
+    /*
+     * Third argument (i.e. acpiDsmRev) is sent as 4 because PEX_FUNC_AUXPOWERLIMIT and
+     * PEX_FUNC_PEXRST_DELAY sub-functions were introduced in PCI Firmware Specification 3.2
+     * and they are supported only for _DSM revision 4 onwards. But, RM still use _DSM
+     * revision 2 (see drivers/common/inc/pex.h). Hence, the need to hardcode 4 here.
+     */
+    if (nv_acpi_d3cold_dsm_for_upstream_port(nv, (NvU8 *)&PEX_DSM_GUID, 4, dsmSubFunc, &data) != NV_OK)
+    {
+        NV_PRINTF(LEVEL_NOTICE, "%s: PEX _DSM subfunction: 0x%X failed.\n", __FUNCTION__, dsmSubFunc);
+        return NV_FALSE;
+    }
+
+    switch (dsmSubFunc)
+    {
+        case NV_ACPI_ALL_FUNC_SUPPORT:
+            return ((data & NVBIT(PEX_FUNC_PEXRST_DELAY)) &&
+                    (data & NVBIT(PEX_FUNC_AUXPOWERLIMIT)));
+
+        case PEX_FUNC_PEXRST_DELAY:
+            return (inData == data);
+
+        case PEX_FUNC_AUXPOWERLIMIT:
+            return ((data == NV_AUX_POWER_REQUEST_STATUS_GRANTED_WITH_12V_POWER) ||
+                    (data == NV_AUX_POWER_REQUEST_STATUS_GRANTED_WITHOUT_12V_POWER));
+
+        default:
+            return NV_FALSE;
+    }
+
+    return NV_FALSE;
+}
+
+static NvBool RmConfigureUpstreamPortForRTD3(
+    nv_state_t *nv,
+    NvBool      bConfigureForGC6
+)
+{
+    nv_priv_t *nvp  = NV_GET_NV_PRIV(nv);
+    OBJGPU    *pGpu = NV_GET_NV_PRIV_PGPU(nv);
+
+    if (nvp->b_mobile_config_enabled)
+        return NV_TRUE;
+
+    if (!RmAcpiD3ColdDsm(nv, NV_ACPI_ALL_FUNC_SUPPORT, 0))
+    {
+        return NV_FALSE;
+    }
+
+    if (!RmAcpiD3ColdDsm(nv, PEX_FUNC_PEXRST_DELAY,
+                         bConfigureForGC6 ? pGpu->gc6State.GC6PerstDelay : DEFAULT_GCOFF_PEXRST_DELAY))
+    {
+        return NV_FALSE;
+    }
+
+    if (!RmAcpiD3ColdDsm(nv, PEX_FUNC_AUXPOWERLIMIT,
+                         bConfigureForGC6 ? pGpu->gc6State.GC6TotalBoardPower : 0))
+    {
+        if (bConfigureForGC6)
+            RmAcpiD3ColdDsm(nv, PEX_FUNC_PEXRST_DELAY, DEFAULT_GCOFF_PEXRST_DELAY);
+
+        return NV_FALSE;
+    }
+
+    NV_PRINTF(LEVEL_NOTICE,
+              "Aux Power and Pex delay settings %s successfully.\n",
+              bConfigureForGC6? "applied": "cleared");
+
+    return NV_TRUE;
+}
+
+void RmInitPowerManagement(
+    nv_state_t *nv
+)
+{
+    // LOCK: acquire GPUs lock
+    if (rmGpuLocksAcquire(GPUS_LOCK_FLAGS_NONE, RM_LOCK_MODULES_INIT) == NV_OK)
+    {
+        NvBool bGC6Support   = NV_FALSE;
+        NvBool bGCOFFSupport = NV_FALSE;
+        NvBool bRtd3Support  = RmCheckRtd3GcxSupport(nv, &bGC6Support, &bGCOFFSupport);
+        nv_priv_t *nvp       = NV_GET_NV_PRIV(nv);
+
+        RmInitDeferredDynamicPowerManagement(nv, bRtd3Support);
+        RmInitS0ixPowerManagement(nv, bRtd3Support, bGC6Support);
+
+        if (bRtd3Support && bGC6Support &&
+            (nvp->s0ix_pm_enabled || (nvp->dynamic_power.mode == NV_DYNAMIC_PM_FINE)))
+        {
+            nvp->gc6_upstream_port_configured = RmConfigureUpstreamPortForRTD3(nv, NV_TRUE);
+        }
+
+        // UNLOCK: release GPUs lock
+        rmGpuLocksRelease(GPUS_LOCK_FLAGS_NONE, NULL);
+    }
+}
+
+void RmDestroyPowerManagement(
+    nv_state_t *nv
+)
+{
+    nv_priv_t *nvp = NV_GET_NV_PRIV(nv);
+
+    if (nvp->gc6_upstream_port_configured)
+    {
+        RmConfigureUpstreamPortForRTD3(nv, NV_FALSE);
+    }
+
+    RmDestroyDeferredDynamicPowerManagement(nv);
+}
+
+void NV_API_CALL rm_get_power_info(
+    nvidia_stack_t  *sp,
+    nv_state_t      *pNv,
+    nv_power_info_t *powerInfo
+)
+{
+    THREAD_STATE_NODE threadState;
+    void              *fp;
+    GPU_MASK          gpuMask;
+    const char       *pVidmemPowerStatus = "?";
+    const char       *pGc6Supported = "?";
+    const char       *pGcoffSupported = "?";
+    const char       *pDynamicPowerStatus = "?";
+    const char       *pS0ixStatus = "?";
+    const char       *pDbStatus = "?";
+
+    NV_ENTER_RM_RUNTIME(sp,fp);
+    threadStateInit(&threadState, THREAD_STATE_FLAGS_NONE);
+
+    // LOCK: acquire API lock
+    if ((rmapiLockAcquire(API_LOCK_FLAGS_NONE, RM_LOCK_MODULES_DYN_POWER)) == NV_OK)
+    {
+        OBJGPU *pGpu = NV_GET_NV_PRIV_PGPU(pNv);
+
+        // LOCK: acquire per device lock
+        if ((pGpu != NULL) &&
+           ((rmGpuGroupLockAcquire(pGpu->gpuInstance, GPU_LOCK_GRP_SUBDEVICE,
+                                   GPUS_LOCK_FLAGS_NONE, RM_LOCK_MODULES_DYN_POWER,
+                                   &gpuMask)) == NV_OK))
+        {
+            nv_priv_t *pNvp = NV_GET_NV_PRIV(pNv);
+
+            pVidmemPowerStatus = pGpu->getProperty(pGpu, PDB_PROP_GPU_GCOFF_STATE_ENTERED) ?
+                                    "Off" : "Active";
+            pDynamicPowerStatus = RmGetDynamicPowerManagementStatus(pNvp);
+            pGc6Supported = RmGetGpuGcxSupport(pGpu, NV_TRUE);
+            pGcoffSupported = RmGetGpuGcxSupport(pGpu, NV_FALSE);
+            pS0ixStatus = pNvp->s0ix_pm_enabled ? "Enabled" : "Disabled";
+            pDbStatus = RmGetDynamicBoostSupport(pNv);
+            // UNLOCK: release per device lock
+            rmGpuGroupLockRelease(gpuMask, GPUS_LOCK_FLAGS_NONE);
+        }
+
+        // UNLOCK: release API lock
+        rmapiLockRelease();
+    }
+
+    threadStateFree(&threadState, THREAD_STATE_FLAGS_NONE);
+    NV_EXIT_RM_RUNTIME(sp,fp);
+
+    powerInfo->vidmem_power_status = pVidmemPowerStatus;
+    powerInfo->dynamic_power_status = pDynamicPowerStatus;
+    powerInfo->gc6_support = pGc6Supported;
+    powerInfo->gcoff_support = pGcoffSupported;
+    powerInfo->s0ix_status = pS0ixStatus;
+    powerInfo->db_support = pDbStatus;
+}
+

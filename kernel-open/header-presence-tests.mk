@@ -14,7 +14,10 @@ NV_HEADER_PRESENCE_TESTS = \
   drm/drm_encoder.h \
   drm/drm_atomic_uapi.h \
   drm/drm_drv.h \
+  drm/drm_edid.h \
   drm/drm_fbdev_generic.h \
+  drm/drm_fbdev_ttm.h \
+  drm/drm_client_setup.h \
   drm/drm_framebuffer.h \
   drm/drm_connector.h \
   drm/drm_probe_helper.h \
@@ -28,10 +31,14 @@ NV_HEADER_PRESENCE_TESTS = \
   drm/drm_device.h \
   drm/drm_mode_config.h \
   drm/drm_modeset_lock.h \
+  drm/drm_property.h \
+  drm/clients/drm_client_setup.h \
   dt-bindings/interconnect/tegra_icc_id.h \
   generated/autoconf.h \
   generated/compile.h \
   generated/utsrelease.h \
+  linux/aperture.h \
+  linux/dma-direct.h \
   linux/efi.h \
   linux/kconfig.h \
   linux/platform/tegra/mc_utils.h \
@@ -52,19 +59,17 @@ NV_HEADER_PRESENCE_TESTS = \
   linux/dma-resv.h \
   soc/tegra/chip-id.h \
   soc/tegra/fuse.h \
+  soc/tegra/fuse-helper.h \
   soc/tegra/tegra_bpmp.h \
   video/nv_internal.h \
   linux/platform/tegra/dce/dce-client-ipc.h \
   linux/nvhost.h \
   linux/nvhost_t194.h \
   linux/host1x-next.h \
-  asm/book3s/64/hash-64k.h \
   asm/set_memory.h \
   asm/prom.h \
-  asm/powernv.h \
   linux/atomic.h \
   asm/barrier.h \
-  asm/opal-api.h \
   sound/hdaudio.h \
   asm/pgtable_types.h \
   asm/page.h \
@@ -97,5 +102,8 @@ NV_HEADER_PRESENCE_TESTS = \
   linux/sync_file.h \
   linux/cc_platform.h \
   asm/cpufeature.h \
-  linux/mpi.h
+  linux/mpi.h \
+  asm/mshyperv.h \
+  crypto/sig.h \
+  linux/pfn_t.h
 

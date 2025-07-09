@@ -32,11 +32,12 @@
 #include "gpu/gsp/kernel_gsp.h"
 
 #include "published/turing/tu102/dev_vm.h"
+#include "published/turing/tu102/dev_bus.h"
 #include "published/turing/tu102/hwproject.h"
 #include "published/turing/tu102/dev_nv_xve.h"
+#include "published/turing/tu102/dev_nv_xve3g_vf.h"
 #include "published/turing/tu102/dev_gc6_island.h"
 #include "published/turing/tu102/dev_gc6_island_addendum.h"
-#include "published/turing/tu102/dev_falcon_v4.h"
 
 /*!
  * @brief Returns SR-IOV capabilities
@@ -113,6 +114,7 @@ NvU32 gpuGetPhysAddrWidth_TU102
     return NV_CHIP_EXTENDED_SYSTEM_PHYSICAL_ADDRESS_BITS;
 }
 
+
 //
 // List of GPU children that present for the chip. List entries contain$
 // {CLASS-ID, # of instances} pairs, e.g.: {CE, 2} is 2 instance of OBJCE. This$
@@ -133,7 +135,6 @@ static const GPUCHILDPRESENT gpuChildrenPresent_TU102[] =
     GPU_CHILD_PRESENT(KernelRc, 1),
     GPU_CHILD_PRESENT(Intr, 1),
     GPU_CHILD_PRESENT(NvDebugDump, 1),
-    GPU_CHILD_PRESENT(OBJGPUMON, 1),
     GPU_CHILD_PRESENT(OBJSWENG, 1),
     GPU_CHILD_PRESENT(OBJUVM, 1),
     GPU_CHILD_PRESENT(KernelBif, 1),
@@ -164,7 +165,6 @@ static const GPUCHILDPRESENT gpuChildrenPresent_TU104[] =
     GPU_CHILD_PRESENT(KernelRc, 1),
     GPU_CHILD_PRESENT(Intr, 1),
     GPU_CHILD_PRESENT(NvDebugDump, 1),
-    GPU_CHILD_PRESENT(OBJGPUMON, 1),
     GPU_CHILD_PRESENT(OBJSWENG, 1),
     GPU_CHILD_PRESENT(OBJUVM, 1),
     GPU_CHILD_PRESENT(KernelBif, 1),
@@ -195,7 +195,6 @@ static const GPUCHILDPRESENT gpuChildrenPresent_TU106[] =
     GPU_CHILD_PRESENT(KernelRc, 1),
     GPU_CHILD_PRESENT(Intr, 1),
     GPU_CHILD_PRESENT(NvDebugDump, 1),
-    GPU_CHILD_PRESENT(OBJGPUMON, 1),
     GPU_CHILD_PRESENT(OBJSWENG, 1),
     GPU_CHILD_PRESENT(OBJUVM, 1),
     GPU_CHILD_PRESENT(KernelBif, 1),
@@ -456,60 +455,40 @@ gpuWaitForGfwBootComplete_TU102
     OBJGPU    *pGpu
 )
 {
-    NvU32     timeoutUs = GPU_GFW_BOOT_COMPLETION_TIMEOUT_US;
-    NvU32     gfwBootProgressVal = 0;
-    RMTIMEOUT timeout;
-    NV_STATUS status = NV_OK;
+    NvU32        timeoutUs = GPU_GFW_BOOT_COMPLETION_TIMEOUT_US;
+    NvU32        gfwBootProgressVal = 0;
+    NV_STATUS    status = NV_OK;
     KernelGsp    *pKernelGsp = GPU_GET_KERNEL_GSP(pGpu);
     KernelFalcon *pKernelFalcon = staticCast(pKernelGsp, KernelFalcon);
+    NvBool       bGfwBootCompleted = NV_FALSE;
 
-    // Use the OS timer since the GPU timer is not ready yet
-    gpuSetTimeout(pGpu, gpuScaleTimeout(pGpu, timeoutUs), &timeout,
-                  GPU_TIMEOUT_FLAGS_OSTIMER);
+    timeoutUs = gpuScaleTimeout(pGpu, timeoutUs);
 
-    while (status == NV_OK)
-    {
-        if (_gpuIsGfwBootCompleted_TU102(pGpu, NULL, &gfwBootProgressVal))
-        {
-            status = NV_OK;
-            break;
-        }
+    status = kflcnWaitForHalt_HAL(pGpu, pKernelFalcon, timeoutUs, GPU_TIMEOUT_FLAGS_OSTIMER);
 
-        status = gpuCheckTimeout(pGpu, &timeout);
-    }
+    // Get GFW boot progress irrespective of falcon halt status
+    bGfwBootCompleted = _gpuIsGfwBootCompleted_TU102(pGpu, NULL, &gfwBootProgressVal);
 
     if (status != NV_OK)
     {
-        NV_PRINTF(LEVEL_ERROR, "failed to wait for GFW_BOOT: (progress 0x%x)\n",
-                  gfwBootProgressVal);
+        NV_PRINTF(LEVEL_ERROR, "GSP failed to halt with GFW_BOOT: (progress 0x%x)\n", gfwBootProgressVal);
         return status;
     }
 
-    //
-    // GFW runs on GSP, so wait for GSP to halt as well
-    // OS timer need to be used here, hence not using wrapper kflcnWaitForHalt_HAL
-    //
-    while (status == NV_OK)
+    if (!bGfwBootCompleted)
     {
-        if (FLD_TEST_DRF(_PFALCON, _FALCON, _CPUCTL_HALTED, _TRUE,
-                         kflcnRegRead_HAL(pGpu, pKernelFalcon, NV_PFALCON_FALCON_CPUCTL)))
-        {
-            return NV_OK;
-        }
-
-        status = gpuCheckTimeout(pGpu, &timeout);
+        NV_PRINTF(LEVEL_ERROR, "failed to wait for GFW_BOOT: (progress 0x%x)\n", gfwBootProgressVal);
+        return NV_ERR_NOT_READY;
     }
 
-    NV_PRINTF(LEVEL_ERROR, "GSP failed to halt after GFW completion\n");
-
-    return status;
+    return NV_OK;
 }
 
 //
 // Workaround for Bug 3809777.
 //
 // This function is not created through HAL infrastructure. It needs to be
-// called when OBJGPU is not created. HAL infrastructure can’t be used for
+// called when OBJGPU is not created. HAL infrastructure can't be used for
 // this case, so it has been added manually. It will be invoked directly by
 // gpumgrIsDeviceMsixAllowed() after checking the GPU architecture.
 //
@@ -521,7 +500,7 @@ gpuWaitForGfwBootComplete_TU102
 // devinit will run in the background. During this time, the hypervisor can
 // assume that MSI-X capability is present in the GPU and configure the guest
 // GPU PCIe device instance with MSI-X capability. When GPU tries to use the
-// MSI-X interrupts later, then interrupt won’t be triggered. To identify
+// MSI-X interrupts later, then interrupt won't be triggered. To identify
 // this case, wait for GPU devinit completion and check if MSI-X capability
 // is not hidden.
 //
@@ -577,4 +556,33 @@ NvBool gpuIsMsixAllowed_TU102
     osUnmapKernelSpace(vAddr, 4);
 
     return FLD_TEST_DRF(_XVE, _PRIV_MISC_1, _CYA_HIDE_MSIX_CAP, _FALSE, regVal);
+}
+
+/*!
+ * @brief    Reads Pbus SW Scratch register
+ *
+ * @param[in]  pGpu      OBJGPU pointer
+ * @param[in]  idx       Index of Vbios Scratch Register
+ *
+ * @return NvU32    Value stored in Register
+ */
+NvU32
+gpuReadPBusScratch_TU102(OBJGPU *pGpu, NvU8 idx)
+{
+    return GPU_REG_RD32(pGpu, NV_PBUS_SW_SCRATCH(idx));
+}
+
+/*!
+ * @brief    Writes Pbus SW Scratch register
+ *
+ * @param[in]  pGpu      OBJGPU pointer
+ * @param[in]  idx       Index of Vbios Scratch Register
+ * @param[in]  data      Value to write in Register
+ *
+ * @return Void
+ */
+void
+gpuWritePBusScratch_TU102(OBJGPU *pGpu, NvU8 idx, NvU32 data)
+{
+    GPU_REG_WR32(pGpu, NV_PBUS_SW_SCRATCH(idx), data);
 }

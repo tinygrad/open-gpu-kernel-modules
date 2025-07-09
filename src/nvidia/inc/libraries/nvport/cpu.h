@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2019-2020 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2019-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -534,7 +534,7 @@ NV_STATUS portCpuExCpuId(NvU32* pCpuInfo, NvU32 functionId,
  * @return  The performance counter value in units of ticks
  */
 NvS64 portCpuExQueryPerformanceCounter(NvS64 *pFreq);
-#define portCpuExQueryPerformanceCounter_SUPPORTED (NVOS_IS_WINDOWS && !PORT_IS_MODS && (_X86_ || _AMD64_))
+#define portCpuExQueryPerformanceCounter_SUPPORTED (NVOS_IS_WINDOWS && !PORT_IS_MODS && (_X86_ || _AMD64_ || _ARM64_))
 
 /**
  * @brief Enable PMC read feature
@@ -622,7 +622,7 @@ NV_STATUS portCpuExGetDRamWrites(NvU64 *pNumWrites);
  *         NV_FALSE If MSR is not supported
  */
 NvBool portCpuExIsMsrSupported(NvU32 address);
-#define portCpuExIsMsrSupported_SUPPORTED (NVOS_IS_WINDOWS && !PORT_IS_MODS && (_X86_ || _AMD64_))
+#define portCpuExIsMsrSupported_SUPPORTED (NVOS_IS_WINDOWS && !PORT_IS_MODS && (_X86_ || _AMD64_ || _ARM64_))
 
 /**
  * @brief Check if the current processor supports DRAM read/write request counting
@@ -632,6 +632,26 @@ NvBool portCpuExIsMsrSupported(NvU32 address);
  */
 NvBool portCpuExIsDramRwCountingSupported(void);
 #define portCpuExIsDramRwCountingSupported_SUPPORTED (NVOS_IS_WINDOWS && !PORT_IS_MODS && (_X86_ || _AMD64_))
+
+/**
+ * @brief Acquire CPU counters resource before use
+ *
+ * @param [out] pResourceHandle  handle returned from allocation
+ *
+ * @return  NV_OK    If successful.
+ */
+NV_STATUS portCpuExAcquireHardwareCounters(NvP64* pResourceHandle);
+#define portCpuExAcquireHardwareCounters_SUPPORTED (NVOS_IS_WINDOWS)
+
+/**
+ * @brief Release CPU counters resource after use
+ *
+ * @param [in]  resourceHandle  handle used to free the allocation
+ *
+ * @return  NV_OK    If successful.
+ */
+NV_STATUS portCpuExReleaseHardwareCounters(NvP64 resourceHandle);
+#define portCpuExReleaseHardwareCounters_SUPPORTED (NVOS_IS_WINDOWS)
 
 #endif // _NVPORT_CPU_H_
 /// @}

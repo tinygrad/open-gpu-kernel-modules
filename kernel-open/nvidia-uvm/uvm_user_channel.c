@@ -1,5 +1,5 @@
 /*******************************************************************************
-    Copyright (c) 2016-2023 NVIDIA Corporation
+    Copyright (c) 2016-2024 NVIDIA Corporation
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"), to
@@ -236,24 +236,25 @@ static uvm_user_channel_t *find_user_channel(uvm_va_space_t *va_space, uvm_rm_us
 // The criteria are:
 // 1) gpu_va_space must match
 // 2) rm_descriptor must match
-// 3) new_user_channel's TSG matches existing mappings
-static uvm_va_range_t *find_va_range(uvm_user_channel_t *new_user_channel, NvP64 rm_descriptor)
+// 3) hw_runlist_id must match
+// 4) new_user_channel's TSG matches existing mappings
+static uvm_va_range_channel_t *find_va_range(uvm_user_channel_t *new_user_channel, NvP64 rm_descriptor)
 {
     uvm_gpu_va_space_t *gpu_va_space = new_user_channel->gpu_va_space;
-    uvm_va_range_t *range;
+    uvm_va_range_channel_t *channel_range;
 
     // We can only allow sharing within a TSG
     if (!new_user_channel->tsg.valid)
         return NULL;
 
-    list_for_each_entry(range, &gpu_va_space->channel_va_ranges, channel.list_node) {
-        UVM_ASSERT(range->type == UVM_VA_RANGE_TYPE_CHANNEL);
-        UVM_ASSERT(range->channel.ref_count > 0);
+    list_for_each_entry(channel_range, &gpu_va_space->channel_va_ranges, list_node) {
+        UVM_ASSERT(channel_range->ref_count > 0);
 
-        if (range->channel.tsg.valid &&
-            range->channel.tsg.id == new_user_channel->tsg.id &&
-            range->channel.rm_descriptor == rm_descriptor)
-            return range;
+        if (channel_range->tsg.valid &&
+            channel_range->hw_runlist_id == new_user_channel->hw_runlist_id &&
+            channel_range->tsg.id == new_user_channel->tsg.id &&
+            channel_range->rm_descriptor == rm_descriptor)
+            return channel_range;
     }
 
     return NULL;
@@ -290,8 +291,8 @@ static NvU64 find_va_in_range(uvm_va_space_t *va_space, NvU64 base, NvU64 end, N
     }
 }
 
-// Allocate or reuse a VA range for the given channel resource, but don't map
-// it. If a new VA range is allocated, the VA used is the first unallocated VA
+// Allocate or reuse a range for the given channel resource, but don't map
+// it. If a new range is allocated, the VA used is the first unallocated VA
 // in the range [base, end] which has the appropriate alignment and size for the
 // given resource.
 static NV_STATUS create_va_range(struct mm_struct *mm,
@@ -303,7 +304,7 @@ static NV_STATUS create_va_range(struct mm_struct *mm,
     uvm_gpu_va_space_t *gpu_va_space = user_channel->gpu_va_space;
     UvmGpuChannelResourceInfo *resource = &user_channel->resources[resource_index];
     UvmGpuMemoryInfo *mem_info = &resource->resourceInfo;
-    uvm_va_range_t *range = NULL;
+    uvm_va_range_channel_t *channel_range = NULL;
     NvU64 start;
     uvm_aperture_t aperture;
     NV_STATUS status;
@@ -316,19 +317,19 @@ static NV_STATUS create_va_range(struct mm_struct *mm,
         aperture = UVM_APERTURE_VID;
 
     // See if we've already mapped this resource
-    range = find_va_range(user_channel, resource->resourceDescriptor);
-    if (range) {
+    channel_range = find_va_range(user_channel, resource->resourceDescriptor);
+    if (channel_range) {
         // We've already mapped this resource, so just bump the ref count
-        UVM_ASSERT(IS_ALIGNED(range->node.start, resource->alignment));
-        UVM_ASSERT(uvm_va_range_size(range) >= mem_info->size);
-        UVM_ASSERT(range->channel.aperture == aperture);
+        UVM_ASSERT(IS_ALIGNED(channel_range->va_range.node.start, resource->alignment));
+        UVM_ASSERT(uvm_va_range_size(&channel_range->va_range) >= mem_info->size);
+        UVM_ASSERT(channel_range->aperture == aperture);
 
-        ++range->channel.ref_count;
-        user_channel->va_ranges[resource_index] = range;
+        ++channel_range->ref_count;
+        user_channel->channel_ranges[resource_index] = channel_range;
         return NV_OK;
     }
 
-    // This is a new VA range. Find an available VA in the input region and
+    // This is a new channel range. Find an available VA in the input region and
     // allocate it there.
     start = find_va_in_range(gpu_va_space->va_space, base, end, mem_info->size, resource->alignment);
     if (!start) {
@@ -346,28 +347,29 @@ static NV_STATUS create_va_range(struct mm_struct *mm,
                                          mm,
                                          start,
                                          start + mem_info->size - 1,
-                                         &range);
+                                         &channel_range);
     if (status != NV_OK) {
         UVM_ASSERT(status != NV_ERR_UVM_ADDRESS_IN_USE);
         goto error;
     }
 
-    range->channel.gpu_va_space     = gpu_va_space;
-    range->channel.aperture         = aperture;
-    range->channel.rm_descriptor    = resource->resourceDescriptor;
-    range->channel.rm_id            = resource->resourceId;
-    range->channel.tsg.valid        = user_channel->tsg.valid;
-    range->channel.tsg.id           = user_channel->tsg.id;
-    range->channel.ref_count        = 1;
-    list_add(&range->channel.list_node, &gpu_va_space->channel_va_ranges);
+    channel_range->gpu_va_space     = gpu_va_space;
+    channel_range->aperture         = aperture;
+    channel_range->rm_descriptor    = resource->resourceDescriptor;
+    channel_range->rm_id            = resource->resourceId;
+    channel_range->hw_runlist_id    = user_channel->hw_runlist_id;
+    channel_range->tsg.valid        = user_channel->tsg.valid;
+    channel_range->tsg.id           = user_channel->tsg.id;
+    channel_range->ref_count        = 1;
+    list_add(&channel_range->list_node, &gpu_va_space->channel_va_ranges);
 
-    user_channel->va_ranges[resource_index] = range;
+    user_channel->channel_ranges[resource_index] = channel_range;
     return NV_OK;
 
 error:
-    if (range) {
-        range->channel.ref_count = 0; // Destroy assumes this
-        uvm_va_range_destroy(range, NULL);
+    if (channel_range) {
+        channel_range->ref_count = 0; // Destroy assumes this
+        uvm_va_range_destroy(&channel_range->va_range, NULL);
     }
     return status;
 }
@@ -376,32 +378,32 @@ static void destroy_va_ranges(uvm_user_channel_t *user_channel)
 {
     size_t i;
 
-    if (!user_channel || !user_channel->va_ranges)
+    if (!user_channel || !user_channel->channel_ranges)
         return;
 
     for (i = 0; i < user_channel->num_resources; i++) {
-        uvm_va_range_t *resource_range = user_channel->va_ranges[i];
+        uvm_va_range_channel_t *resource_range = user_channel->channel_ranges[i];
         if (!resource_range)
             continue;
 
-        UVM_ASSERT(resource_range->type == UVM_VA_RANGE_TYPE_CHANNEL);
-        UVM_ASSERT(resource_range->channel.rm_descriptor == user_channel->resources[i].resourceDescriptor);
-        UVM_ASSERT(resource_range->channel.rm_id         == user_channel->resources[i].resourceId);
-        UVM_ASSERT(resource_range->channel.tsg.valid == user_channel->tsg.valid);
-        UVM_ASSERT(resource_range->channel.tsg.id == user_channel->tsg.id);
+        UVM_ASSERT(resource_range->rm_descriptor == user_channel->resources[i].resourceDescriptor);
+        UVM_ASSERT(resource_range->rm_id         == user_channel->resources[i].resourceId);
+        UVM_ASSERT(resource_range->hw_runlist_id == user_channel->hw_runlist_id);
+        UVM_ASSERT(resource_range->tsg.valid == user_channel->tsg.valid);
+        UVM_ASSERT(resource_range->tsg.id == user_channel->tsg.id);
 
         // Drop the ref count on each each range
-        UVM_ASSERT(resource_range->channel.ref_count > 0);
-        if (!resource_range->channel.tsg.valid)
-            UVM_ASSERT(resource_range->channel.ref_count == 1);
+        UVM_ASSERT(resource_range->ref_count > 0);
+        if (!resource_range->tsg.valid)
+            UVM_ASSERT(resource_range->ref_count == 1);
 
-        --resource_range->channel.ref_count;
-        if (resource_range->channel.ref_count == 0)
-            uvm_va_range_destroy(resource_range, NULL);
+        --resource_range->ref_count;
+        if (resource_range->ref_count == 0)
+            uvm_va_range_destroy(&resource_range->va_range, NULL);
     }
 
-    uvm_kvfree(user_channel->va_ranges);
-    user_channel->va_ranges = NULL;
+    uvm_kvfree(user_channel->channel_ranges);
+    user_channel->channel_ranges = NULL;
 }
 
 // Channels need virtual allocations to operate, but we don't know about them.
@@ -415,8 +417,9 @@ static NV_STATUS create_va_ranges(struct mm_struct *mm,
     NvU32 i;
     NV_STATUS status;
 
-    user_channel->va_ranges = uvm_kvmalloc_zero(user_channel->num_resources * sizeof(user_channel->va_ranges[0]));
-    if (!user_channel->va_ranges)
+    user_channel->channel_ranges = uvm_kvmalloc_zero(user_channel->num_resources *
+                                                     sizeof(user_channel->channel_ranges[0]));
+    if (!user_channel->channel_ranges)
         return NV_ERR_NO_MEMORY;
 
     for (i = 0; i < user_channel->num_resources; i++) {
@@ -447,17 +450,18 @@ static NV_STATUS bind_channel_resources(uvm_user_channel_t *user_channel)
     }
 
     for (i = 0; i < user_channel->num_resources; i++) {
-        uvm_va_range_t *resource_range = user_channel->va_ranges[i];
+        uvm_va_range_channel_t *resource_range = user_channel->channel_ranges[i];
 
         UVM_ASSERT(resource_range);
-        UVM_ASSERT(resource_range->type == UVM_VA_RANGE_TYPE_CHANNEL);
-        UVM_ASSERT(resource_range->channel.rm_descriptor == user_channel->resources[i].resourceDescriptor);
-        UVM_ASSERT(resource_range->channel.rm_id         == user_channel->resources[i].resourceId);
-        UVM_ASSERT(resource_range->channel.tsg.valid == user_channel->tsg.valid);
-        UVM_ASSERT(resource_range->channel.tsg.id == user_channel->tsg.id);
+        UVM_ASSERT(resource_range->va_range.type == UVM_VA_RANGE_TYPE_CHANNEL);
+        UVM_ASSERT(resource_range->rm_descriptor == user_channel->resources[i].resourceDescriptor);
+        UVM_ASSERT(resource_range->rm_id         == user_channel->resources[i].resourceId);
+        UVM_ASSERT(resource_range->hw_runlist_id == user_channel->hw_runlist_id);
+        UVM_ASSERT(resource_range->tsg.valid == user_channel->tsg.valid);
+        UVM_ASSERT(resource_range->tsg.id == user_channel->tsg.id);
 
-        resource_va_list[i].resourceId         = resource_range->channel.rm_id;
-        resource_va_list[i].resourceVa         = resource_range->node.start;
+        resource_va_list[i].resourceId         = resource_range->rm_id;
+        resource_va_list[i].resourceVa         = resource_range->va_range.node.start;
     }
 
     status = uvm_rm_locked_call(nvUvmInterfaceBindChannelResources(user_channel->rm_retained_channel,
@@ -500,23 +504,28 @@ static NV_STATUS uvm_user_channel_map_resources(uvm_user_channel_t *user_channel
 
     for (i = 0; i < user_channel->num_resources; i++) {
         UvmGpuMemoryInfo *mem_info;
-        uvm_va_range_t *range = user_channel->va_ranges[i];
+        uvm_va_range_channel_t *range = user_channel->channel_ranges[i];
 
-        // Skip already-mapped VA ranges. Note that the ref count might not be
+        // Skip already-mapped ranges. Note that the ref count might not be
         // 1 even if the range is unmapped, because a thread which fails to map
         // will drop and re-take the VA space lock in uvm_register_channel
-        // leaving a shareable VA range in the list unmapped. This thread could
+        // leaving a shareable range in the list unmapped. This thread could
         // have attached to it during that window, so we'll do the mapping
         // instead.
-        if (range->channel.pt_range_vec.ranges) {
-            UVM_ASSERT(range->channel.ref_count >= 1);
+        if (range->pt_range_vec.ranges) {
+            UVM_ASSERT(range->ref_count >= 1);
             continue;
         }
 
         mem_info = &user_channel->resources[i].resourceInfo;
-        status = uvm_va_range_map_rm_allocation(range, user_channel->gpu, mem_info, &map_rm_params, NULL, &tracker);
+        status = uvm_va_range_map_rm_allocation(&range->va_range,
+                                                user_channel->gpu,
+                                                mem_info,
+                                                &map_rm_params,
+                                                NULL,
+                                                &tracker);
         if (status != NV_OK) {
-            // We can't destroy the VA ranges here since we only have the VA
+            // We can't destroy the ranges here since we only have the VA
             // space lock in read mode, so let the caller handle it.
             break;
         }
@@ -742,7 +751,7 @@ static void free_user_channel(nv_kref_t *nv_kref)
 {
     uvm_user_channel_t *user_channel = container_of(nv_kref, uvm_user_channel_t, kref);
     UVM_ASSERT(!user_channel->gpu_va_space);
-    UVM_ASSERT(!user_channel->va_ranges);
+    UVM_ASSERT(!user_channel->channel_ranges);
     UVM_ASSERT(!atomic_read(&user_channel->is_bound));
     uvm_kvfree(user_channel);
 }
@@ -839,7 +848,7 @@ void uvm_user_channel_destroy_detached(uvm_user_channel_t *user_channel)
     uvm_tracker_wait_deinit(&user_channel->clear_faulted_tracker);
 
     if (user_channel->resources) {
-        UVM_ASSERT(!user_channel->va_ranges);
+        UVM_ASSERT(!user_channel->channel_ranges);
 
         uvm_kvfree(user_channel->resources);
     }
@@ -959,6 +968,7 @@ NV_STATUS uvm_test_check_channel_va_space(UVM_TEST_CHECK_CHANNEL_VA_SPACE_PARAMS
     uvm_va_space_t *va_space = NULL;
     uvm_va_space_t *channel_va_space;
     uvm_gpu_t *gpu;
+    uvm_gpu_t *channel_gpu;
     uvm_fault_buffer_entry_t fault_entry;
     UvmGpuChannelInstanceInfo *channel_info;
     NV_STATUS status;
@@ -979,17 +989,12 @@ NV_STATUS uvm_test_check_channel_va_space(UVM_TEST_CHECK_CHANNEL_VA_SPACE_PARAMS
 
     // We need to do the lookup using the input file's VA space
     va_space_filp = fget(params->va_space_fd);
-    if (!uvm_file_is_nvidia_uvm(va_space_filp)) {
+    if (!uvm_file_is_nvidia_uvm_va_space(va_space_filp)) {
         status = NV_ERR_INVALID_ARGUMENT;
         goto out;
     }
 
-    va_space = uvm_fd_va_space(va_space_filp);
-    if (!va_space) {
-        status = NV_ERR_INVALID_ARGUMENT;
-        goto out;
-    }
-
+    va_space = uvm_va_space_get(va_space_filp);
     uvm_va_space_down_read(va_space);
 
     gpu = uvm_va_space_get_gpu_by_uuid(va_space, &params->gpu_uuid);
@@ -1003,7 +1008,7 @@ NV_STATUS uvm_test_check_channel_va_space(UVM_TEST_CHECK_CHANNEL_VA_SPACE_PARAMS
         goto out;
     }
 
-    // Craft enough of the fault entry to do a VA space translation
+    // Craft enough of the fault entry to do a VA space translation.
     fault_entry.fault_type = UVM_FAULT_TYPE_INVALID_PTE;
 
     if (channel_info->sysmem)
@@ -1034,10 +1039,13 @@ NV_STATUS uvm_test_check_channel_va_space(UVM_TEST_CHECK_CHANNEL_VA_SPACE_PARAMS
     // We can ignore the return code because this ioctl only cares about whether
     // the provided channel + VEID matches the provided VA space. In all of the
     // non-NV_OK cases the translation will fail and we should return
-    // NV_ERR_INVALID_CHANNEL. channel_va_space == NULL for all such cases.
-    (void)uvm_parent_gpu_fault_entry_to_va_space(gpu->parent, &fault_entry, &channel_va_space);
+    // NV_ERR_INVALID_CHANNEL. channel_gpu_va_space == NULL for all such cases.
+    (void)uvm_parent_gpu_fault_entry_to_va_space(gpu->parent,
+                                                 &fault_entry,
+                                                 &channel_va_space,
+                                                 &channel_gpu);
 
-    if (channel_va_space == va_space)
+    if (channel_va_space == va_space && channel_gpu == gpu)
         status = NV_OK;
     else
         status = NV_ERR_INVALID_CHANNEL;

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2023-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -35,7 +35,6 @@
 #include "nvrm_registry.h"
 #include "platform/chipset/chipset.h"
 #include "gpu/mem_mgr/heap.h"
-
 
 #include "class/clcba2.h" // HOPPER_SEC2_WORK_LAUNCH_A
 #include "class/cl003e.h" // NV01_MEMORY_SYSTEM
@@ -98,7 +97,8 @@ _sec2AllocAndMapBuffer
     memAllocParams.type      = NVOS32_TYPE_IMAGE;
     memAllocParams.size      = pSec2Buf->size;
     memAllocParams.attr      = DRF_DEF(OS32, _ATTR, _LOCATION,  _PCI) |
-                               DRF_DEF(OS32, _ATTR, _COHERENCY, _UNCACHED);
+                               DRF_DEF(OS32, _ATTR, _COHERENCY, _UNCACHED) |
+                               DRF_DEF(OS32, _ATTR, _PAGE_SIZE, _BIG);
     memAllocParams.attr2     = DRF_DEF(OS32, _ATTR2, _MEMORY_PROTECTION, _UNPROTECTED);
     memAllocParams.flags     = 0;
     memAllocParams.internalflags = NVOS32_ALLOC_INTERNAL_FLAGS_SKIP_SCRUB;
@@ -188,7 +188,6 @@ sec2utilsConstruct_IMPL
 
     // Allocate channel with RM internal client
     RM_API *pRmApi = rmapiGetInterface(RMAPI_GPU_LOCK_INTERNAL);
-    RmClient *pClient = NULL;
 
     OBJCHANNEL *pChannel = (OBJCHANNEL *) portMemAllocNonPaged(sizeof(OBJCHANNEL));
     NV_ASSERT_OR_RETURN(pChannel != NULL, NV_ERR_INSUFFICIENT_RESOURCES);
@@ -200,12 +199,10 @@ sec2utilsConstruct_IMPL
                                                          sizeof(pSec2Utils->hClient)), cleanup);
 
     pChannel->hClient = pSec2Utils->hClient;
-    pClient = serverutilGetClientUnderLock(pChannel->hClient);
-    NV_ASSERT_OR_GOTO(pClient != NULL, free_client);
 
     NV_ASSERT_OK_OR_GOTO(status, serverGetClientUnderLock(&g_resServ, pChannel->hClient, &pChannel->pRsClient), free_client);
 
-    NV_ASSERT_OK_OR_GOTO(status, clientSetHandleGenerator(staticCast(pClient, RsClient), 1U, ~0U - 1U), free_client);
+    NV_ASSERT_OK_OR_GOTO(status, clientSetHandleGenerator(pChannel->pRsClient, 1U, ~0U - 1U), free_client);
 
     pChannel->bClientAllocated = NV_TRUE;
     pChannel->pGpu = pGpu;
@@ -220,6 +217,8 @@ sec2utilsConstruct_IMPL
 
     pChannel->type = SWL_SCRUBBER_CHANNEL;
     pChannel->engineType = RM_ENGINE_TYPE_SEC2;
+
+    pChannel->bSecure = NV_TRUE;
 
     // Detect if we can enable fast scrub on this channel
     NV_ASSERT_OK_OR_GOTO(status, _sec2GetClass(pGpu, &pSec2Utils->sec2Class), free_client);
@@ -239,6 +238,8 @@ sec2utilsConstruct_IMPL
     pGpu->instLocOverrides  = FLD_SET_DRF(_REG_STR_RM, _INST_LOC, _USERD, _NCOH, pGpu->instLocOverrides);
 
     pChannel->engineType = NV2080_ENGINE_TYPE_SEC2;
+
+    NV_ASSERT_OK_OR_GOTO(status, channelAllocSubdevice(pGpu, pChannel), free_client);
 
     pMemoryManager->bScrubChannelSetupInProgress = NV_TRUE;
     NV_ASSERT_OK_OR_GOTO(status, memmgrMemUtilsChannelInitialize_HAL(pGpu, pMemoryManager, pChannel), free_channel);
@@ -263,7 +264,7 @@ sec2utilsConstruct_IMPL
 
     NV_ASSERT_OK_OR_GOTO(status, _sec2InitBuffers(pSec2Utils), free_channel);
 
-    NV_ASSERT_OK_OR_GOTO(status, ccslContextInitViaChannel(&pSec2Utils->pCcslCtx, pSec2Utils->hClient, pChannel->channelId), free_channel);
+    NV_ASSERT_OK_OR_GOTO(status, ccslContextInitViaChannel(&pSec2Utils->pCcslCtx, pSec2Utils->hClient, pSec2Utils->hSubdevice, pChannel->channelId), free_channel);
 
     return status;
 
@@ -310,7 +311,7 @@ sec2utilsDestruct_IMPL
     {
         if (kbusIsBarAccessBlocked(GPU_GET_KERNEL_BUS(pGpu)))
         {
-            // 
+            //
             // When PCIE is blocked, mappings should be created, used and torn
             // down when they are used
             //
@@ -375,7 +376,7 @@ sec2utilsServiceInterrupts_IMPL(Sec2Utils *pSec2Utils)
     //
     // FIXME: Bug 2463959: objmemscrub is called with the rmDeviceGpuLock in the
     // heapFree_IMPL->_stdmemPmaFree->pmaFreePages->scrubSubmitPages path.
-    // This can result in RM waiting for scrubbing to complete and yielding while holding the 
+    // This can result in RM waiting for scrubbing to complete and yielding while holding the
     // rmDeviceGpuLock. This can lead to deadlock.
     // Instead, if the lock is held, service any interrupts on SEC2 to help the engine make progress.
     // Bug 2527660 is filed to remove this change.
@@ -453,12 +454,12 @@ _sec2utilsSubmitPushBuffer
     MemoryManager *pMemoryManager = GPU_GET_MEMORY_MANAGER(pChannel->pGpu);
     NvBool bReleaseMapping = NV_FALSE;
 
-    // 
+    //
     // Use BAR1 if CPU access is allowed, otherwise allocate and init shadow
     // buffer for DMA access
     //
-    NvU32 transferFlags = (TRANSFER_FLAGS_USE_BAR1     | 
-                           TRANSFER_FLAGS_SHADOW_ALLOC | 
+    NvU32 transferFlags = (TRANSFER_FLAGS_USE_BAR1     |
+                           TRANSFER_FLAGS_SHADOW_ALLOC |
                            TRANSFER_FLAGS_SHADOW_INIT_MEM);
     NV_PRINTF(LEVEL_INFO, "Actual size of copying to be pushed: %x\n", pChannelPbInfo->size);
 
@@ -470,7 +471,7 @@ _sec2utilsSubmitPushBuffer
     }
 
     if (pChannel->pbCpuVA == NULL)
-    {    
+    {
         pChannel->pbCpuVA = memmgrMemDescBeginTransfer(pMemoryManager, pChannel->pChannelBufferMemdesc,
                                                        transferFlags);
         bReleaseMapping = NV_TRUE;
@@ -495,7 +496,7 @@ _sec2utilsSubmitPushBuffer
         return NV_ERR_NO_FREE_FIFOS;
     }
 
-    // 
+    //
     // Pushbuffer can be written in a batch, but GPFIFO and doorbell require
     // careful ordering so we do each write one-by-one
     //
@@ -590,16 +591,25 @@ sec2utilsMemset_IMPL
     memsetLength = pParams->length;
     offset = pParams->offset;
 
+    //
+    // We need not just the physical address,
+    // but the physical address to be used by the engine
+    // sec2utils is only used for AT_GPU
+    //
+
     do
     {
-        NvU64 maxContigSize = bContiguous ? memsetLength : (pageGranularity - offset % pageGranularity);
+        //
+        // Use the memdesc phys addr for calculations, but the pte address for the value
+        // programmed into SEC2
+        //
+        NvU64 dstAddr = memdescGetPhysAddr(pMemDesc, AT_GPU, offset);
+        NvU64 maxContigSize = bContiguous ? memsetLength : (pageGranularity - dstAddr % pageGranularity);
         NvU32 memsetSizeContig = (NvU32)NV_MIN(NV_MIN(memsetLength, maxContigSize), NVCBA2_DECRYPT_SCRUB_SIZE_MAX_BYTES);
 
-        channelPbInfo.dstAddr = memdescGetPhysAddr(pMemDesc, AT_GPU, offset);
+        NV_PRINTF(LEVEL_INFO, "Sec2Utils Memset dstAddr: %llx,  size: %x\n", dstAddr, memsetSizeContig);
 
-        NV_PRINTF(LEVEL_INFO, "Sec2Utils Memset dstAddr: %llx,  size: %x\n",
-                  channelPbInfo.dstAddr, memsetSizeContig);
-
+        channelPbInfo.dstAddr = memdescGetPtePhysAddr(pMemDesc, AT_GPU, offset);
         channelPbInfo.size = memsetSizeContig;
 
         status = _sec2utilsSubmitPushBuffer(pSec2Utils, pChannel, memsetSizeContig == memsetLength, nextIndex, &channelPbInfo);

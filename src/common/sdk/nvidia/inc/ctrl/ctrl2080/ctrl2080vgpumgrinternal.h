@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -61,7 +61,7 @@
 #define NV2080_CTRL_MAX_VMMU_SEGMENTS                                   384
 
 /* Must match NV2080_ENGINE_TYPE_LAST from cl2080.h */
-#define NV2080_GPU_MAX_ENGINES                                          0x40
+#define NV2080_GPU_MAX_ENGINES                                          0x54
 
 #define NV2080_CTRL_VGPU_MGR_INTERNAL_BOOTLOAD_GSP_VGPU_PLUGIN_TASK_PARAMS_MESSAGE_ID (0x1U)
 
@@ -85,6 +85,8 @@ typedef struct NV2080_CTRL_VGPU_MGR_INTERNAL_BOOTLOAD_GSP_VGPU_PLUGIN_TASK_PARAM
     NV_DECLARE_ALIGNED(NvU64 initTaskLogBuffSize, 8);
     NV_DECLARE_ALIGNED(NvU64 vgpuTaskLogBuffOffset, 8);
     NV_DECLARE_ALIGNED(NvU64 vgpuTaskLogBuffSize, 8);
+    NV_DECLARE_ALIGNED(NvU64 kernelLogBuffOffset, 8);
+    NV_DECLARE_ALIGNED(NvU64 kernelLogBuffSize, 8);
     NV_DECLARE_ALIGNED(NvU64 migRmHeapMemoryPhysAddr, 8);
     NV_DECLARE_ALIGNED(NvU64 migRmHeapMemoryLength, 8);
     NvBool bDeviceProfilingEnabled;
@@ -435,5 +437,66 @@ typedef struct NV2080_CTRL_VGPU_MGR_INTERNAL_FREE_STATES_PARAMS {
     NvU32 gfid;
     NvU32 flags;
 } NV2080_CTRL_VGPU_MGR_INTERNAL_FREE_STATES_PARAMS;
+
+/*
+ * NV2080_CTRL_CMD_VGPU_MGR_INTERNAL_GET_FRAME_RATE_LIMITER_STATUS
+ *
+ * Returns information whether frame rate limiter is disabled.
+ *
+ * bFlrDisabled [OUT]
+ *   True, if frame rate limiter is disabled.
+ *
+ * Possible status values returned are:
+ *   NV_OK
+ *   NV_ERR_INVALID_STATE
+ */
+#define NV2080_CTRL_CMD_VGPU_MGR_INTERNAL_GET_FRAME_RATE_LIMITER_STATUS (0x2080400d) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_VGPU_MGR_INTERNAL_INTERFACE_ID << 8) | NV2080_CTRL_VGPU_MGR_GET_FRAME_RATE_LIMITER_STATUS_PARAMS_MESSAGE_ID" */
+
+#define NV2080_CTRL_VGPU_MGR_GET_FRAME_RATE_LIMITER_STATUS_PARAMS_MESSAGE_ID (0xDU)
+
+typedef struct NV2080_CTRL_VGPU_MGR_GET_FRAME_RATE_LIMITER_STATUS_PARAMS {
+    NvBool bFlrDisabled;
+} NV2080_CTRL_VGPU_MGR_GET_FRAME_RATE_LIMITER_STATUS_PARAMS;
+
+/*
+ * NV2080_CTRL_CMD_VGPU_MGR_INTERNAL_SET_VGPU_HETEROGENEOUS_MODE
+ *
+ *  This command will set heterogenous mode in GSP RM
+ *
+ *  bHeterogeneousMode
+ *      Mode of heterogeneous
+ *
+ * Possible status values returned are:
+ *    NV_OK
+ *    NV_ERR_OBJECT_NOT_FOUND
+ *    NV_ERR_INVALID_STATE
+ *    NV_ERR_INVALID_ARGUMENT
+ */
+#define NV2080_CTRL_CMD_VGPU_MGR_INTERNAL_SET_VGPU_HETEROGENEOUS_MODE (0x2080400e) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_VGPU_MGR_INTERNAL_INTERFACE_ID << 8) | NV2080_CTRL_VGPU_MGR_INTERNAL_SET_VGPU_HETEROGENEOUS_MODE_PARAMS_MESSAGE_ID" */
+#define NV2080_CTRL_VGPU_MGR_INTERNAL_SET_VGPU_HETEROGENEOUS_MODE_PARAMS_MESSAGE_ID (0xEU)
+
+typedef struct NV2080_CTRL_VGPU_MGR_INTERNAL_SET_VGPU_HETEROGENEOUS_MODE_PARAMS {
+    NvBool bHeterogeneousMode;
+} NV2080_CTRL_VGPU_MGR_INTERNAL_SET_VGPU_HETEROGENEOUS_MODE_PARAMS;
+
+/*
+ * NV2080_CTRL_CMD_VGPU_MGR_INTERNAL_SET_VGPU_MIG_TIMESLICE_MODE
+ *
+ *  This command will set MIG timeslice mode in GSP RM
+ *
+ *  bMigTimeslicingModeEnabled
+ *      Mode of MIG timeslice
+ *
+ * Possible status values returned are:
+ *    NV_OK
+ *    NV_ERR_OBJECT_NOT_FOUND
+ */
+#define NV2080_CTRL_CMD_VGPU_MGR_INTERNAL_SET_VGPU_MIG_TIMESLICE_MODE (0x2080400f) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_VGPU_MGR_INTERNAL_INTERFACE_ID << 8) | NV2080_CTRL_VGPU_MGR_INTERNAL_SET_VGPU_MIG_TIMESLICE_MODE_PARAMS_MESSAGE_ID" */
+#define NV2080_CTRL_VGPU_MGR_INTERNAL_SET_VGPU_MIG_TIMESLICE_MODE_PARAMS_MESSAGE_ID (0xFU)
+
+typedef struct NV2080_CTRL_VGPU_MGR_INTERNAL_SET_VGPU_MIG_TIMESLICE_MODE_PARAMS {
+    NvBool bMigTimeslicingModeEnabled;
+} NV2080_CTRL_VGPU_MGR_INTERNAL_SET_VGPU_MIG_TIMESLICE_MODE_PARAMS;
+
 
 /* _ctrl2080vgpumgrinternal_h_ */

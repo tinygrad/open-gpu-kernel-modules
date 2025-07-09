@@ -77,12 +77,26 @@ enum FMTCoeffType
 {
     FMT_COEFF_TYPE_IDENTITY = 0,
 
+    FMT_COEFF_TYPE_REC601_YUV_8BPC_LTD_TO_RGB_16BPC_FULL,
+    FMT_COEFF_TYPE_REC601_YUV_8BPC_FULL_TO_RGB_16BPC_FULL,
+    FMT_COEFF_TYPE_REC601_YUV_10BPC_LTD_TO_RGB_16BPC_FULL,
+    FMT_COEFF_TYPE_REC601_YUV_10BPC_FULL_TO_RGB_16BPC_FULL,
+    FMT_COEFF_TYPE_REC601_YUV_12BPC_LTD_TO_RGB_16BPC_FULL,
+    FMT_COEFF_TYPE_REC601_YUV_12BPC_FULL_TO_RGB_16BPC_FULL,
+
     FMT_COEFF_TYPE_REC709_YUV_8BPC_LTD_TO_RGB_16BPC_FULL,
     FMT_COEFF_TYPE_REC709_YUV_8BPC_FULL_TO_RGB_16BPC_FULL,
     FMT_COEFF_TYPE_REC709_YUV_10BPC_LTD_TO_RGB_16BPC_FULL,
     FMT_COEFF_TYPE_REC709_YUV_10BPC_FULL_TO_RGB_16BPC_FULL,
     FMT_COEFF_TYPE_REC709_YUV_12BPC_LTD_TO_RGB_16BPC_FULL,
     FMT_COEFF_TYPE_REC709_YUV_12BPC_FULL_TO_RGB_16BPC_FULL,
+
+    FMT_COEFF_TYPE_REC2020_YUV_8BPC_LTD_TO_RGB_16BPC_FULL,
+    FMT_COEFF_TYPE_REC2020_YUV_8BPC_FULL_TO_RGB_16BPC_FULL,
+    FMT_COEFF_TYPE_REC2020_YUV_10BPC_LTD_TO_RGB_16BPC_FULL,
+    FMT_COEFF_TYPE_REC2020_YUV_10BPC_FULL_TO_RGB_16BPC_FULL,
+    FMT_COEFF_TYPE_REC2020_YUV_12BPC_LTD_TO_RGB_16BPC_FULL,
+    FMT_COEFF_TYPE_REC2020_YUV_12BPC_FULL_TO_RGB_16BPC_FULL,
 
     // FMT is always identity for RGB to avoid possible calculation error.
 
@@ -94,6 +108,20 @@ static const NvU32 FMTMatrix[FMT_COEFF_TYPE_MAX][12] =
 {
     // FMT_COEFF_TYPE_IDENTITY
     {  0x10000,        0,        0,        0,        0,  0x10000,        0,        0,        0,        0,  0x10000,        0 },
+
+    // FMT_COEFF_TYPE_REC601_YUV_8BPC_LTD_TO_RGB_16BPC_FULL
+    {  0x19A29,  0x12B3C,        0, 0x1F2038, 0x1F2F14,  0x12B3C, 0x1F9B52,   0x8819,        0,  0x12B3C,  0x20668, 0x1EEA18 },
+    // FMT_COEFF_TYPE_REC601_YUV_8BPC_FULL_TO_RGB_16BPC_FULL
+    {  0x1684C,  0x100FD,        0, 0x1F4D42, 0x1F487A,  0x100FD, 0x1FA790,   0x86EB,        0,  0x100FD,  0x1C762, 0x1F1E16 },
+    // FMT_COEFF_TYPE_REC601_YUV_10BPC_LTD_TO_RGB_16BPC_FULL
+    {  0x19A29,  0x12B3C,        0, 0x1F2038, 0x1F2F14,  0x12B3C, 0x1F9B52,   0x8819,        0,  0x12B3C,  0x20668, 0x1EEA18 },
+    // FMT_COEFF_TYPE_REC601_YUV_10BPC_FULL_TO_RGB_16BPC_FULL
+    {  0x1673E,  0x1003C,        0, 0x1F4CBB, 0x1F4903,  0x1003C, 0x1FA7D2,   0x8751,        0,  0x1003C,  0x1C60C, 0x1F1D6B },
+    // FMT_COEFF_TYPE_REC601_YUV_12BPC_LTD_TO_RGB_16BPC_FULL
+    {  0x19A29,  0x12B3C,        0, 0x1F2038, 0x1F2F14,  0x12B3C, 0x1F9B52,   0x8819,        0,  0x12B3C,  0x20668, 0x1EEA18 },
+    // FMT_COEFF_TYPE_REC601_YUV_12BPC_FULL_TO_RGB_16BPC_FULL
+    {  0x166FA,  0x1000C,        0, 0x1F4C99, 0x1F4926,  0x1000C, 0x1FA7E3,   0x876B,        0,  0x1000C,  0x1C5B7, 0x1F1D41 },
+
     // FMT_COEFF_TYPE_REC709_YUV_8BPC_LTD_TO_RGB_16BPC_FULL
     {  0x1CCB7,  0x12B3C,        0, 0x1F06F1, 0x1F770C,  0x12B3C, 0x1FC933,   0x4D2D,        0,  0x12B3C,  0x21EDD, 0x1EDDDE },
     // FMT_COEFF_TYPE_REC709_YUV_8BPC_FULL_TO_RGB_16BPC_FULL
@@ -106,9 +134,26 @@ static const NvU32 FMTMatrix[FMT_COEFF_TYPE_MAX][12] =
     {  0x1CCB7,  0x12B3C,        0, 0x1F06F1, 0x1F770C,  0x12B3C, 0x1FC933,   0x4D2D,        0,  0x12B3C,  0x21EDD, 0x1EDDDE },
     // FMT_COEFF_TYPE_REC709_YUV_12BPC_FULL_TO_RGB_16BPC_FULL
     {  0x19339,  0x1000C,        0, 0x1F367D, 0x1F8823,  0x1000C, 0x1FD009,   0x53DF,        0,  0x1000C,  0x1DB1F, 0x1F128E },
+
+    // FMT_COEFF_TYPE_REC2020_YUV_8BPC_LTD_TO_RGB_16BPC_FULL
+    {  0x1AF66,  0x12B3C,        0, 0x1F1599, 0x1F58D9,  0x12B3C, 0x1FCFDC,   0x58F2,        0,  0x12B3C,  0x22669, 0x1EDA18 },
+    // FMT_COEFF_TYPE_REC2020_YUV_8BPC_FULL_TO_RGB_16BPC_FULL
+    {  0x17AF4,  0x100FD,        0, 0x1F4401, 0x1F6D2B,  0x100FD, 0x1FD5B6,   0x5DD2,        0,  0x100FD,  0x1E37F, 0x1F1024 },
+    // FMT_COEFF_TYPE_REC2020_YUV_10BPC_LTD_TO_RGB_16BPC_FULL
+    {  0x1AF66,  0x12B3C,        0, 0x1F1599, 0x1F58D9,  0x12B3C, 0x1FCFDC,   0x58F2,        0,  0x12B3C,  0x22669, 0x1EDA18 },
+    // FMT_COEFF_TYPE_REC2020_YUV_10BPC_FULL_TO_RGB_16BPC_FULL
+    {  0x179D8,  0x1003C,        0, 0x1F4372, 0x1F6D99,  0x1003C, 0x1FD5D6,   0x5E19,        0,  0x1003C,  0x1E214, 0x1F0F6E },
+    // FMT_COEFF_TYPE_REC2020_YUV_12BPC_LTD_TO_RGB_16BPC_FULL
+    {  0x1AF66,  0x12B3C,        0, 0x1F1599, 0x1F58D9,  0x12B3C, 0x1FCFDC,   0x58F2,        0,  0x12B3C,  0x22669, 0x1EDA18 },
+    // FMT_COEFF_TYPE_REC2020_YUV_12BPC_FULL_TO_RGB_16BPC_FULL
+    {  0x17991,  0x1000C,        0, 0x1F434F, 0x1F6DB5,  0x1000C, 0x1FD5DE,   0x5E2B,        0,  0x1000C,  0x1E1BA, 0x1F0F41 },
 };
 
 static void SetCsc00MatrixC5(NVEvoChannelPtr pChannel,
+                             const struct NvKmsCscMatrix *matrix);
+static void SetCsc01MatrixC5(NVEvoChannelPtr pChannel,
+                             const struct NvKmsCscMatrix *matrix);
+static void SetCsc10MatrixC5(NVEvoChannelPtr pChannel,
                              const struct NvKmsCscMatrix *matrix);
 static void SetCsc11MatrixC5(NVEvoChannelPtr pChannel,
                              const struct NvKmsCscMatrix *matrix);
@@ -367,6 +412,26 @@ static const struct NvKmsCscMatrix LMSToRec2020RGB = {{
 }};
 
 /*
+ * This is a 3x4 matrix with S5.14 coefficients (truncated from S5.16
+ * SW-specified values).
+ */
+static const struct NvKmsCscMatrix LMSToICtCp = {{
+    { 0x460d0, 0x1bc120, 0x1fde10, 0x8000 },
+    { 0x8000,  0x8000,   0,        0      },
+    { 0x19d20, 0x1cad30, 0x1b5b0,  0x8000 },
+}};
+
+/*
+ * This is a 3x4 matrix with S5.14 coefficients (truncated from S5.16
+ * SW-specified values).
+ */
+static const struct NvKmsCscMatrix ICtCpToLMS = {{
+    { 0x1c6c,   0x10000, 0x234,    0x1ff0b0 },
+    { 0x1fe394, 0x10000, 0x1ffdcc, 0xf50    },
+    { 0x1fadec, 0x10000, 0x8f5e,   0x1fe15b },
+}};
+
+/*
  * The two arrays below specify the PQ OETF transfer function that's used to
  * convert from linear LMS FP16 to PQ encoded L'M'S' fixed-point.
  */
@@ -471,8 +536,8 @@ struct TmoLutSettings
     NvU32 highIntensityValueThreshold;
 };
 
-// Default Rec.2020 weights, no color correction.
-static const struct TmoLutSettings TMO_LUT_SETTINGS_REC2020 = { 2, 1280, 256, 256, 255, 4960,  4961, 256, 256, 255, 10640, 256, 256, 255 };
+// No color correction.
+static const struct TmoLutSettings TMO_LUT_SETTINGS_NO_CORRECTION = { 2, 1280, 256, 256, 255, 4960,  4961, 256, 256, 255, 10640, 256, 256, 255 };
 
 static void InitCsc0LUT(NVEvoChannelPtr pChannel,
                         const NvU32 *pSegmentSizes, NvU32 numSegmentSizes,
@@ -518,56 +583,71 @@ static void InitCsc1LUT(NVEvoChannelPtr pChannel,
 
 static void ConfigureCsc0C5(NVDevEvoPtr pDevEvo,
                             NVEvoChannelPtr pChannel,
-                            enum NvKmsInputColorSpace colorspace,
+                            const NVFlipChannelEvoHwState *pHwState,
                             NvBool enable)
 {
     NVEvoWindowCaps *pWinCaps =
         &pDevEvo->gpus[0].capabilities.window[pChannel->instance];
-    struct NvKmsCscMatrix matrix = { };
+    struct NvKmsCscMatrix csc00Matrix = { };
+    struct NvKmsCscMatrix csc01Matrix = { };
     NvU32 lutData = 0;
-    NvU32 csc01Data = 0;
 
     if (!pWinCaps->csc0MatricesPresent) {
         return;
     }
 
+    nvAssert(pWinCaps->cscLUTsPresent);
+
     if (enable) {
-        if (colorspace == NVKMS_INPUT_COLORSPACE_BT2100_PQ) {
-            matrix = Rec2020RGBToLMS;
+        /* Linear RGB FP16 -> Linear LMS FP16 */
+        if (pHwState->colorSpace == NVKMS_INPUT_COLOR_SPACE_BT2100) {
+            csc00Matrix = Rec2020RGBToLMS;
         } else {
-            matrix = Rec709RGBToLMS;
+            csc00Matrix = Rec709RGBToLMS;
         }
 
-        lutData |= DRF_DEF(C57E, _SET_CSC0LUT_CONTROL, _INTERPOLATE, _ENABLE) |
-                   DRF_DEF(C57E, _SET_CSC0LUT_CONTROL, _MIRROR, _DISABLE) |
-                   DRF_DEF(C57E, _SET_CSC0LUT_CONTROL, _ENABLE, _ENABLE);
+        /* Linear LMS FP16 -> PQ encoded L'M'S' fixed-point */
+        lutData = DRF_DEF(C57E, _SET_CSC0LUT_CONTROL, _INTERPOLATE, _ENABLE) |
+                  DRF_DEF(C57E, _SET_CSC0LUT_CONTROL, _MIRROR, _DISABLE) |
+                  DRF_DEF(C57E, _SET_CSC0LUT_CONTROL, _ENABLE, _ENABLE);
 
-        csc01Data |= DRF_DEF(C57E, _SET_CSC01CONTROL, _ENABLE, _ENABLE);
+        /* PQ encoded L'M'S' fixed-point -> ICtCp */
+        csc01Matrix = LMSToICtCp;
     } else {
-        matrix = NVKMS_IDENTITY_CSC_MATRIX;
+        csc00Matrix = NVKMS_IDENTITY_CSC_MATRIX;
 
-        lutData |= DRF_DEF(C57E, _SET_CSC0LUT_CONTROL, _INTERPOLATE, _DISABLE) |
-                   DRF_DEF(C57E, _SET_CSC0LUT_CONTROL, _MIRROR, _DISABLE) |
-                   DRF_DEF(C57E, _SET_CSC0LUT_CONTROL, _ENABLE, _DISABLE);
+        lutData = DRF_DEF(C57E, _SET_CSC0LUT_CONTROL, _INTERPOLATE, _DISABLE) |
+                  DRF_DEF(C57E, _SET_CSC0LUT_CONTROL, _MIRROR, _DISABLE) |
+                  DRF_DEF(C57E, _SET_CSC0LUT_CONTROL, _ENABLE, _DISABLE);
 
-        csc01Data |= DRF_DEF(C57E, _SET_CSC01CONTROL, _ENABLE, _DISABLE);
+        csc01Matrix = NVKMS_IDENTITY_CSC_MATRIX;
     }
 
-    /* Linear RGB FP16 -> Linear LMS FP16 */
-    SetCsc00MatrixC5(pChannel, &matrix);
+    if (pHwState->csc00Override.enabled) {
+        csc00Matrix = pHwState->csc00Override.matrix;
+    }
 
-    /* Linear LMS FP16 -> PQ encoded L'M'S' fixed-point */
+    if (pHwState->csc01Override.enabled) {
+        csc01Matrix = pHwState->csc01Override.matrix;
+    }
+
+    /* CSC0LUT must be enabled if CSC01 or CSC10 is in use. */
+    if ((pHwState->csc01Override.enabled &&
+         !nvIsCscMatrixIdentity(&pHwState->csc01Override.matrix)) ||
+        (pHwState->csc10Override.enabled &&
+         !nvIsCscMatrixIdentity(&pHwState->csc10Override.matrix))) {
+
+        lutData = DRF_DEF(C57E, _SET_CSC0LUT_CONTROL, _INTERPOLATE, _ENABLE) |
+                  DRF_DEF(C57E, _SET_CSC0LUT_CONTROL, _MIRROR, _DISABLE) |
+                  DRF_DEF(C57E, _SET_CSC0LUT_CONTROL, _ENABLE, _ENABLE);
+    }
+
+    SetCsc00MatrixC5(pChannel, &csc00Matrix);
+
     nvDmaSetStartEvoMethod(pChannel, NVC57E_SET_CSC0LUT_CONTROL, 1);
     nvDmaSetEvoMethodData(pChannel, lutData);
 
-    /*
-     * PQ encoded L'M'S' fixed-point -> ICtCp
-     *
-     * Note that we're converting between fixed colorspaces, so the default HW
-     * coefficients are sufficient.
-     */
-    nvDmaSetStartEvoMethod(pChannel, NVC57E_SET_CSC01CONTROL, 1);
-    nvDmaSetEvoMethodData(pChannel, csc01Data);
+    SetCsc01MatrixC5(pChannel, &csc01Matrix);
 }
 
 static inline float64_t maxF(float64_t a, float64_t b)
@@ -680,10 +760,10 @@ static NvU16 TmoLutEntry(NvU32 i,
 }
 
 static void InitializeTmoLut(const NVEvoChannelPtr pChannel,
-                             NVLutSurfaceEvoPtr pLutSurfaceEvo,
+                             NVSurfaceEvoPtr pLutSurfaceEvo,
                              NvU32 sd)
 {
-    NVEvoLutDataRec *pData = pLutSurfaceEvo->subDeviceAddress[sd];
+    NVEvoLutDataRec *pData = pLutSurfaceEvo->cpuAddress[sd];
     NvU64 vssHead = 0;
     NvU32 lutEntryCounter = 0, i;
 
@@ -744,6 +824,11 @@ static NvBool UpdateTmoParams(NVEvoChannelPtr pChannel,
     NvU16 sd;
     NvBool dirty = FALSE;
 
+    if (pChannel->tmoParams.clientSpecified) {
+        pChannel->tmoParams.clientSpecified = FALSE;
+        dirty = TRUE;
+    }
+
     if (pChannel->tmoParams.enabled != enabled) {
         pChannel->tmoParams.enabled = enabled;
         dirty = TRUE;
@@ -765,6 +850,7 @@ static NvBool UpdateTmoParams(NVEvoChannelPtr pChannel,
 }
 
 static void EvoSetTmoLutSurfaceAddressC5(
+    const NVDevEvoRec *pDevEvo,
     NVEvoChannelPtr pChannel,
     const NVSurfaceDescriptor *pSurfaceDesc,
     NvU32 offset)
@@ -787,56 +873,62 @@ static void ConfigureTmoLut(NVDevEvoPtr pDevEvo,
     NvU16 sd;
     const NvU32 win = NV_EVO_CHANNEL_MASK_WINDOW_NUMBER(pChannel->channelMask);
     const NvU32 head = pDevEvo->headForWindow[win];
-    const NvU32 offset = offsetof(NVEvoLutDataRec, base);
-    const struct TmoLutSettings *tmoLutSettings;
-    const NvU32 srcMaxLum = nvGetHDRSrcMaxLum(pHwState);
+    NvU32 offset = offsetof(NVEvoLutDataRec, base);
+    NvU32 lutSize = NV_LUT_VSS_HEADER_SIZE + TMO_LUT_NUM_ENTRIES + 1;
+    const struct TmoLutSettings *tmoLutSettings = &TMO_LUT_SETTINGS_NO_CORRECTION;
+    NvBool enableLut = FALSE;
 
-    NvBool needsTmoLut = FALSE;
-    NvU32 targetMaxLums[NVKMS_MAX_SUBDEVICES] = {0};
-    for (sd = 0; sd < pDevEvo->numSubDevices; sd++) {
-        const NVDispHeadStateEvoRec *pHeadState =
-            &pDevEvo->pDispEvo[sd]->headState[head];
+    if (pHwState->tmoLut.fromOverride) {
+        enableLut = (pHwState->tmoLut.pLutSurfaceEvo != NULL);
+        pChannel->tmoParams.clientSpecified = TRUE;
+        offset = pHwState->tmoLut.offset;
+        lutSize = NV_LUT_VSS_HEADER_SIZE + pHwState->tmoLut.lutEntries;
+    } else {
+        NvBool needsTmoLut = FALSE;
+        const NvU32 srcMaxLum = nvGetHDRSrcMaxLum(pHwState);
+        NvU32 targetMaxLums[NVKMS_MAX_SUBDEVICES] = {0};
+        for (sd = 0; sd < pDevEvo->numSubDevices; sd++) {
+            const NVDispHeadStateEvoRec *pHeadState =
+                &pDevEvo->pDispEvo[sd]->headState[head];
 
-        targetMaxLums[sd] = pHeadState->hdrInfoFrame.staticMetadata.maxCLL;
+            targetMaxLums[sd] = pHeadState->hdrInfoFrame.staticMetadata.maxCLL;
 
-        // If any head needs tone mapping, enable TMO for channel
-        if (nvNeedsTmoLut(pDevEvo, pChannel, pHwState,
-                          srcMaxLum, targetMaxLums[sd])) {
-            needsTmoLut = TRUE;
+            // If any head needs tone mapping, enable TMO for channel
+            if (nvNeedsTmoLut(pDevEvo, pChannel, pHwState,
+                              srcMaxLum, targetMaxLums[sd])) {
+                needsTmoLut = TRUE;
+            }
+        }
+
+        if (!UpdateTmoParams(pChannel, needsTmoLut, srcMaxLum, targetMaxLums)) {
+            // No change in parameters, no need to reconfigure.
+            return;
+        }
+        enableLut = pChannel->tmoParams.enabled;
+
+        if (enableLut) {
+            // Initialize TMO LUT on all subdevices
+            for (sd = 0; sd < pDevEvo->numSubDevices; sd++) {
+                nvAssert(pHwState->tmoLut.pLutSurfaceEvo != NULL);
+                InitializeTmoLut(pChannel, pHwState->tmoLut.pLutSurfaceEvo, sd);
+            }
         }
     }
 
-    if (!UpdateTmoParams(pChannel, needsTmoLut, srcMaxLum, targetMaxLums)) {
-        // No change in parameters, no need to reconfigure.
-        return;
-    }
-
-    if (!pChannel->tmoParams.enabled) {
-        pDevEvo->hal->SetTmoLutSurfaceAddress(pChannel,
+    if (!enableLut) {
+        pDevEvo->hal->SetTmoLutSurfaceAddress(pDevEvo, pChannel,
             NULL /* pSurfaceDesc */, 0 /* offset */);
         return;
     }
 
-    // Initialize TMO LUT on all subdevices
-    for (sd = 0; sd < pDevEvo->numSubDevices; sd++) {
-        nvAssert(pHwState->tmoLut.pLutSurfaceEvo != NULL);
-        InitializeTmoLut(pChannel, pHwState->tmoLut.pLutSurfaceEvo, sd);
-    }
-
-    // Program TMO LUT
-
-    // XXX HDR TODO: Support other transfer functions
-    tmoLutSettings = &TMO_LUT_SETTINGS_REC2020;
-
     nvDmaSetStartEvoMethod(pChannel, NVC57E_SET_TMO_CONTROL, 1);
     nvDmaSetEvoMethodData(pChannel,
-        DRF_NUM(C57E, _SET_TMO_CONTROL, _SIZE,
-                NV_LUT_VSS_HEADER_SIZE + TMO_LUT_NUM_ENTRIES + 1) |
+        DRF_NUM(C57E, _SET_TMO_CONTROL, _SIZE, lutSize) |
         DRF_DEF(C57E, _SET_TMO_CONTROL, _INTERPOLATE, _ENABLE)    |
         DRF_NUM(C57E, _SET_TMO_CONTROL, _SAT_MODE, tmoLutSettings->satMode));
 
-    pDevEvo->hal->SetTmoLutSurfaceAddress(pChannel,
-        &pHwState->tmoLut.pLutSurfaceEvo->surfaceDesc, offset);
+    pDevEvo->hal->SetTmoLutSurfaceAddress(pDevEvo, pChannel,
+        &pHwState->tmoLut.pLutSurfaceEvo->planes[0].surfaceDesc, offset);
 
     // Low Intensity
 
@@ -891,17 +983,18 @@ static void ConfigureTmoLut(NVDevEvoPtr pDevEvo,
 
 static void ConfigureCsc1C5(NVDevEvoPtr pDevEvo,
                             NVEvoChannelPtr pChannel,
+                            const NVFlipChannelEvoHwState *pHwState,
                             NvBool enable)
 {
     NVEvoWindowCaps *pWinCaps =
         &pDevEvo->gpus[0].capabilities.window[pChannel->instance];
-    struct NvKmsCscMatrix matrix = { };
+    struct NvKmsCscMatrix csc10Matrix = { };
+    struct NvKmsCscMatrix csc11Matrix = { };
     NvU32 lutData = 0;
-    NvU32 csc10Data = 0;
     const NvU32 win = NV_EVO_CHANNEL_MASK_WINDOW_NUMBER(pChannel->channelMask);
     const NvU32 head = pDevEvo->headForWindow[win];
 
-    if (!pWinCaps->csc1MatricesPresent || (head == NV_INVALID_HEAD)) {
+    if (head == NV_INVALID_HEAD) {
         return;
     }
 
@@ -918,43 +1011,63 @@ static void ConfigureCsc1C5(NVDevEvoPtr pDevEvo,
 
         pHeadState = &pDevEvo->pDispEvo[sd]->headState[head];
 
+        /* ICtCp -> PQ encoded L'M'S' fixed-point */
+        csc10Matrix = ICtCpToLMS;
+
+        /* PQ encoded L'M'S' fixed-point -> Linear LMS FP16 */
+        lutData = DRF_DEF(C57E, _SET_CSC1LUT_CONTROL, _INTERPOLATE, _ENABLE) |
+                  DRF_DEF(C57E, _SET_CSC1LUT_CONTROL, _MIRROR, _DISABLE) |
+                  DRF_DEF(C57E, _SET_CSC1LUT_CONTROL, _ENABLE, _ENABLE);
+
+        /* Linear LMS FP16 -> Linear RGB FP16 */
         // If postcomp is PQ, composite in Rec2020
         if (pHeadState->tf == NVKMS_OUTPUT_TF_PQ) {
-            matrix = LMSToRec2020RGB;
+            csc11Matrix = LMSToRec2020RGB;
         } else {
-            matrix = LMSToRec709RGB;
+            csc11Matrix = LMSToRec709RGB;
         }
-
-        lutData |= DRF_DEF(C57E, _SET_CSC1LUT_CONTROL, _INTERPOLATE, _ENABLE) |
-                   DRF_DEF(C57E, _SET_CSC1LUT_CONTROL, _MIRROR, _DISABLE) |
-                   DRF_DEF(C57E, _SET_CSC1LUT_CONTROL, _ENABLE, _ENABLE);
-
-        csc10Data |= DRF_DEF(C57E, _SET_CSC10CONTROL, _ENABLE, _ENABLE);
     } else {
-        matrix = NVKMS_IDENTITY_CSC_MATRIX;
+        csc10Matrix = NVKMS_IDENTITY_CSC_MATRIX;
 
-        lutData |= DRF_DEF(C57E, _SET_CSC1LUT_CONTROL, _INTERPOLATE, _DISABLE) |
-                   DRF_DEF(C57E, _SET_CSC1LUT_CONTROL, _MIRROR, _DISABLE) |
-                   DRF_DEF(C57E, _SET_CSC1LUT_CONTROL, _ENABLE, _DISABLE);
+        lutData = DRF_DEF(C57E, _SET_CSC1LUT_CONTROL, _INTERPOLATE, _DISABLE) |
+                  DRF_DEF(C57E, _SET_CSC1LUT_CONTROL, _MIRROR, _DISABLE) |
+                  DRF_DEF(C57E, _SET_CSC1LUT_CONTROL, _ENABLE, _DISABLE);
 
-        csc10Data |= DRF_DEF(C57E, _SET_CSC10CONTROL, _ENABLE, _DISABLE);
+        csc11Matrix = pHwState->cscMatrix;
     }
 
-    /*
-     * ICtCp -> PQ encoded L'M'S' fixed-point
-     *
-     * Note that we're converting between fixed colorspaces, so the default HW
-     * coefficients are sufficient.
-     */
-    nvDmaSetStartEvoMethod(pChannel, NVC57E_SET_CSC10CONTROL, 1);
-    nvDmaSetEvoMethodData(pChannel, csc10Data);
+    if (pHwState->csc10Override.enabled) {
+        csc10Matrix = pHwState->csc10Override.matrix;
+    }
 
-    /* PQ encoded L'M'S' fixed-point -> Linear LMS FP16 */
-    nvDmaSetStartEvoMethod(pChannel, NVC57E_SET_CSC1LUT_CONTROL, 1);
-    nvDmaSetEvoMethodData(pChannel, lutData);
+    if (pHwState->csc11Override.enabled) {
+        csc11Matrix = pHwState->csc11Override.matrix;
+    }
 
-    /* Linear LMS FP16 -> Linear RGB FP16 */
-    SetCsc11MatrixC5(pChannel, &matrix);
+    nvAssert(pWinCaps->csc10MatrixPresent ||
+             !pWinCaps->csc0MatricesPresent);
+
+    if (pWinCaps->csc10MatrixPresent) {
+        nvAssert(pWinCaps->cscLUTsPresent);
+
+        /* CSC1LUT must be enabled if CSC01 or CSC10 is in use. */
+        if ((pHwState->csc01Override.enabled &&
+             !nvIsCscMatrixIdentity(&pHwState->csc01Override.matrix)) ||
+            (pHwState->csc10Override.enabled &&
+             !nvIsCscMatrixIdentity(&pHwState->csc10Override.matrix))) {
+            lutData = DRF_DEF(C57E, _SET_CSC1LUT_CONTROL, _INTERPOLATE, _ENABLE) |
+                      DRF_DEF(C57E, _SET_CSC1LUT_CONTROL, _MIRROR, _DISABLE) |
+                      DRF_DEF(C57E, _SET_CSC1LUT_CONTROL, _ENABLE, _ENABLE);
+        }
+
+        SetCsc10MatrixC5(pChannel, &csc10Matrix);
+
+        nvDmaSetStartEvoMethod(pChannel, NVC57E_SET_CSC1LUT_CONTROL, 1);
+        nvDmaSetEvoMethodData(pChannel, lutData);
+    }
+
+    nvAssert(pWinCaps->csc11MatrixPresent);
+    SetCsc11MatrixC5(pChannel, &csc11Matrix);
 }
 
 static void InitDesktopColorC3(NVDevEvoPtr pDevEvo, NVEvoChannelPtr pChannel)
@@ -1040,45 +1153,68 @@ static void EvoInitChannelC5(NVDevEvoPtr pDevEvo, NVEvoChannelPtr pChannel)
     }
 }
 
+static enum FMTCoeffType EvoGetFMTCoeffType(
+    NvBool isYUV,
+    enum NvKmsInputColorSpace colorSpace,
+    NvU8 depthPerComponent,
+    enum NvKmsInputColorRange colorRange)
+{
+#define FMT(nvkms_space, coeff_space, depth, nvkms_range, coeff_range)                              \
+    if ((colorSpace == NVKMS_INPUT_COLOR_SPACE_##nvkms_space) &&                                    \
+        (depthPerComponent == depth) &&                                                             \
+        (colorRange == NVKMS_INPUT_COLOR_RANGE_##nvkms_range)) {                                    \
+        return FMT_COEFF_TYPE_##coeff_space##_YUV_##depth##BPC_##coeff_range##_TO_RGB_16BPC_FULL;   \
+    }
+
+    // RGB colorspaces use identity FMT
+    if (!isYUV) {
+        return FMT_COEFF_TYPE_IDENTITY;
+    }
+
+    if (colorRange == NVKMS_INPUT_COLOR_RANGE_DEFAULT) {
+        // For YUV, default to limited color range
+        colorRange = NVKMS_INPUT_COLOR_RANGE_LIMITED;
+    }
+
+    FMT(BT601,  REC601,   8, LIMITED, LTD);
+    FMT(BT601,  REC601,   8, FULL,    FULL);
+    FMT(BT601,  REC601,  10, LIMITED, LTD);
+    FMT(BT601,  REC601,  10, FULL,    FULL);
+    FMT(BT601,  REC601,  12, LIMITED, LTD);
+    FMT(BT601,  REC601,  12, FULL,    FULL);
+
+    FMT(BT709,  REC709,   8, LIMITED, LTD);
+    FMT(BT709,  REC709,   8, FULL,    FULL);
+    FMT(BT709,  REC709,  10, LIMITED, LTD);
+    FMT(BT709,  REC709,  10, FULL,    FULL);
+    FMT(BT709,  REC709,  12, LIMITED, LTD);
+    FMT(BT709,  REC709,  12, FULL,    FULL);
+
+    FMT(BT2100, REC2020,  8, LIMITED, LTD);
+    FMT(BT2100, REC2020,  8, FULL,    FULL);
+    FMT(BT2100, REC2020, 10, LIMITED, LTD);
+    FMT(BT2100, REC2020, 10, FULL,    FULL);
+    FMT(BT2100, REC2020, 12, LIMITED, LTD);
+    FMT(BT2100, REC2020, 12, FULL,    FULL);
+
+    // Unsupported formats also use identity FMT
+    return FMT_COEFF_TYPE_IDENTITY;
+#undef FMT
+}
+
 static const NvU32* EvoGetFMTMatrixC5(
     const enum NvKmsSurfaceMemoryFormat format,
     const NVFlipChannelEvoHwState *pHwState)
 {
-    const NvU32* retValue = NULL;
     const NvKmsSurfaceMemoryFormatInfo *pFormatInfo =
         nvKmsGetSurfaceMemoryFormatInfo(format);
 
     // Choose FMT matrix based on input colorspace, bpc, and colorrange.
-    if (pFormatInfo->isYUV) {
-        NvBool specifiedFull = (pHwState->colorRange == NVKMS_INPUT_COLORRANGE_FULL);
-        if (pFormatInfo->yuv.depthPerComponent == 8) {
-            if (specifiedFull) {
-                retValue = FMTMatrix[FMT_COEFF_TYPE_REC709_YUV_8BPC_FULL_TO_RGB_16BPC_FULL];
-            } else {
-                retValue = FMTMatrix[FMT_COEFF_TYPE_REC709_YUV_8BPC_LTD_TO_RGB_16BPC_FULL];
-            }
-        } else if (pFormatInfo->yuv.depthPerComponent == 10) {
-            if (specifiedFull) {
-                retValue = FMTMatrix[FMT_COEFF_TYPE_REC709_YUV_10BPC_FULL_TO_RGB_16BPC_FULL];
-            } else {
-                retValue = FMTMatrix[FMT_COEFF_TYPE_REC709_YUV_10BPC_LTD_TO_RGB_16BPC_FULL];
-            }
-        } else if (pFormatInfo->yuv.depthPerComponent == 12) {
-            if (specifiedFull) {
-                retValue = FMTMatrix[FMT_COEFF_TYPE_REC709_YUV_12BPC_FULL_TO_RGB_16BPC_FULL];
-            } else {
-                retValue = FMTMatrix[FMT_COEFF_TYPE_REC709_YUV_12BPC_LTD_TO_RGB_16BPC_FULL];
-            }
-        } else {
-            // Unsupported bit depth, fail silently by defaulting to identity.
-            retValue = FMTMatrix[FMT_COEFF_TYPE_IDENTITY];
-        }
-    } else {
-        // All inputs with RGB colorspace receive an identity FMT.
-        retValue = FMTMatrix[FMT_COEFF_TYPE_IDENTITY];
-    }
-
-    return retValue;
+    return FMTMatrix[EvoGetFMTCoeffType(pFormatInfo->isYUV,
+                                        pHwState->colorSpace,
+                                        pFormatInfo->isYUV ? pFormatInfo->yuv.depthPerComponent
+                                                           : pFormatInfo->rgb.bitsPerPixel / 3,
+                                        pHwState->colorRange)];
 }
 
 static void EvoSetFMTMatrixC5(
@@ -1099,7 +1235,7 @@ static void EvoSetFMTMatrixC5(
 
 void nvEvoInitDefaultLutC5(NVDevEvoPtr pDevEvo)
 {
-    NVLutSurfaceEvoPtr pLut = pDevEvo->lut.defaultLut;
+    NVSurfaceEvoPtr pLut = pDevEvo->lut.defaultLut;
     NvU16 sd;
 
     nvAssert(pLut);
@@ -1107,7 +1243,7 @@ void nvEvoInitDefaultLutC5(NVDevEvoPtr pDevEvo)
     for (sd = 0; sd < pDevEvo->numSubDevices; sd++) {
         NvU32 lutSize;
         NvBool isLutModeVss;
-        NVEvoLutDataRec *pData = pLut->subDeviceAddress[sd];
+        NVEvoLutDataRec *pData = pLut->cpuAddress[sd];
 
         EvoSetupIdentityBaseLutC5(pData,
                                   &pDevEvo->lut.defaultBaseLUTState[sd],
@@ -1117,6 +1253,16 @@ void nvEvoInitDefaultLutC5(NVDevEvoPtr pDevEvo)
                                     &pDevEvo->lut.defaultOutputLUTState[sd],
                                     &lutSize, &isLutModeVss);
     }
+}
+
+static NvU32 GetWindowOwnerHead(const NVDevEvoRec *pDevEvo, const NvU32 win)
+{
+    if (pDevEvo->headForWindow[win] == NV_INVALID_HEAD) {
+        return NVC37D_WINDOW_SET_CONTROL_OWNER_NONE;
+    }
+
+    nvAssert(pDevEvo->headForWindow[win] < pDevEvo->numHeads);
+    return pDevEvo->headForWindow[win];
 }
 
 static void EvoInitWindowMapping3(NVDevEvoPtr pDevEvo,
@@ -1132,16 +1278,9 @@ static void EvoInitWindowMapping3(NVDevEvoPtr pDevEvo,
 
     /* Bind each window to a head.  On GV100, there is a fixed mapping. */
     for (win = 0; win < pDevEvo->numWindows; win++) {
-        NvU32 head = pDevEvo->headForWindow[win];
-
+        NvU32 head = GetWindowOwnerHead(pDevEvo, win);
         nvDmaSetStartEvoMethod(pChannel, NVC37D_WINDOW_SET_CONTROL(win), 1);
-        if ((head == NV_INVALID_HEAD) || (head >= pDevEvo->numHeads)) {
-            nvDmaSetEvoMethodData(pChannel,
-                                  DRF_NUM(C37D, _WINDOW_SET_CONTROL, _OWNER,
-                                          NVC37D_WINDOW_SET_CONTROL_OWNER_NONE));
-        } else {
-            nvDmaSetEvoMethodData(pChannel, DRF_NUM(C37D, _WINDOW_SET_CONTROL, _OWNER, head));
-        }
+        nvDmaSetEvoMethodData(pChannel, DRF_NUM(C37D, _WINDOW_SET_CONTROL, _OWNER, head));
     }
 
     pModesetUpdateState->windowMappingChanged = FALSE;
@@ -1178,11 +1317,9 @@ static void EvoInitWindowMapping3(NVDevEvoPtr pDevEvo,
 
         for (win = 0; win < pDevEvo->numWindows; win++) {
             NvU32 data = nvDmaLoadPioMethod(pCoreDma, NVC37D_WINDOW_SET_CONTROL(win));
+            NvU32 head = GetWindowOwnerHead(pDevEvo, win);
 
-            if (DRF_VAL(C37D,
-                        _WINDOW_SET_CONTROL, _OWNER, data) !=
-                pDevEvo->headForWindow[win]) {
-
+            if (DRF_VAL(C37D, _WINDOW_SET_CONTROL, _OWNER, data) != head) {
                 pModesetUpdateState->windowMappingChanged = TRUE;
 
                 nvPushEvoSubDevMask(pDevEvo, NVBIT(sd));
@@ -1359,10 +1496,13 @@ static void EvoSetRasterParams3(NVDevEvoPtr pDevEvo, int head,
         DRF_NUM(C37D, _HEAD_SET_MIN_FRAME_IDLE, _TRAILING_RASTER_LINES,
                 minFrameIdleTrailingRasterLines));
 
+    nvAssert((KHzToHz(pTimings->pixelClock) &
+        ~DRF_MASK(NVC37D_HEAD_SET_PIXEL_CLOCK_FREQUENCY_HERTZ)) == 0x0);
+
     nvDmaSetStartEvoMethod(pChannel, NVC37D_HEAD_SET_PIXEL_CLOCK_FREQUENCY(head), 1);
     nvDmaSetEvoMethodData(pChannel,
         DRF_NUM(C37D, _HEAD_SET_PIXEL_CLOCK_FREQUENCY, _HERTZ,
-                pTimings->pixelClock * 1000) |
+                KHzToHz(pTimings->pixelClock)) |
         DRF_DEF(C37D, _HEAD_SET_PIXEL_CLOCK_FREQUENCY, _ADJ1000DIV1001,_FALSE));
 
     nvDmaSetStartEvoMethod(pChannel, NVC37D_HEAD_SET_PIXEL_CLOCK_CONFIGURATION(head), 1);
@@ -1374,7 +1514,7 @@ static void EvoSetRasterParams3(NVDevEvoPtr pDevEvo, int head,
     nvDmaSetStartEvoMethod(pChannel, NVC37D_HEAD_SET_PIXEL_CLOCK_FREQUENCY_MAX(head), 1);
     nvDmaSetEvoMethodData(pChannel,
         DRF_NUM(C37D, _HEAD_SET_PIXEL_CLOCK_FREQUENCY_MAX, _HERTZ,
-                pTimings->pixelClock * 1000) |
+                KHzToHz(pTimings->pixelClock)) |
         DRF_DEF(C37D, _HEAD_SET_PIXEL_CLOCK_FREQUENCY_MAX, _ADJ1000DIV1001,_FALSE));
 
     nvDmaSetStartEvoMethod(pChannel,
@@ -1519,6 +1659,7 @@ static void EvoSetProcAmpC3(NVDispEvoPtr pDispEvo, const NvU32 head,
     NVDevEvoPtr pDevEvo = pDispEvo->pDevEvo;
     NVEvoChannelPtr pChannel = pDevEvo->core;
     const NVDispHeadStateEvoRec *pHeadState = &pDispEvo->headState[head];
+    NvU8 colorSpace;
     NvU32 dynRange;
 
     /* These methods should only apply to a single pDpyEvo */
@@ -1530,9 +1671,16 @@ static void EvoSetProcAmpC3(NVDispEvoPtr pDispEvo, const NvU32 head,
     ct_assert(NVT_COLORIMETRY_RGB == NVC37D_HEAD_SET_PROCAMP_COLOR_SPACE_RGB);
     ct_assert(NVT_COLORIMETRY_YUV_601 == NVC37D_HEAD_SET_PROCAMP_COLOR_SPACE_YUV_601);
     ct_assert(NVT_COLORIMETRY_YUV_709 == NVC37D_HEAD_SET_PROCAMP_COLOR_SPACE_YUV_709);
-    /* XXXnvdisplay add REC2020 */
     ct_assert(NVT_COLOR_RANGE_FULL == NVC37D_HEAD_SET_PROCAMP_RANGE_COMPRESSION_DISABLE);
     ct_assert(NVT_COLOR_RANGE_LIMITED == NVC37D_HEAD_SET_PROCAMP_RANGE_COMPRESSION_ENABLE);
+
+    if (pHeadState->procAmp.colorimetry == NVT_COLORIMETRY_BT2020RGB) {
+        colorSpace = NVC37D_HEAD_SET_PROCAMP_COLOR_SPACE_RGB;
+    } else if (pHeadState->procAmp.colorimetry == NVT_COLORIMETRY_BT2020YCC) {
+        colorSpace = NVC37D_HEAD_SET_PROCAMP_COLOR_SPACE_YUV_2020;
+    } else {
+        colorSpace = pHeadState->procAmp.colorimetry;
+    }
 
     if (pHeadState->procAmp.colorRange == NVT_COLOR_RANGE_FULL) {
         dynRange = DRF_DEF(C37D, _HEAD_SET_PROCAMP, _DYNAMIC_RANGE, _VESA);
@@ -1543,8 +1691,7 @@ static void EvoSetProcAmpC3(NVDispEvoPtr pDispEvo, const NvU32 head,
 
     nvDmaSetStartEvoMethod(pChannel, NVC37D_HEAD_SET_PROCAMP(head), 1);
     nvDmaSetEvoMethodData(pChannel,
-        DRF_NUM(C37D, _HEAD_SET_PROCAMP, _COLOR_SPACE,
-                pHeadState->procAmp.colorimetry) |
+        DRF_NUM(C37D, _HEAD_SET_PROCAMP, _COLOR_SPACE, colorSpace) |
         DRF_DEF(C37D, _HEAD_SET_PROCAMP, _CHROMA_LPF, _DISABLE) |
         DRF_NUM(C37D, _HEAD_SET_PROCAMP, _SAT_COS,
                 pHeadState->procAmp.satCos) |
@@ -1555,16 +1702,6 @@ static void EvoSetProcAmpC3(NVDispEvoPtr pDispEvo, const NvU32 head,
         DRF_DEF(C37D, _HEAD_SET_PROCAMP, _BLACK_LEVEL, _GRAPHICS));
 }
 
-static const struct NvKmsCscMatrix RGBToFullRangeYCbCrRec709Matrix = {{
-    {   0x8000, 0x1f8bbc, 0x1ff444, 0x8000 },
-    {   0x366c,   0xb718,   0x127c,      0 },
-    { 0x1fe2ac, 0x1f9d54,   0x8000, 0x8000 },
-}};
-static const struct NvKmsCscMatrix RGBToFullRangeYCbCrRec601Matrix = {{
-    {   0x8000, 0x1f94d0, 0x1feb30, 0x8000 },
-    {   0x4c8c,   0x9644,   0x1d30,      0 },
-    { 0x1fd4cc, 0x1fab34,   0x8000, 0x8000 },
-}};
 static const struct NvKmsCscMatrix RGBToLimitedRangeYCbCrRec2020Matrix = {{
     {   0x7000, 0x1f9900, 0x1ff700, 0x8000 },
     {   0x3988,   0x947c,    0xcfc, 0x1000 },
@@ -1600,10 +1737,6 @@ const struct NvKmsCscMatrix* nvEvoGetOCsc1MatrixC5(const NVDispHeadStateEvoRec *
             case NVT_COLORIMETRY_RGB:
                 // No OCSC1 needed.
                 return NULL;
-            case NVT_COLORIMETRY_YUV_601:
-                return &RGBToFullRangeYCbCrRec601Matrix;
-            case NVT_COLORIMETRY_YUV_709:
-                return &RGBToFullRangeYCbCrRec709Matrix;
             default:
                 nvAssert(!"Unexpected colorimetry");
                 return NULL;
@@ -1759,10 +1892,18 @@ static void EvoSetOCsc1C5(NVDispEvoPtr pDispEvo, const NvU32 head)
  * the final output. Then we multiply by its inverse to convert back
  * to RGB. Finally, we convert the coefficients to S5.14 fixed point
  * format.
+ *
+ * NOTE: Hue and saturation adjustment would not typically be used with HDR
+ * (BT2020) output, but is allowed here for the sake of compatibility.
+ * TODO: Do hue/saturation adjustment in BT2020 with BT2020 output colorimetry.
  */
-void nvEvo3PickOCsc0(NVDispEvoPtr pDispEvo, const NvU32 head, struct NvKms3x4MatrixF32 *ocsc0MatrixOutput)
+void nvEvo3PickOCsc0(const NVDispEvoRec *pDispEvo, const NvU32 head,
+                     struct NvKms3x4MatrixF32 *ocsc0MatrixOutput, NvBool *pOutputRoundingFix)
 {
+    const NVDevEvoRec *pDevEvo = pDispEvo->pDevEvo;
+    const NvU32 dispIdx = pDispEvo->displayOwner;
     const NVDispHeadStateEvoRec *pHeadState = &pDispEvo->headState[head];
+    const NVEvoSubDevHeadStateRec *pSdHeadState = &pDevEvo->gpus[dispIdx].headState[head];
 
     const float32_t zeroF32 = NvU32viewAsF32(NV_FLOAT_ZERO);
     const float32_t oneF32 = NvU32viewAsF32(NV_FLOAT_ONE);
@@ -1785,6 +1926,8 @@ void nvEvo3PickOCsc0(NVDispEvoPtr pDispEvo, const NvU32 head, struct NvKms3x4Mat
     struct NvKmsMatrixF32 CrYCbtoRGBMatrix;
     struct NvKmsMatrixF32 RGBtoCrYCbMatrix;
 
+    NvBool outputRoundingFix = FALSE;
+
 
     switch (pHeadState->procAmp.colorimetry) {
     default:
@@ -1793,6 +1936,8 @@ void nvEvo3PickOCsc0(NVDispEvoPtr pDispEvo, const NvU32 head, struct NvKms3x4Mat
     case NVT_COLORIMETRY_RGB:
     case NVT_COLORIMETRY_BT2020RGB:
         /* fallthrough; for RGB output, perform saturation adjustment in YUV709 */
+    case NVT_COLORIMETRY_BT2020YCC:
+        /* fallthrough; for BT2020 YUV output, perform saturation adjustment in YUV709 */
     case NVT_COLORIMETRY_YUV_709:
         CrYCbtoRGBMatrix = NvKmsMatrixToNvKmsMatrixF32(CrYCb709toRGBMatrix);
         RGBtoCrYCbMatrix = NvKmsMatrixToNvKmsMatrixF32(RGBtoCrYCb709Matrix);
@@ -1809,35 +1954,44 @@ void nvEvo3PickOCsc0(NVDispEvoPtr pDispEvo, const NvU32 head, struct NvKms3x4Mat
 
     if (nvkms_output_rounding_fix()) {
         /*
-         * XXX Only apply WAR for bug 2267663 for linear output TFs. Non-linear
+         * Only apply WAR for bug 2267663 for linear output TFs. Non-linear
          * TFs could amplify the 1/2048 factor to the point of being
-         * perceptible.
+         * perceptible, so don't apply WAR if the OLUT has been specified.
+         *
+         * Custom OLUTs may be non-linear, so unconditionally disable the WAR if
+         * one is specified.
          */
-        if (pHeadState->tf == NVKMS_OUTPUT_TF_NONE) {
+
+        if ((pHeadState->tf == NVKMS_OUTPUT_TF_NONE) &&
+            (pSdHeadState->outputLut.pLutSurfaceEvo == NULL)) {
             ocsc0Matrix.m[0][3] = f32_add(ocsc0Matrix.m[0][3], inv2048F32);
             ocsc0Matrix.m[1][3] = f32_add(ocsc0Matrix.m[1][3], inv2048F32);
             ocsc0Matrix.m[2][3] = f32_add(ocsc0Matrix.m[2][3], inv2048F32);
+
+            outputRoundingFix = TRUE;
         }
     }
 
     *ocsc0MatrixOutput = ocsc0Matrix;
+    *pOutputRoundingFix = outputRoundingFix;
 }
 
 /*
  * Programs the OCSC0 matrix coefficients, used to perform saturation
  * adjustment.
  *
- * The OCSC0 matrix will be enabled later in EvoSetLUTContextDmaC5 if
+ * The OCSC0 matrix will be enabled later in EvoSetOutputLutC5 if
  * and only if we also enable the OLUT as required by the
  * specification.
  */
-static void EvoSetOCsc0C5(NVDispEvoPtr pDispEvo, const NvU32 head)
+static void EvoSetOCsc0C5(const NVDispEvoRec *pDispEvo, const NvU32 head,
+                          NvBool *pOutputRoundingFix)
 {
-    NVDevEvoPtr pDevEvo = pDispEvo->pDevEvo;
+    const NVDevEvoRec *pDevEvo = pDispEvo->pDevEvo;
     NVEvoChannelPtr pChannel = pDevEvo->core;
     struct NvKms3x4MatrixF32 ocsc0Matrix;
 
-    nvEvo3PickOCsc0(pDispEvo, head, &ocsc0Matrix);
+    nvEvo3PickOCsc0(pDispEvo, head, &ocsc0Matrix, pOutputRoundingFix);
 
     nvDmaSetStartEvoMethod(pChannel, NVC57D_HEAD_SET_OCSC0COEFFICIENT_C00(head), 12);
     nvDmaSetEvoMethodData(pChannel, DRF_NUM(C57D, _HEAD_SET_OCSC0COEFFICIENT_C00, _VALUE, nvCscCoefConvertS514(ocsc0Matrix.m[0][0])));
@@ -1864,6 +2018,7 @@ static void EvoSetProcAmpC5(NVDispEvoPtr pDispEvo, const NvU32 head,
     const NVDispHeadStateEvoRec *pHeadState = &pDispEvo->headState[head];
     NvU32 dynRange, chromaLpf, chromaDownV;
     NvU32 colorimetry;
+    NvBool outputRoundingFix;
 
     NVT_COLORIMETRY nvtColorimetry = pHeadState->procAmp.colorimetry;
     NVT_COLOR_RANGE nvtColorRange = pHeadState->procAmp.colorRange;
@@ -1917,7 +2072,7 @@ static void EvoSetProcAmpC5(NVDispEvoPtr pDispEvo, const NvU32 head,
     nvDmaSetEvoMethodData(pChannel,
                           colorimetry | dynRange | chromaLpf | chromaDownV);
 
-    EvoSetOCsc0C5(pDispEvo, head);
+    EvoSetOCsc0C5(pDispEvo, head, &outputRoundingFix);
     EvoSetOCsc1C5(pDispEvo, head);
 }
 
@@ -2602,6 +2757,7 @@ NvBool nvEvoSetUsageBoundsC5(NVDevEvoPtr pDevEvo, NvU32 sd, NvU32 head,
 }
 
 static void EvoSetCoreNotifierSurfaceAddressAndControlC3(
+    const NVDevEvoRec *pDevEvo,
     NVEvoChannelPtr pChannel,
     const NVSurfaceDescriptor *pSurfaceDesc,
     NvU32 notifierOffset,
@@ -2652,14 +2808,14 @@ void nvEvoSetNotifierC3(NVDevEvoRec *pDevEvo,
         for (sd = 0; sd < pDevEvo->numSubDevices; sd++) {
             if (nvPeekEvoSubDevMask(pDevEvo) & (1 << sd)) {
                 nvPushEvoSubDevMask(pDevEvo, NVBIT(sd));
-                pDevEvo->hal->SetCoreNotifierSurfaceAddressAndControl(pChannel,
-                    &pDevEvo->core->notifiersDma[sd].surfaceDesc,
+                pDevEvo->hal->SetCoreNotifierSurfaceAddressAndControl(pDevEvo,
+                    pChannel, &pDevEvo->core->notifiersDma[sd].surfaceDesc,
                     notifier, ctrlVal);
                 nvPopEvoSubDevMask(pDevEvo);
             }
         }
     } else {
-        pDevEvo->hal->SetCoreNotifierSurfaceAddressAndControl(pChannel,
+        pDevEvo->hal->SetCoreNotifierSurfaceAddressAndControl(pDevEvo, pChannel,
             NULL /* pSurfaceDesc */, 0 /* offset */ , 0 /* ctrlVal */);
     }
 }
@@ -3202,18 +3358,14 @@ static void AssignPerWindowImpParams(NVC372_CTRL_IMP_WINDOW *pImpWindow,
     pImpWindow->tmoLut = NVC372_CTRL_IMP_LUT_USAGE_1025;
 }
 
-void
-nvEvoIsModePossibleC3(NVDispEvoPtr pDispEvo,
-                    const NVEvoIsModePossibleDispInput *pInput,
-                    NVEvoIsModePossibleDispOutput *pOutput)
+NvBool
+nvEvoSetCtrlIsModePossibleParams3(NVDispEvoPtr pDispEvo,
+                                  const NVEvoIsModePossibleDispInput *pInput,
+                                  NVC372_CTRL_IS_MODE_POSSIBLE_PARAMS *pImp)
 {
     NVDevEvoPtr pDevEvo = pDispEvo->pDevEvo;
     const NVEvoCapabilitiesPtr pEvoCaps = &pDevEvo->gpus[0].capabilities;
-    NVC372_CTRL_IS_MODE_POSSIBLE_PARAMS *pImp =
-        nvPreallocGet(pDevEvo, PREALLOC_TYPE_IMP_PARAMS, sizeof(*pImp));
-    NvBool result = FALSE;
     NvU32 head;
-    NvU32 ret;
 
     nvkms_memset(pImp, 0, sizeof(*pImp));
 
@@ -3242,7 +3394,7 @@ nvEvoIsModePossibleC3(NVDispEvoPtr pDispEvo,
                                     b2Heads1Or,
                                     head,
                                     &pEvoCaps->head[head].scalerCaps)) {
-            goto done;
+            return FALSE;
         }
 
         /* XXXnvdisplay: This assumes a fixed window<->head mapping */
@@ -3282,6 +3434,36 @@ nvEvoIsModePossibleC3(NVDispEvoPtr pDispEvo,
         pImp->options = NVC372_CTRL_IS_MODE_POSSIBLE_OPTIONS_NEED_MIN_VPSTATE;
     }
 
+    return TRUE;
+}
+
+void
+nvEvoSetIsModePossibleDispOutput3(const NVC372_CTRL_IS_MODE_POSSIBLE_PARAMS *pImp,
+                                  const NvBool result,
+                                  NVEvoIsModePossibleDispOutput *pOutput)
+{
+    pOutput->possible = result;
+    if (pOutput->possible) {
+        pOutput->minRequiredBandwidthKBPS = pImp->minRequiredBandwidthKBPS;
+        pOutput->floorBandwidthKBPS = pImp->floorBandwidthKBPS;
+    }
+}
+
+void
+nvEvoIsModePossibleC3(NVDispEvoPtr pDispEvo,
+                    const NVEvoIsModePossibleDispInput *pInput,
+                    NVEvoIsModePossibleDispOutput *pOutput)
+{
+    NVDevEvoPtr pDevEvo = pDispEvo->pDevEvo;
+    NVC372_CTRL_IS_MODE_POSSIBLE_PARAMS *pImp =
+        nvPreallocGet(pDevEvo, PREALLOC_TYPE_IMP_PARAMS, sizeof(*pImp));
+    NvBool result = FALSE;
+    NvU32 ret;
+
+    if (!nvEvoSetCtrlIsModePossibleParams3(pDispEvo, pInput, pImp)) {
+        goto done;
+    }
+
     ret = nvRmApiControl(nvEvoGlobal.clientHandle,
                          pDevEvo->rmCtrlHandle,
                          NVC372_CTRL_CMD_IS_MODE_POSSIBLE,
@@ -3296,11 +3478,11 @@ nvEvoIsModePossibleC3(NVDispEvoPtr pDispEvo,
     result = TRUE;
 
 done:
-    pOutput->possible = result;
-    if (pOutput->possible) {
-        pOutput->minRequiredBandwidthKBPS = pImp->minRequiredBandwidthKBPS;
-        pOutput->floorBandwidthKBPS = pImp->floorBandwidthKBPS;
+    for (NvU32 head = 0; head < pDevEvo->numHeads; head++) {
+        pOutput->head[head].dscSliceCount = pInput->head[head].dscSliceCount;
     }
+
+    nvEvoSetIsModePossibleDispOutput3(pImp, result, pOutput);
 
     nvPreallocRelease(pDevEvo, PREALLOC_TYPE_IMP_PARAMS);
 }
@@ -3395,6 +3577,26 @@ static void SetCsc00MatrixC5(NVEvoChannelPtr pChannel,
                     NVC57E_SET_CSC00COEFFICIENT_C00, NVC57E_SET_CSC00CONTROL,
                     DRF_DEF(C57E, _SET_CSC00CONTROL, _ENABLE, _ENABLE),
                     DRF_DEF(C57E, _SET_CSC00CONTROL, _ENABLE, _DISABLE));
+}
+
+static void SetCsc01MatrixC5(NVEvoChannelPtr pChannel,
+                             const struct NvKmsCscMatrix *matrix)
+{
+    SetCscMatrixC5Wrapper(pChannel,
+                    matrix,
+                    NVC57E_SET_CSC01COEFFICIENT_C00, NVC57E_SET_CSC01CONTROL,
+                    DRF_DEF(C57E, _SET_CSC01CONTROL, _ENABLE, _ENABLE),
+                    DRF_DEF(C57E, _SET_CSC01CONTROL, _ENABLE, _DISABLE));
+}
+
+static void SetCsc10MatrixC5(NVEvoChannelPtr pChannel,
+                             const struct NvKmsCscMatrix *matrix)
+{
+    SetCscMatrixC5Wrapper(pChannel,
+                    matrix,
+                    NVC57E_SET_CSC10COEFFICIENT_C00, NVC57E_SET_CSC10CONTROL,
+                    DRF_DEF(C57E, _SET_CSC10CONTROL, _ENABLE, _ENABLE),
+                    DRF_DEF(C57E, _SET_CSC10CONTROL, _ENABLE, _DISABLE));
 }
 
 static void SetCsc11MatrixC5(NVEvoChannelPtr pChannel,
@@ -3530,6 +3732,7 @@ EvoProgramSemaphore3(NVDevEvoPtr pDevEvo,
 }
 
 static void EvoSetSemaphoreSurfaceAddressAndControlC6(
+    const NVDevEvoRec *pDevEvo,
     NVEvoChannelPtr pChannel,
     const NVSurfaceDescriptor *pSurfaceDesc,
     NvU32 semaphoreOffset,
@@ -3548,6 +3751,7 @@ static void EvoSetSemaphoreSurfaceAddressAndControlC6(
 }
 
 static void EvoSetAcqSemaphoreSurfaceAddressAndControlC6(
+    const NVDevEvoRec *pDevEvo,
     NVEvoChannelPtr pChannel,
     const NVSurfaceDescriptor *pSurfaceDesc,
     NvU32 semaphoreOffset,
@@ -3603,7 +3807,7 @@ EvoProgramSemaphore6(NVDevEvoPtr pDevEvo,
         }
     }
 
-    pDevEvo->hal->SetAcqSemaphoreSurfaceAddressAndControl(pChannel,
+    pDevEvo->hal->SetAcqSemaphoreSurfaceAddressAndControl(pDevEvo, pChannel,
         pSurfaceDesc, offset, acqMode);
 
     /*! set semaphore value */
@@ -3633,7 +3837,7 @@ EvoProgramSemaphore6(NVDevEvoPtr pDevEvo,
         }
     }
 
-    pDevEvo->hal->SetSemaphoreSurfaceAddressAndControl(pChannel,
+    pDevEvo->hal->SetSemaphoreSurfaceAddressAndControl(pDevEvo, pChannel,
         pSurfaceDesc, offset, (acqMode | relMode));
 
     /*! set semaphore value */
@@ -3643,6 +3847,7 @@ EvoProgramSemaphore6(NVDevEvoPtr pDevEvo,
 }
 
 static void EvoSetWinNotifierSurfaceAddressAndControlC3(
+    const NVDevEvoRec *pDevEvo,
     NVEvoChannelPtr pChannel,
     const NVSurfaceDescriptor *pSurfaceDesc,
     NvU32 notifierOffset,
@@ -3660,6 +3865,7 @@ static void EvoSetWinNotifierSurfaceAddressAndControlC3(
 }
 
 static void EvoSetISOSurfaceAddressC3(
+    const NVDevEvoRec *pDevEvo,
     NVEvoChannelPtr pChannel,
     const NVSurfaceDescriptor *pSurfaceDesc,
     NvU32 offset,
@@ -3679,8 +3885,7 @@ static NvBool
 EvoFlipC3Common(NVDevEvoPtr pDevEvo,
          NVEvoChannelPtr pChannel,
          const NVFlipChannelEvoHwState *pHwState,
-         NVEvoUpdateState *updateState,
-         NvU32 head)
+         NVEvoUpdateState *updateState)
 {
     const NvKmsSurfaceMemoryFormatInfo *pFormatInfo;
     NvU32 presentControl, eye;
@@ -3694,27 +3899,9 @@ EvoFlipC3Common(NVDevEvoPtr pDevEvo,
     /* program notifier */
 
     if (pHwState->completionNotifier.surface.pSurfaceEvo == NULL) {
-        /*
-         * if no notifier surface is attached but vrr RGLine calculations
-         * for frame pacing are enabled then we need to provide our own
-         * surface and keep getting flip completion updates.
-         */
-        const NvU32 sdMask = nvPeekEvoSubDevMask(pDevEvo);
-        const NvU32 sd = (sdMask == 0) ? 0 : nv_ffs(sdMask) - 1;
-        NVDispHeadStateEvoRec *pHeadState = &pDevEvo->pDispEvo[sd]->headState[head];
-        struct NvKmsVrrFramePacingInfo *pVrrFramePacingInfo = &pHeadState->vrrFramePacingInfo;
-
-        if (pVrrFramePacingInfo->framePacingActive) {
-            pSurfaceDesc = &pChannel->notifiersDma[sd].surfaceDesc;
-            offset = nvPrepareNextVrrNotifier(pChannel, sd, head);
-            ctrlVal = DRF_DEF(C37E, _SET_NOTIFIER_CONTROL, _MODE, _WRITE_AWAKEN);
-            pDevEvo->hal->SetWinNotifierSurfaceAddressAndControl(pChannel,
-                pSurfaceDesc, offset, ctrlVal);
-        } else {
-            offset = ctrlVal = 0;
-            pDevEvo->hal->SetWinNotifierSurfaceAddressAndControl(pChannel,
-                NULL, offset, ctrlVal);
-        }
+        offset = ctrlVal = 0;
+        pDevEvo->hal->SetWinNotifierSurfaceAddressAndControl(pDevEvo,
+            pChannel, NULL, offset, ctrlVal);
     } else {
         const NVFlipNIsoSurfaceEvoHwState *pNIso =
             &pHwState->completionNotifier.surface;
@@ -3734,8 +3921,8 @@ EvoFlipC3Common(NVDevEvoPtr pDevEvo,
                                   _WRITE, ctrlVal);
         }
 
-        pDevEvo->hal->SetWinNotifierSurfaceAddressAndControl(pChannel,
-            pSurfaceDesc, offset, ctrlVal);
+        pDevEvo->hal->SetWinNotifierSurfaceAddressAndControl(pDevEvo,
+            pChannel, pSurfaceDesc, offset, ctrlVal);
     }
 
     if (!pHwState->pSurfaceEvo[NVKMS_LEFT]) {
@@ -3745,7 +3932,7 @@ EvoFlipC3Common(NVDevEvoPtr pDevEvo,
                  planeIndex < NVKMS_MAX_PLANES_PER_SURFACE;
                  planeIndex++) {
                 const NvU8 ctxDmaIdx = EyeAndPlaneToCtxDmaIdx(eye, planeIndex);
-                pDevEvo->hal->SetISOSurfaceAddress(pChannel,
+                pDevEvo->hal->SetISOSurfaceAddress(pDevEvo, pChannel,
                     NULL /* pSurfaceDec */, 0 /* offset */, ctxDmaIdx,
                     NV_FALSE /* isBlocklinear */);
             }
@@ -3823,7 +4010,7 @@ EvoFlipC3Common(NVDevEvoPtr pDevEvo,
                 offset = pSurfaceEvoPerEye->planes[planeIndex].offset;
             }
 
-            pDevEvo->hal->SetISOSurfaceAddress(pChannel,
+            pDevEvo->hal->SetISOSurfaceAddress(pDevEvo, pChannel,
                 pSurfaceDesc, offset, ctxDmaIdx, isBlockLinear);
         }
     }
@@ -4108,8 +4295,7 @@ static NvU32 nvHwFormatFromKmsFormatC5(
  *
  * Return 0 in the case of an unrecognized NvKmsSurfaceMemoryFormat.
  */
-static NvU32 nvHwFormatFromKmsFormatC6(
-    const enum NvKmsSurfaceMemoryFormat format)
+NvU32 nvHwFormatFromKmsFormatC6(const enum NvKmsSurfaceMemoryFormat format)
 {
     switch (format) {
     case NvKmsSurfaceMemoryFormatY8___U8___V8_N444:
@@ -4158,9 +4344,12 @@ static NvU32 nvHwFormatFromKmsFormatC6(
 }
 
 static
-NVLutSurfaceEvoPtr EvoGetLutSurface3(NVDevEvoPtr pDevEvo,
-                                     NVEvoChannelPtr pChannel,
-                                     const NVFlipChannelEvoHwState *pHwState)
+NVSurfaceEvoPtr EvoGetLutSurface3(NVDevEvoPtr pDevEvo,
+                                  NVEvoChannelPtr pChannel,
+                                  const NVFlipChannelEvoHwState *pHwState,
+                                  NvU32 *lutSize,
+                                  NvU64 *offset,
+                                  NvBool *isLutModeVss)
 {
     NvU32 win = NV_EVO_CHANNEL_MASK_WINDOW_NUMBER(pChannel->channelMask);
     NvU32 head = pDevEvo->headForWindow[win];
@@ -4175,6 +4364,10 @@ NVLutSurfaceEvoPtr EvoGetLutSurface3(NVDevEvoPtr pDevEvo,
 
     /* Input Lut is explicitly enabled by client */
     if (pHwState->inputLut.pLutSurfaceEvo != NULL) {
+        *lutSize = pHwState->inputLut.lutEntries + NV_LUT_VSS_HEADER_SIZE;
+        *offset = pHwState->inputLut.offset;
+        *isLutModeVss = (pHwState->inputLut.vssSegments > 0);
+
         return pHwState->inputLut.pLutSurfaceEvo;
     }
 
@@ -4225,17 +4418,24 @@ EvoFlipC3(NVDevEvoPtr pDevEvo,
 {
     NvBool enableCSC, swapUV, flip3Return;
     enum NvKmsSurfaceMemoryFormat format;
-    NVLutSurfaceEvoPtr pLutSurfaceEvo =
-        EvoGetLutSurface3(pDevEvo, pChannel, pHwState);
-    NvU32 win = NV_EVO_CHANNEL_MASK_WINDOW_NUMBER(pChannel->channelMask);
-    NvU32 head = pDevEvo->headForWindow[win];
+    /*
+     * lutSize and isLutModeVss are unused, since we only support 1025 and
+     * non-VSS on Volta, but we declare them to pass to EvoGetLutSurface3.
+     *
+     * TODO: Maybe validate the resulting values?
+     */
+    NvU32 lutSize = NV_NUM_EVO_LUT_ENTRIES;
+    NvU64 offset = offsetof(NVEvoLutDataRec, base);
+    NvBool isLutModeVss = FALSE;
+    NVSurfaceEvoPtr pLutSurfaceEvo = EvoGetLutSurface3(pDevEvo, pChannel, pHwState,
+                                                       &lutSize, &offset, &isLutModeVss);
 
     if (pHwState->timeStamp != 0) {
         InsertAdditionalTimestampFlip(pDevEvo, pChannel, pHwState,
                                       updateState);
     }
 
-    flip3Return = EvoFlipC3Common(pDevEvo, pChannel, pHwState, updateState, head);
+    flip3Return = EvoFlipC3Common(pDevEvo, pChannel, pHwState, updateState);
 
     /* program semaphore */
     EvoProgramSemaphore3(pDevEvo, pChannel, pHwState);
@@ -4258,8 +4458,7 @@ EvoFlipC3(NVDevEvoPtr pDevEvo,
         DRF_DEF(C37E, _SET_PARAMS, _UNDERREPLICATE, _DISABLE));
 
     if (pLutSurfaceEvo) {
-        const NvU32 ctxDma = pLutSurfaceEvo->surfaceDesc.ctxDmaHandle;
-        const NvU32 origin = offsetof(NVEvoLutDataRec, base);
+        const NvU32 ctxDma = pLutSurfaceEvo->planes[0].surfaceDesc.ctxDmaHandle;
 
         nvDmaSetStartEvoMethod(pChannel, NVC37E_SET_CONTROL_INPUT_LUT, 1);
         nvDmaSetEvoMethodData(pChannel,
@@ -4269,7 +4468,7 @@ EvoFlipC3(NVDevEvoPtr pDevEvo,
 
         nvDmaSetStartEvoMethod(pChannel, NVC37E_SET_OFFSET_INPUT_LUT, 1);
         nvDmaSetEvoMethodData(pChannel,
-            DRF_NUM(C37E, _SET_OFFSET_INPUT_LUT, _ORIGIN, origin));
+            DRF_NUM(C37E, _SET_OFFSET_INPUT_LUT, _ORIGIN, offset));
 
         nvDmaSetStartEvoMethod(pChannel, NVC37E_SET_CONTEXT_DMA_INPUT_LUT, 1);
         nvDmaSetEvoMethodData(pChannel,
@@ -4367,6 +4566,7 @@ skipInit:
 }
 
 static void EvoSetILUTSurfaceAddressC5(
+    const NVDevEvoRec *pDevEvo,
     NVEvoChannelPtr pChannel,
     const NVSurfaceDescriptor *pSurfaceDesc,
     NvU32 offset)
@@ -4391,7 +4591,8 @@ EvoFlipC5Common(NVDevEvoPtr pDevEvo,
     NvBool swapUV;
     NvU32 hTaps, vTaps;
     NvBool scaling = FALSE;
-    NVLutSurfaceEvoPtr pLutSurfaceEvo = NULL;
+    NVSurfaceEvoPtr pLutSurfaceEvo = NULL;
+    NvU64 lutOffset = offsetof(NVEvoLutDataRec, base);
     NvU32 lutSize = NV_NUM_EVO_LUT_ENTRIES;
     NvBool isLutModeVss = FALSE;
 
@@ -4402,13 +4603,15 @@ EvoFlipC5Common(NVDevEvoPtr pDevEvo,
     const NvU32 sd = (sdMask == 0) ? 0 : nv_ffs(sdMask) - 1;
     const NVDispHeadStateEvoRec *pHeadState = &pDevEvo->pDispEvo[sd]->headState[head];
 
-    // XXX HDR TODO: Handle other colorspaces
+    // XXX HDR TODO: Handle other transfer funcions
     // XXX HDR TODO: Enable custom input LUTs with HDR
-    if (pHwState->colorSpace != NVKMS_INPUT_COLORSPACE_BT2100_PQ) {
-        pLutSurfaceEvo = EvoGetLutSurface3(pDevEvo, pChannel, pHwState);
+    if (pHwState->inputLut.fromOverride ||
+        (pHwState->tf != NVKMS_INPUT_TF_PQ)) {
+        pLutSurfaceEvo = EvoGetLutSurface3(pDevEvo, pChannel, pHwState,
+                                           &lutSize, &lutOffset, &isLutModeVss);
     }
 
-    if (!EvoFlipC3Common(pDevEvo, pChannel, pHwState, updateState, head)) {
+    if (!EvoFlipC3Common(pDevEvo, pChannel, pHwState, updateState)) {
         ConfigureTmoLut(pDevEvo, pHwState, pChannel);
         return;
     }
@@ -4459,37 +4662,34 @@ EvoFlipC5Common(NVDevEvoPtr pDevEvo,
         nvNeedsTmoLut(pDevEvo, pChannel, pHwState,
                       nvGetHDRSrcMaxLum(pHwState),
                       pHeadState->hdrInfoFrame.staticMetadata.maxCLL)) {
-        ConfigureCsc0C5(pDevEvo, pChannel, pHwState->colorSpace, TRUE);
-        ConfigureCsc1C5(pDevEvo, pChannel, TRUE);
+        ConfigureCsc0C5(pDevEvo, pChannel, pHwState, TRUE);
+        ConfigureCsc1C5(pDevEvo, pChannel, pHwState, TRUE);
     } else {
-        ConfigureCsc0C5(pDevEvo, pChannel, pHwState->colorSpace, FALSE);
-        ConfigureCsc1C5(pDevEvo, pChannel, FALSE);
-
-        SetCsc11MatrixC5(pChannel, &pHwState->cscMatrix);
+        ConfigureCsc0C5(pDevEvo, pChannel, pHwState, FALSE);
+        ConfigureCsc1C5(pDevEvo, pChannel, pHwState, FALSE);
     }
 
     // In nvdisplay 3, an ILUT is required to convert the input surface to FP16,
     // unless the surface being displayed is already FP16 to begin with.
     if ((format == NvKmsSurfaceMemoryFormatRF16GF16BF16AF16) ||
         (format == NvKmsSurfaceMemoryFormatRF16GF16BF16XF16) || bypassComposition) {
-        nvAssert((pHwState->colorSpace == NVKMS_INPUT_COLORSPACE_SCRGB_LINEAR) ||
-                 (pHwState->colorSpace == NVKMS_INPUT_COLORSPACE_NONE));
+        nvAssert(pHwState->tf == NVKMS_INPUT_TF_LINEAR);
         pLutSurfaceEvo = NULL;
     } else if (!pLutSurfaceEvo) {
         NVEvoLutDataRec *pData = NULL;
 
         pLutSurfaceEvo = pDevEvo->lut.defaultLut;
-        pData = pLutSurfaceEvo->subDeviceAddress[sd];
+        pData = pLutSurfaceEvo->cpuAddress[sd];
 
         nvAssert(pData);
 
-        switch (pHwState->colorSpace) {
-            case NVKMS_INPUT_COLORSPACE_BT2100_PQ:
+        switch (pHwState->tf) {
+            case NVKMS_INPUT_TF_PQ:
                 EvoSetupPQEotfBaseLutC5(pData,
                                         &pDevEvo->lut.defaultBaseLUTState[sd],
                                         &lutSize, &isLutModeVss);
                 break;
-            case NVKMS_INPUT_COLORSPACE_NONE:
+            case NVKMS_INPUT_TF_LINEAR:
                 EvoSetupIdentityBaseLutC5(pData,
                                           &pDevEvo->lut.defaultBaseLUTState[sd],
                                           &lutSize, &isLutModeVss);
@@ -4504,8 +4704,6 @@ EvoFlipC5Common(NVDevEvoPtr pDevEvo,
     }
 
     if (pLutSurfaceEvo) {
-        const NvU32 origin = offsetof(NVEvoLutDataRec, base);
-
         nvDmaSetStartEvoMethod(pChannel, NVC57E_SET_ILUT_CONTROL, 1);
         nvDmaSetEvoMethodData(pChannel,
             (isLutModeVss ? DRF_DEF(C57E, _SET_ILUT_CONTROL, _INTERPOLATE, _ENABLE) :
@@ -4515,10 +4713,10 @@ EvoFlipC5Common(NVDevEvoPtr pDevEvo,
                             DRF_DEF(C57E, _SET_ILUT_CONTROL, _MODE, _DIRECT10)) |
             DRF_NUM(C57E, _SET_ILUT_CONTROL, _SIZE, lutSize));
 
-        pDevEvo->hal->SetILUTSurfaceAddress(pChannel,
-            &pLutSurfaceEvo->surfaceDesc, origin);
+        pDevEvo->hal->SetILUTSurfaceAddress(pDevEvo, pChannel,
+            &pLutSurfaceEvo->planes[0].surfaceDesc, lutOffset);
     } else {
-        pDevEvo->hal->SetILUTSurfaceAddress(pChannel,
+        pDevEvo->hal->SetILUTSurfaceAddress(pDevEvo, pChannel,
             NULL /* pSurfaceDesc */, 0 /* offset */);
     }
 
@@ -5019,89 +5217,22 @@ nvEvoFillLUTSurfaceC5(NVEvoLutEntryRec *pLUTBuffer,
     }
 }
 
-static void EvoSetLUTContextDma3(NVDevEvoPtr pDevEvo,
-                                 const int head,
-                                 NVLutSurfaceEvoPtr pLutSurfEvo,
-                                 NvBool enableBaseLut,
-                                 NVEvoUpdateState *updateState,
-                                 NvBool bypassComposition)
+static void EvoSetOutputLutC3(NVDevEvoPtr pDevEvo,
+                              NvU32 sd,
+                              NvU32 head,
+                              const NVFlipLutHwState *pOutputLut,
+                              NvU32 fpNormScale,
+                              NVEvoUpdateState *updateState,
+                              NvBool bypassComposition)
 {
     NVEvoChannelPtr pChannel = pDevEvo->core;
-    NvU32 sd;
-
-    /* These methods should only apply to a single pDpy */
-    nvAssert(pDevEvo->subDevMaskStackDepth > 0);
+    NvBool enableLut = (pOutputLut->pLutSurfaceEvo != NULL);
+    NvU64 offset = enableLut ? pOutputLut->offset : offsetof(NVEvoLutDataRec, output);
+    NvU32 ctxdma = enableLut ?
+        pOutputLut->pLutSurfaceEvo->planes[0].surfaceDesc.ctxDmaHandle : 0;
 
     nvUpdateUpdateState(pDevEvo, updateState, pChannel);
 
-    /*
-     * For Window semaphores and Notifiers, the general rule of thumb is that
-     * the current semaphore/notifier will be released if the address for the
-     * semaphore/notifier changes (via context DMA change or offset change).
-     * This allows SW to push updates in the window channel that change other
-     * methods, but do not cause the semaphore or notifier to be released. This
-     * make it possible to reprogram the window channel with new input Lut
-     * without releasing semaphore.
-     *
-     * Note that higher-level code will use core channel notifiers to
-     * synchronize these LUT updates, but that's okay because nvEvoUpdateC3()
-     * will interlock the core and window channel(s) updates together.
-    */
-    for (sd = 0; sd < pDevEvo->numSubDevices; sd++) {
-        if (nvPeekEvoSubDevMask(pDevEvo) & (1 << sd)) {
-            NVEvoChannelPtr pChannel = pDevEvo->window[head << 1];
-            NVEvoSubDevHeadStateRec *pSdHeadState =
-                &pDevEvo->gpus[sd].headState[head];
-            NVFlipChannelEvoHwState *pMainFlipState =
-                &pSdHeadState->layer[NVKMS_MAIN_LAYER];
-            NVLutSurfaceEvoPtr pInputLutSurfEvo = enableBaseLut ?
-                pLutSurfEvo : NULL;
-
-            if (pMainFlipState->inputLut.pLutSurfaceEvo == pInputLutSurfEvo) {
-                continue;
-            }
-
-            pMainFlipState->inputLut.pLutSurfaceEvo = pInputLutSurfEvo;
-            /* It is not allowed to change the input LUT on immediate flips. */
-            pMainFlipState->tearing = FALSE;
-
-            nvPushEvoSubDevMask(pDevEvo, NVBIT(sd));
-
-            pDevEvo->hal->Flip(pDevEvo, pChannel, pMainFlipState, updateState,
-                               bypassComposition);
-
-            nvPopEvoSubDevMask(pDevEvo);
-        }
-    }
-}
-
-static void EvoSetLUTContextDmaC3(const NVDispEvoRec *pDispEvo,
-                                  const int head,
-                                  NVLutSurfaceEvoPtr pLutSurfEvo,
-                                  NvBool enableBaseLut,
-                                  NvBool enableOutputLut,
-                                  NVEvoUpdateState *updateState,
-                                  NvBool bypassComposition)
-{
-    NvU32 ctxdma = (pLutSurfEvo != NULL) ? pLutSurfEvo->surfaceDesc.ctxDmaHandle : 0;
-    NVDevEvoPtr pDevEvo = pDispEvo->pDevEvo;
-    NVEvoChannelPtr pChannel = pDevEvo->core;
-    NvU64 offset;
-
-    nvAssert(ctxdma || (!enableBaseLut && !enableOutputLut));
-
-    nvPushEvoSubDevMaskDisp(pDispEvo);
-
-    EvoSetLUTContextDma3(pDevEvo,
-                         head,
-                         pLutSurfEvo,
-                         enableBaseLut,
-                         updateState,
-                         bypassComposition);
-
-    /* Program the output LUT */
-
-    offset = offsetof(NVEvoLutDataRec, output);
     nvAssert((offset & 0xff) == 0);
 
     nvDmaSetStartEvoMethod(pChannel, NVC37D_HEAD_SET_CONTROL_OUTPUT_LUT(head), 1);
@@ -5116,15 +5247,13 @@ static void EvoSetLUTContextDmaC3(const NVDispEvoRec *pDispEvo,
 
     /* Set the ctxdma for the output LUT */
 
-    if (!enableOutputLut) {
+    if (!enableLut) {
         /* Class C37D has no separate enable flag. */
         ctxdma = 0;
     }
     nvDmaSetStartEvoMethod(pChannel, NVC37D_HEAD_SET_CONTEXT_DMA_OUTPUT_LUT(head), 1);
     nvDmaSetEvoMethodData(pChannel,
             DRF_NUM(C37D, _HEAD_SET_CONTEXT_DMA_OUTPUT_LUT, _HANDLE, ctxdma));
-
-    nvPopEvoSubDevMask(pDevEvo);
 }
 
 static void EvoSetupPQOetfOutputLutC5(NVEvoLutDataRec *pData,
@@ -5211,8 +5340,8 @@ static void SetupHDROutputLUT(NVDevEvoPtr pDevEvo,
                               NvU32 *lutSize,
                               NvBool *isLutModeVss)
 {
-    NVLutSurfaceEvoPtr pLut = pDevEvo->lut.defaultLut;
-    NVEvoLutDataRec *pData = pLut->subDeviceAddress[sd];
+    NVSurfaceEvoPtr pLut = pDevEvo->lut.defaultLut;
+    NVEvoLutDataRec *pData = pLut->cpuAddress[sd];
 
     // XXX HDR TODO: Support other transfer functions
     nvAssert(pHeadState->tf == NVKMS_OUTPUT_TF_PQ);
@@ -5222,26 +5351,16 @@ static void SetupHDROutputLUT(NVDevEvoPtr pDevEvo,
 
 void nvSetupOutputLUT5(NVDevEvoPtr pDevEvo,
                        const NVDispHeadStateEvoRec *pHeadState,
-                       const int head,
-                       NVLutSurfaceEvoPtr pLutSurfEvo,
-                       NvBool enableBaseLut,
                        NvBool enableOutputLut,
-                       NVEvoUpdateState *updateState,
                        NvBool bypassComposition,
                        NVSurfaceDescriptor **pSurfaceDesc,
                        NvU32 *lutSize,
+                       NvU64 *offset,
                        NvBool *disableOcsc0,
                        NvU32 *fpNormScale,
                        NvBool *isLutModeVss)
 {
     NvU32 sd;
-
-    EvoSetLUTContextDma3(pDevEvo,
-                         head,
-                         pLutSurfEvo,
-                         enableBaseLut,
-                         updateState,
-                         bypassComposition);
 
     /* Set the ctxdma for the output LUT */
 
@@ -5252,7 +5371,8 @@ void nvSetupOutputLUT5(NVDevEvoPtr pDevEvo,
         *disableOcsc0 = TRUE;
     } else if (!enableOutputLut) {
         /* Use the default OLUT if the client didn't provide one */
-        *pSurfaceDesc = &pDevEvo->lut.defaultLut->surfaceDesc;
+        *pSurfaceDesc = &pDevEvo->lut.defaultLut->planes[0].surfaceDesc;
+        *offset = offsetof(NVEvoLutDataRec, output);
 
         // Setup default OLUT
         for (sd = 0; sd < pDevEvo->numSubDevices; sd++) {
@@ -5268,10 +5388,10 @@ void nvSetupOutputLUT5(NVDevEvoPtr pDevEvo,
                  * Scale from [0.0, 125.0] to [0.0, 1.0]
                  * XXX HDR TODO: Assumes input is in this range, SDR is not.
                  */
-                *fpNormScale = 0xFFFFFFFF / 125;
+                *fpNormScale = NVKMS_OLUT_FP_NORM_SCALE_DEFAULT / 125;
             } else {
-                NVLutSurfaceEvoPtr pLut = pDevEvo->lut.defaultLut;
-                NVEvoLutDataRec *pData = pLut->subDeviceAddress[sd];
+                NVSurfaceEvoPtr pLut = pDevEvo->lut.defaultLut;
+                NVEvoLutDataRec *pData = pLut->cpuAddress[sd];
 
                 EvoSetupIdentityOutputLutC5(
                     pData,
@@ -5299,45 +5419,43 @@ static void SetOLUTSurfaceAddress(
         DRF_NUM(C57D, _HEAD_SET_OFFSET_OLUT, _ORIGIN, offset >> 8));
 }
 
-static void EvoSetLUTContextDmaC5(const NVDispEvoRec *pDispEvo,
-                                  const int head,
-                                  NVLutSurfaceEvoPtr pLutSurfEvo,
-                                  NvBool enableBaseLut,
-                                  NvBool enableOutputLut,
-                                  NVEvoUpdateState *updateState,
-                                  NvBool bypassComposition)
+static void EvoSetOutputLutC5(NVDevEvoPtr pDevEvo,
+                              NvU32 sd,
+                              NvU32 head,
+                              const NVFlipLutHwState *pOutputLut,
+                              NvU32 fpNormScale,
+                              NVEvoUpdateState *updateState,
+                              NvBool bypassComposition)
 {
-    NVSurfaceDescriptor *pSurfaceDesc =
-        (pLutSurfEvo != NULL) ? &pLutSurfEvo->surfaceDesc : NULL;
-    NVDevEvoPtr pDevEvo = pDispEvo->pDevEvo;
+    const NVDispEvoRec *pDispEvo = pDevEvo->pDispEvo[sd];
     NVEvoChannelPtr pChannel = pDevEvo->core;
-    NvU64 offset;
-    NvU32 lutSize = NV_NUM_EVO_LUT_ENTRIES;
-    NvBool isLutModeVss = FALSE;
+    NvBool enableOutputLut = (pOutputLut->pLutSurfaceEvo != NULL);
+    NVSurfaceEvoPtr pLutSurfEvo = pOutputLut->pLutSurfaceEvo;
+    NVSurfaceDescriptor *pSurfaceDesc =
+        enableOutputLut ? &pLutSurfEvo->planes[0].surfaceDesc : NULL;
+    NvU64 offset = enableOutputLut ? pOutputLut->offset : offsetof(NVEvoLutDataRec, output);
+    NvBool isLutModeVss = enableOutputLut ? (pOutputLut->vssSegments != 0) : FALSE;
+    NvU32 lutSize = enableOutputLut ? pOutputLut->lutEntries : NV_NUM_EVO_LUT_ENTRIES;
     const NVDispHeadStateEvoRec *pHeadState = &pDispEvo->headState[head];
     NvBool disableOcsc0 = FALSE;
-    NvU32 fpNormScale = 0xFFFFFFFF;
+    NvBool outputRoundingFix = nvkms_output_rounding_fix();
+
+    nvUpdateUpdateState(pDevEvo, updateState, pChannel);
 
     // XXX HDR TODO: Enable custom output LUTs with HDR
     // XXX HDR TODO: Support other transfer functions
-    if (pHeadState->tf == NVKMS_OUTPUT_TF_PQ) {
+    if (!pOutputLut->fromOverride &&
+        (pHeadState->tf == NVKMS_OUTPUT_TF_PQ)) {
         enableOutputLut = FALSE;
     }
 
-    nvAssert(pSurfaceDesc || (!enableBaseLut && !enableOutputLut));
-
-    nvPushEvoSubDevMaskDisp(pDispEvo);
-
     nvSetupOutputLUT5(pDevEvo,
                       pHeadState,
-                      head,
-                      pLutSurfEvo,
-                      enableBaseLut,
                       enableOutputLut,
-                      updateState,
                       bypassComposition,
                       &pSurfaceDesc,
                       &lutSize,
+                      &offset,
                       &disableOcsc0,
                       &fpNormScale,
                       &isLutModeVss);
@@ -5345,23 +5463,25 @@ static void EvoSetLUTContextDmaC5(const NVDispEvoRec *pDispEvo,
     if (disableOcsc0) {
         nvDmaSetStartEvoMethod(pChannel, NVC57D_HEAD_SET_OCSC0CONTROL(head), 1);
         nvDmaSetEvoMethodData(pChannel, DRF_DEF(C57D, _HEAD_SET_OCSC0CONTROL, _ENABLE, _DISABLE));
+
+        outputRoundingFix = FALSE;
+    } else {
+        /* Update status of output rounding fix. */
+        EvoSetOCsc0C5(pDispEvo, head, &outputRoundingFix);
     }
 
     /* Program the output LUT */
-
-    offset = offsetof(NVEvoLutDataRec, output);
     nvAssert((offset & 0xff) == 0);
 
     nvDmaSetStartEvoMethod(pChannel, NVC57D_HEAD_SET_OLUT_CONTROL(head), 1);
     nvDmaSetEvoMethodData(pChannel,
-        ((isLutModeVss || !nvkms_output_rounding_fix()) ?
+        ((isLutModeVss || !outputRoundingFix) ?
             DRF_DEF(C57D, _HEAD_SET_OLUT_CONTROL, _INTERPOLATE, _ENABLE) :
             DRF_DEF(C57D, _HEAD_SET_OLUT_CONTROL, _INTERPOLATE, _DISABLE)) |
         DRF_DEF(C57D, _HEAD_SET_OLUT_CONTROL, _MIRROR, _DISABLE) |
         (isLutModeVss ? DRF_DEF(C57D, _HEAD_SET_OLUT_CONTROL, _MODE, _SEGMENTED) :
                         DRF_DEF(C57D, _HEAD_SET_OLUT_CONTROL, _MODE, _DIRECT10)) |
-        DRF_NUM(C57D, _HEAD_SET_OLUT_CONTROL, _SIZE, NV_LUT_VSS_HEADER_SIZE +
-                                                     lutSize));
+        DRF_NUM(C57D, _HEAD_SET_OLUT_CONTROL, _SIZE, NV_LUT_VSS_HEADER_SIZE + lutSize));
 
     SetOLUTSurfaceAddress(pChannel, pSurfaceDesc, offset, head);
 
@@ -5373,14 +5493,6 @@ static void EvoSetLUTContextDmaC5(const NVDispEvoRec *pDispEvo,
         nvDmaSetStartEvoMethod(pChannel, NVC57D_HEAD_SET_OCSC0CONTROL(head), 1);
         nvDmaSetEvoMethodData(pChannel, DRF_DEF(C57D, _HEAD_SET_OCSC0CONTROL, _ENABLE, _ENABLE));
     }
-
-    nvPopEvoSubDevMask(pDevEvo);
-}
-
-static inline NvU32 ReadCapReg(volatile const NvU32 *pCaps, NvU32 offset)
-{
-    /* Offsets are in bytes, but the array has dword-sized elements. */
-    return pCaps[offset / sizeof(NvU32)];
 }
 
 static NvBool QueryStereoPinC3(NVDevEvoPtr pDevEvo,
@@ -5414,8 +5526,8 @@ static void EvoParseCapabilityNotifier3(NVDevEvoPtr pDevEvo,
                                         volatile const NvU32 *pCaps)
 {
     NVEvoCapabilitiesPtr pEvoCaps = &pEvoSubDev->capabilities;
-    const NvU32 sysCap = ReadCapReg(pCaps, NVC373_SYS_CAP);
-    const NvU32 sysCapB = ReadCapReg(pCaps, NVC373_SYS_CAPB);
+    const NvU32 sysCap = nvEvoReadCapReg3(pCaps, NVC373_SYS_CAP);
+    const NvU32 sysCapB = nvEvoReadCapReg3(pCaps, NVC373_SYS_CAPB);
     NvU32 i, stereoPin;
     NvU32 layer;
 
@@ -5518,7 +5630,7 @@ static void EvoParseCapabilityNotifier3(NVDevEvoPtr pDevEvo,
         if (pHeadCaps->usable) {
             pHeadCaps->maxPClkKHz =
                 DRF_VAL(C373, _HEAD_CLK_CAP, _PCLK_MAX,
-                        ReadCapReg(pCaps, NVC373_HEAD_CLK_CAP(i))) * 10000;
+                        nvEvoReadCapReg3(pCaps, NVC373_HEAD_CLK_CAP(i))) * 10000;
         }
 
     }
@@ -5533,7 +5645,7 @@ static void EvoParseCapabilityNotifier3(NVDevEvoPtr pDevEvo,
 
         /* XXXnvdisplay: add SOR caps: max DP clk, ... */
         if (sorUsable) {
-            const NvU32 sorCap = ReadCapReg(pCaps, NVC373_SOR_CAP(i));
+            const NvU32 sorCap = nvEvoReadCapReg3(pCaps, NVC373_SOR_CAP(i));
             pSorCaps->dualTMDS =
                 FLD_TEST_DRF(C373, _SOR_CAP, _DUAL_TMDS, _TRUE, sorCap);
 
@@ -5552,7 +5664,7 @@ static void EvoParseCapabilityNotifier3(NVDevEvoPtr pDevEvo,
 
             pSorCaps->maxTMDSClkKHz =
                 DRF_VAL(C373, _SOR_CLK_CAP, _TMDS_MAX,
-                        ReadCapReg(pCaps, NVC373_SOR_CLK_CAP(i))) * 10000;
+                        nvEvoReadCapReg3(pCaps, NVC373_SOR_CLK_CAP(i))) * 10000;
         }
     }
 
@@ -5591,7 +5703,7 @@ static void EvoParseCapabilityNotifierC3(NVDevEvoPtr pDevEvo,
 
             pScalerCaps->present =
                 FLD_TEST_DRF(C373, _HEAD_CAPA, _SCALER, _TRUE,
-                             ReadCapReg(pCaps, NVC373_HEAD_CAPA(i)));
+                             nvEvoReadCapReg3(pCaps, NVC373_HEAD_CAPA(i)));
             if (pScalerCaps->present) {
                 NVEvoScalerTapsCaps *pTapsCaps;
                 NvU32 tmp;
@@ -5614,7 +5726,7 @@ static void EvoParseCapabilityNotifierC3(NVDevEvoPtr pDevEvo,
                  */
 
                 /* 2-tap capabilities */
-                tmp = ReadCapReg(pCaps, NVC373_HEAD_CAPD(i));
+                tmp = nvEvoReadCapReg3(pCaps, NVC373_HEAD_CAPD(i));
                 pTapsCaps = &pScalerCaps->taps[NV_EVO_SCALER_2TAPS];
                 pTapsCaps->maxVDownscaleFactor = NV_EVO_SCALE_FACTOR_2X;
                 pTapsCaps->maxHDownscaleFactor = NV_EVO_SCALE_FACTOR_2X;
@@ -5641,15 +5753,15 @@ static void EvoParsePrecompScalerCaps5(NVEvoCapabilitiesPtr pEvoCaps,
         NVEvoWindowCaps *pWinCaps = &pEvoCaps->window[i];
         NVEvoScalerCaps *pScalerCaps = &pWinCaps->scalerCaps;
         NVEvoScalerTapsCaps *pTapsCaps;
-        NvU32 capA = ReadCapReg(pCaps, NVC573_PRECOMP_WIN_PIPE_HDR_CAPA(i));
+        NvU32 capA = nvEvoReadCapReg3(pCaps, NVC573_PRECOMP_WIN_PIPE_HDR_CAPA(i));
         NvU32 capD, capF;
 
         pScalerCaps->present =
             FLD_TEST_DRF(C573, _PRECOMP_WIN_PIPE_HDR_CAPA, _SCLR_PRESENT,
                          _TRUE, capA);
         if (pScalerCaps->present) {
-            capD = ReadCapReg(pCaps, NVC573_PRECOMP_WIN_PIPE_HDR_CAPD(i));
-            capF = ReadCapReg(pCaps, NVC573_PRECOMP_WIN_PIPE_HDR_CAPF(i));
+            capD = nvEvoReadCapReg3(pCaps, NVC573_PRECOMP_WIN_PIPE_HDR_CAPD(i));
+            capF = nvEvoReadCapReg3(pCaps, NVC573_PRECOMP_WIN_PIPE_HDR_CAPF(i));
 
             /* 5-tap capabilities */
             pTapsCaps = &pScalerCaps->taps[NV_EVO_SCALER_5TAPS];
@@ -5696,7 +5808,7 @@ static void EvoParseCapabilityNotifierC5C6Common(NVEvoCapabilitiesPtr pEvoCaps,
         if (pHeadCaps->usable) {
             NVEvoScalerCaps *pScalerCaps = &pHeadCaps->scalerCaps;
             NVEvoScalerTapsCaps *pTapsCaps;
-            NvU32 capA = ReadCapReg(pCaps, NVC573_POSTCOMP_HEAD_HDR_CAPA(i));
+            NvU32 capA = nvEvoReadCapReg3(pCaps, NVC573_POSTCOMP_HEAD_HDR_CAPA(i));
             NvU32 capC, capD;
 
             pScalerCaps->present =
@@ -5705,8 +5817,8 @@ static void EvoParseCapabilityNotifierC5C6Common(NVEvoCapabilitiesPtr pEvoCaps,
             if (pScalerCaps->present) {
                 postcompScalingSupported = TRUE;
 
-                capC = ReadCapReg(pCaps, NVC573_POSTCOMP_HEAD_HDR_CAPC(i));
-                capD = ReadCapReg(pCaps, NVC573_POSTCOMP_HEAD_HDR_CAPD(i));
+                capC = nvEvoReadCapReg3(pCaps, NVC573_POSTCOMP_HEAD_HDR_CAPC(i));
+                capD = nvEvoReadCapReg3(pCaps, NVC573_POSTCOMP_HEAD_HDR_CAPD(i));
 
                 /*
                  * Note that some of these may be zero.
@@ -5744,7 +5856,7 @@ static void EvoParseCapabilityNotifierC5C6Common(NVEvoCapabilitiesPtr pEvoCaps,
             }
 
 #if defined(NV_DEBUG)
-            NvU32 capA = ReadCapReg(pCaps, NVC573_POSTCOMP_HEAD_HDR_CAPA(i));
+            NvU32 capA = nvEvoReadCapReg3(pCaps, NVC573_POSTCOMP_HEAD_HDR_CAPA(i));
             NvU32 unitWidth = DRF_VAL(C573, _POSTCOMP_HEAD_HDR_CAPA, _UNIT_WIDTH, capA);
 
             // EvoInitChannelC5 assumes 16-bit fixed-point.
@@ -5755,7 +5867,7 @@ static void EvoParseCapabilityNotifierC5C6Common(NVEvoCapabilitiesPtr pEvoCaps,
 
     for (i = 0; i < NVC573_SYS_CAPB_WINDOW_EXISTS__SIZE_1; i++) {
         NVEvoWindowCaps *pWinCaps = &pEvoCaps->window[i];
-        NvU32 capA = ReadCapReg(pCaps, NVC573_PRECOMP_WIN_PIPE_HDR_CAPA(i));
+        NvU32 capA = nvEvoReadCapReg3(pCaps, NVC573_PRECOMP_WIN_PIPE_HDR_CAPA(i));
 
         pWinCaps->tmoPresent = FLD_TEST_DRF(C573, _PRECOMP_WIN_PIPE_HDR_CAPA,
                                             _TMO_PRESENT, _TRUE, capA);
@@ -5766,11 +5878,12 @@ static void EvoParseCapabilityNotifierC5C6Common(NVEvoCapabilitiesPtr pEvoCaps,
             FLD_TEST_DRF(C573, _PRECOMP_WIN_PIPE_HDR_CAPA,
                          _CSC01_PRESENT, _TRUE, capA);
 
-        pWinCaps->csc1MatricesPresent =
-            (FLD_TEST_DRF(C573, _PRECOMP_WIN_PIPE_HDR_CAPA,
-                          _CSC10_PRESENT, _TRUE, capA) &&
-             FLD_TEST_DRF(C573, _PRECOMP_WIN_PIPE_HDR_CAPA,
-                          _CSC11_PRESENT, _TRUE, capA));
+        pWinCaps->csc10MatrixPresent =
+            FLD_TEST_DRF(C573, _PRECOMP_WIN_PIPE_HDR_CAPA,
+                          _CSC10_PRESENT, _TRUE, capA);
+        pWinCaps->csc11MatrixPresent =
+            FLD_TEST_DRF(C573, _PRECOMP_WIN_PIPE_HDR_CAPA,
+                         _CSC11_PRESENT, _TRUE, capA);
 
         pWinCaps->cscLUTsPresent =
             FLD_TEST_DRF(C573, _PRECOMP_WIN_PIPE_HDR_CAPA,
@@ -5780,7 +5893,8 @@ static void EvoParseCapabilityNotifierC5C6Common(NVEvoCapabilitiesPtr pEvoCaps,
 
         nvAssert(!pWinCaps->tmoPresent ||
                  (pWinCaps->csc0MatricesPresent &&
-                  pWinCaps->csc1MatricesPresent &&
+                  pWinCaps->csc10MatrixPresent &&
+                  pWinCaps->csc11MatrixPresent &&
                   pWinCaps->cscLUTsPresent));
     }
 
@@ -5811,25 +5925,25 @@ static void EvoParseCapabilityNotifierC5(NVDevEvoPtr pDevEvo,
      */
     pEvoCaps->misc.supportsSemiPlanar =
         FLD_TEST_DRF(C573, _IHUB_COMMON_CAPA, _SUPPORT_PLANAR, _TRUE,
-                     ReadCapReg(pCaps, NVC573_IHUB_COMMON_CAPA));
+                     nvEvoReadCapReg3(pCaps, NVC573_IHUB_COMMON_CAPA));
     pEvoCaps->misc.supportsDSI = FALSE;
 
     EvoParseCapabilityNotifierC5C6Common(pEvoCaps, pCaps);
 }
 
-static void EvoParseCapabilityNotifierC6(NVDevEvoPtr pDevEvo,
-                                         NVEvoSubDevPtr pEvoSubDev,
-                                         volatile const NvU32 *pCaps)
+void nvEvoParseCapabilityNotifier6(NVDevEvoPtr pDevEvo,
+                                   NVEvoSubDevPtr pEvoSubDev,
+                                   volatile const NvU32 *pCaps)
 {
     NVEvoCapabilitiesPtr pEvoCaps = &pEvoSubDev->capabilities;
-    NvU32 capC = ReadCapReg(pCaps, NVC673_IHUB_COMMON_CAPC);
+    NvU32 capC = nvEvoReadCapReg3(pCaps, NVC673_IHUB_COMMON_CAPC);
     NvU32 i;
 
     // Miscellaneous capabilities
 
     pEvoCaps->misc.supportsPlanar =
         FLD_TEST_DRF(C673, _IHUB_COMMON_CAPA, _SUPPORT_PLANAR, _TRUE,
-                     ReadCapReg(pCaps, NVC673_IHUB_COMMON_CAPA));
+                     nvEvoReadCapReg3(pCaps, NVC673_IHUB_COMMON_CAPA));
 
     pEvoCaps->misc.supportsSemiPlanar =
         FLD_TEST_DRF(C673, _IHUB_COMMON_CAPC, _SUPPORT_SEMI_PLANAR, _TRUE, capC);
@@ -5842,13 +5956,13 @@ static void EvoParseCapabilityNotifierC6(NVDevEvoPtr pDevEvo,
     // DSI is currently supported on just Orin, which has only 1 DSI engine (DSI0).
     pEvoCaps->misc.supportsDSI = 
         FLD_TEST_DRF(C673, _SYS_CAP, _DSI0_EXISTS, _YES, 
-                     ReadCapReg(pCaps, NVC673_SYS_CAP));
+                     nvEvoReadCapReg3(pCaps, NVC673_SYS_CAP));
 
     for (i = 0; i < NVC673_SYS_CAP_HEAD_EXISTS__SIZE_1; i++) {
         NVEvoHeadCaps *pHeadCaps = &pEvoCaps->head[i];
 
         if (pHeadCaps->usable) {
-            NvU32 capA = ReadCapReg(pCaps, NVC673_POSTCOMP_HEAD_HDR_CAPA(i));
+            NvU32 capA = nvEvoReadCapReg3(pCaps, NVC673_POSTCOMP_HEAD_HDR_CAPA(i));
             NvBool hclpfPresent =
                 FLD_TEST_DRF(C673, _POSTCOMP_HEAD_HDR_CAPA, _HCLPF_PRESENT,
                              _TRUE, capA);
@@ -5866,25 +5980,37 @@ static void EvoParseCapabilityNotifierC6(NVDevEvoPtr pDevEvo,
 static NvU32 UsableWindowCount(const NVEvoCapabilities *pEvoCaps)
 {
     NvU32 i, count = 0;
-    NvBool foundUnusable = FALSE;
 
     for (i = 0; i < ARRAY_LEN(pEvoCaps->window); i++) {
         if (pEvoCaps->window[i].usable) {
             count++;
-            /* Assert that usable windows are contiguous starting from 0. */
-            if (foundUnusable) {
-                nvAssert(!foundUnusable);
-            }
-        } else {
-            foundUnusable = TRUE;
+            /*
+             * We expect usable windows to be contiguous and start at 0.
+             * Check that the number of usable windows matches the
+             * number of loop iterations.
+             */
+             nvAssert(count == (i + 1));
         }
     }
 
     return count;
 }
 
-typedef typeof(EvoParseCapabilityNotifierC3) parse_caps_t;
-typedef typeof(nvHwFormatFromKmsFormatC3) get_hw_fmt_t;
+static void FillLUTCaps(struct NvKmsLUTCaps *pCaps,
+                        NvBool supported,
+                        enum NvKmsLUTVssSupport vssSupport,
+                        enum NvKmsLUTVssType vssType,
+                        NvU32 vssSegments,
+                        NvU32 lutEntries,
+                        enum NvKmsLUTFormat entryFormat)
+{
+    pCaps->supported   = supported;
+    pCaps->vssSupport  = supported ? vssSupport  : NVKMS_LUT_VSS_NOT_SUPPORTED;
+    pCaps->vssType     = supported ? vssType     : NVKMS_LUT_VSS_TYPE_NONE;
+    pCaps->vssSegments = supported ? vssSegments : 0;
+    pCaps->lutEntries  = supported ? lutEntries  : 0;
+    pCaps->entryFormat = supported ? entryFormat : NVKMS_LUT_FORMAT_UNORM14_WAR_813188;
+}
 
 static void SetHDRLayerCaps(NVDevEvoPtr pDevEvo)
 {
@@ -5917,10 +6043,33 @@ static void SetHDRLayerCaps(NVDevEvoPtr pDevEvo)
          * TODO: Rework API for per-head layerCaps if this assert trips.
          */
         nvAssert(!hdrLayerCapSet[numLayers[head]] ||
-                 (pDevEvo->caps.layerCaps[numLayers[head]].supportsHDR ==
+                 (pDevEvo->caps.layerCaps[numLayers[head]].supportsICtCp ==
                   pWinCaps->tmoPresent));
 
-        pDevEvo->caps.layerCaps[numLayers[head]].supportsHDR = pWinCaps->tmoPresent;
+        pDevEvo->caps.layerCaps[numLayers[head]].supportsICtCp = pWinCaps->tmoPresent;
+
+        if (pDevEvo->hal->caps.needDefaultLutSurface) {
+            /* Turing+ uses an FP16, linear 64-segment VSS supported ILUT */
+            FillLUTCaps(&pDevEvo->caps.layerCaps[numLayers[head]].ilut, TRUE,
+                        NVKMS_LUT_VSS_SUPPORTED, NVKMS_LUT_VSS_TYPE_LINEAR,
+                        64, 1025, NVKMS_LUT_FORMAT_FP16);
+        } else {
+            /* Volta uses a UNORM14_WAR_813188, non-VSS ILUT */
+            FillLUTCaps(&pDevEvo->caps.layerCaps[numLayers[head]].ilut, TRUE,
+                        NVKMS_LUT_VSS_NOT_SUPPORTED, NVKMS_LUT_VSS_TYPE_NONE,
+                        0, 1025, NVKMS_LUT_FORMAT_UNORM14_WAR_813188);
+        }
+
+        if (pWinCaps->tmoPresent) {
+            FillLUTCaps(&pDevEvo->caps.layerCaps[numLayers[head]].tmo, TRUE,
+                        NVKMS_LUT_VSS_REQUIRED, NVKMS_LUT_VSS_TYPE_LINEAR,
+                        64, 1025, NVKMS_LUT_FORMAT_UNORM16);
+
+        } else {
+            FillLUTCaps(&pDevEvo->caps.layerCaps[numLayers[head]].tmo, FALSE,
+                        NVKMS_LUT_VSS_NOT_SUPPORTED, NVKMS_LUT_VSS_TYPE_NONE,
+                        0, 0, NVKMS_LUT_FORMAT_UNORM14_WAR_813188);
+        }
 
 #if defined(DEBUG)
         hdrLayerCapSet[numLayers[head]] = TRUE;
@@ -5928,13 +6077,25 @@ static void SetHDRLayerCaps(NVDevEvoPtr pDevEvo)
 
         numLayers[head]++;
     }
+
+    if (pDevEvo->hal->caps.hasUnorm16OLUT) {
+        /* Turing+ uses a UNORM16, logarithmic 33-segment VSS supported OLUT */
+        FillLUTCaps(&pDevEvo->caps.olut, TRUE,
+                    NVKMS_LUT_VSS_SUPPORTED, NVKMS_LUT_VSS_TYPE_LOGARITHMIC,
+                    33, 1025, NVKMS_LUT_FORMAT_UNORM16);
+    } else {
+        /* Volta uses a UNORM14_WAR_813188, non-VSS OLUT */
+        FillLUTCaps(&pDevEvo->caps.olut, TRUE,
+                    NVKMS_LUT_VSS_NOT_SUPPORTED, NVKMS_LUT_VSS_TYPE_NONE,
+                    0, 1025, NVKMS_LUT_FORMAT_UNORM14_WAR_813188);
+    }
 }
 
-static NvBool EvoGetCapabilities3(NVDevEvoPtr pDevEvo,
-                                  parse_caps_t *pParse,
-                                  get_hw_fmt_t *pGetHwFmt,
-                                  NvU32 hwclass,
-                                  size_t length)
+NvBool nvEvoGetCapabilities3(NVDevEvoPtr pDevEvo,
+                             NVEvoParseCapabilityNotifierFunc3 *pParse,
+                             NVEvoHwFormatFromKmsFormatFunc3 *pGetHwFmt,
+                             NvU32 hwclass,
+                             size_t length)
 {
     NvU32 capsHandle = nvGenerateUnixRmHandle(&pDevEvo->handleAllocator);
     NVDispEvoPtr pDispEvo;
@@ -6109,26 +6270,27 @@ free_handle:
 
 static NvBool EvoGetCapabilitiesC3(NVDevEvoPtr pDevEvo)
 {
-    return EvoGetCapabilities3(pDevEvo, EvoParseCapabilityNotifierC3,
-                               nvHwFormatFromKmsFormatC3,
-                               NVC373_DISP_CAPABILITIES,
-                               sizeof(_NvC373DispCapabilities));
+    return nvEvoGetCapabilities3(pDevEvo, EvoParseCapabilityNotifierC3,
+                                 nvHwFormatFromKmsFormatC3,
+                                 NVC373_DISP_CAPABILITIES,
+                                 sizeof(_NvC373DispCapabilities));
 }
 
 static NvBool EvoGetCapabilitiesC5(NVDevEvoPtr pDevEvo)
 {
-    return EvoGetCapabilities3(pDevEvo, EvoParseCapabilityNotifierC5,
-                               nvHwFormatFromKmsFormatC5,
-                               NVC573_DISP_CAPABILITIES,
-                               sizeof(_NvC573DispCapabilities));
+    return nvEvoGetCapabilities3(pDevEvo, EvoParseCapabilityNotifierC5,
+                                 nvHwFormatFromKmsFormatC5,
+                                 NVC573_DISP_CAPABILITIES,
+                                 sizeof(_NvC573DispCapabilities));
 }
 
 NvBool nvEvoGetCapabilitiesC6(NVDevEvoPtr pDevEvo)
 {
-    return EvoGetCapabilities3(pDevEvo, EvoParseCapabilityNotifierC6,
-                               nvHwFormatFromKmsFormatC6,
-                               NVC673_DISP_CAPABILITIES,
-                               sizeof(_NvC673DispCapabilities));
+    return nvEvoGetCapabilities3(pDevEvo,
+                                 nvEvoParseCapabilityNotifier6,
+                                 nvHwFormatFromKmsFormatC6,
+                                 NVC673_DISP_CAPABILITIES,
+                                 sizeof(_NvC673DispCapabilities));
 }
 
 static void EvoSetViewportPointInC3(NVDevEvoPtr pDevEvo, const int head,
@@ -6334,6 +6496,8 @@ NvBool nvEvoGetHeadSetControlCursorValueC3(const NVDevEvoRec *pDevEvo,
                                                 const NVSurfaceEvoRec *pSurfaceEvo,
                                                 NvU32 *pValue)
 {
+    NvU32 plane, numPlanes;
+    NvU64 minRequiredSize = 0;
     NvU32 value = 0;
 
     if (pSurfaceEvo == NULL) {
@@ -6359,25 +6523,43 @@ NvBool nvEvoGetHeadSetControlCursorValueC3(const NVDevEvoRec *pDevEvo,
         return FALSE;
     }
 
+    numPlanes = nvKmsGetSurfaceMemoryFormatInfo(pSurfaceEvo->format)->numPlanes;
+
     /*
      * The cursor only supports a few image sizes.
+     *
+     * Compute minRequiredSize as widthInPixels x heightInPixels x 4 bytes per
+     * pixel, except for 32x32: we require a minimum pitch of 256, so we use
+     * that instead of widthInPixels x 4.
      */
     if ((pSurfaceEvo->widthInPixels == 32) &&
         (pSurfaceEvo->heightInPixels == 32)) {
         value |= DRF_DEF(C37D, _HEAD_SET_CONTROL_CURSOR, _SIZE, _W32_H32);
+        minRequiredSize = 256 * 32;
     } else if ((pSurfaceEvo->widthInPixels == 64) &&
                (pSurfaceEvo->heightInPixels == 64)) {
         value |= DRF_DEF(C37D, _HEAD_SET_CONTROL_CURSOR, _SIZE, _W64_H64);
+        minRequiredSize = 64 * 64 * 4;
     } else if ((pDevEvo->cursorHal->caps.maxSize >= 128) &&
                (pSurfaceEvo->widthInPixels == 128) &&
                (pSurfaceEvo->heightInPixels == 128)) {
         value |= DRF_DEF(C37D, _HEAD_SET_CONTROL_CURSOR, _SIZE, _W128_H128);
+        minRequiredSize = 128 * 128 * 4;
     } else if ((pDevEvo->cursorHal->caps.maxSize >= 256) &&
                (pSurfaceEvo->widthInPixels == 256) &&
                (pSurfaceEvo->heightInPixels == 256)) {
         value |= DRF_DEF(C37D, _HEAD_SET_CONTROL_CURSOR, _SIZE, _W256_H256);
+        minRequiredSize = 256 * 256 * 4;
     } else {
         return FALSE;
+    }
+
+    /* The surface size cannot be smaller than the required minimum. */
+
+    for (plane = 0; plane < numPlanes; plane++) {
+        if (pSurfaceEvo->planes[plane].rmObjectSizeInBytes < minRequiredSize) {
+            return FALSE;
+        }
     }
 
     /*
@@ -6567,7 +6749,7 @@ typedef typeof(ValidateWindowFormatSourceRectC3) val_src_rect_t;
 
 static NvBool EvoValidateWindowFormatWrapper(
     const enum NvKmsSurfaceMemoryFormat format,
-    get_hw_fmt_t *pGetHwFmt,
+    NVEvoHwFormatFromKmsFormatFunc3 *pGetHwFmt,
     const struct NvKmsRect *sourceFetchRect,
     val_src_rect_t *pValSrcRect,
     NvU32 *hwFormatOut)
@@ -7013,14 +7195,14 @@ static void ForceFlipToNull(
     NVDevEvoPtr pDevEvo,
     NVEvoChannelPtr pChannel,
     NvU32 sd,
-    NVEvoUpdateState *updateState)
+    NVEvoUpdateState *updateState,
+    const NVFlipChannelEvoHwState *pNullHwState)
 {
-    NVFlipChannelEvoHwState hwState = { };
     const NvU32 subDeviceMask = (1 << sd);
 
     nvPushEvoSubDevMask(pDevEvo, subDeviceMask);
 
-    pDevEvo->hal->Flip(pDevEvo, pChannel, &hwState, updateState,
+    pDevEvo->hal->Flip(pDevEvo, pChannel, pNullHwState, updateState,
                        FALSE /* bypassComposition */);
 
     nvPopEvoSubDevMask(pDevEvo);
@@ -7079,6 +7261,7 @@ typedef struct {
         NvU32 accelerators;
         NvBool overridden;
     } window[NVKMS_MAX_WINDOWS_PER_DISP];
+    NVFlipChannelEvoHwState nullEvoHwState;
 } EvoIdleChannelAcceleratorState;
 
 static NvBool EvoForceIdleSatelliteChannelsWithAccel(
@@ -7133,8 +7316,16 @@ static NvBool EvoForceIdleSatelliteChannelsWithAccel(
                 }
                 pAcceleratorState[sd].window[window].overridden = TRUE;
 
-                /* Push a flip to null in this channel. */
-                ForceFlipToNull(pDevEvo, pChannel, sd, &updateState);
+                /*
+                 * Push a flip to null in this channel.
+                 *
+                 * XXX nullEvoHwState isn't a valid state for NULL flip, for
+                 * example 'csc' will be all 0s instead of the identity. This
+                 * will also lead to the HW state being out of sync with the SW
+                 * state.
+                 */
+                ForceFlipToNull(pDevEvo, pChannel, sd, &updateState,
+                                &pAcceleratorState->nullEvoHwState);
             }
         }
     }
@@ -7880,7 +8071,7 @@ NVEvoHAL nvEvoC3 = {
     EvoFlipC3,                                    /* Flip */
     EvoFlipTransitionWARC3,                       /* FlipTransitionWAR */
     EvoFillLUTSurfaceC3,                          /* FillLUTSurface */
-    EvoSetLUTContextDmaC3,                        /* SetLUTContextDma */
+    EvoSetOutputLutC3,                            /* SetOutputLut */
     EvoSetOutputScalerC3,                         /* SetOutputScaler */
     EvoSetViewportPointInC3,                      /* SetViewportPointIn */
     EvoSetViewportInOutC3,                        /* SetViewportInOut */
@@ -7917,6 +8108,12 @@ NVEvoHAL nvEvoC3 = {
     EvoComputeWindowScalingTapsC3,                /* ComputeWindowScalingTaps */
     nvEvoGetWindowScalingCapsC3,                  /* GetWindowScalingCaps */
     NULL,                                         /* SetMergeMode */
+    nvEvo1SendHdmiInfoFrame,                      /* SendHdmiInfoFrame */
+    nvEvo1DisableHdmiInfoFrame,                   /* DisableHdmiInfoFrame */
+    nvEvo1SendDpInfoFrameSdp,                     /* SendDpInfoFrameSdp */
+    NULL,                                         /* SetDpVscSdp */
+    NULL,                                         /* InitHwHeadMultiTileConfig */
+    NULL,                                         /* SetMultiTileConfig */
     EvoAllocSurfaceDescriptorC3,                  /* AllocSurfaceDescriptor */
     EvoFreeSurfaceDescriptorC3,                   /* FreeSurfaceDescriptor */
     EvoBindSurfaceDescriptorC3,                   /* BindSurfaceDescriptor */
@@ -7945,6 +8142,9 @@ NVEvoHAL nvEvoC3 = {
         FALSE,                                    /* requiresScalingTapsInBothDimensions */
         FALSE,                                    /* supportsMergeMode */
         FALSE,                                    /* supportsHDMI10BPC */
+        FALSE,                                    /* supportsDPAudio192KHz */
+        FALSE,                                    /* supportsInputColorSpace */
+        FALSE,                                    /* supportsInputColorRange */
         NV_EVO3_SUPPORTED_DITHERING_MODES,        /* supportedDitheringModes */
         sizeof(NVC372_CTRL_IS_MODE_POSSIBLE_PARAMS), /* impStructSize */
         NV_EVO_SCALER_2TAPS,                      /* minScalerTaps */
@@ -7969,7 +8169,7 @@ NVEvoHAL nvEvoC5 = {
     EvoFlipC5,                                    /* Flip */
     EvoFlipTransitionWARC5,                       /* FlipTransitionWAR */
     nvEvoFillLUTSurfaceC5,                        /* FillLUTSurface */
-    EvoSetLUTContextDmaC5,                        /* SetLUTContextDma */
+    EvoSetOutputLutC5,                            /* SetOutputLut */
     EvoSetOutputScalerC3,                         /* SetOutputScaler */
     EvoSetViewportPointInC3,                      /* SetViewportPointIn */
     EvoSetViewportInOutC5,                        /* SetViewportInOut */
@@ -8006,6 +8206,12 @@ NVEvoHAL nvEvoC5 = {
     nvEvoComputeWindowScalingTapsC5,              /* ComputeWindowScalingTaps */
     nvEvoGetWindowScalingCapsC3,                  /* GetWindowScalingCaps */
     EvoSetMergeModeC5,                            /* SetMergeMode */
+    nvEvo1SendHdmiInfoFrame,                      /* SendHdmiInfoFrame */
+    nvEvo1DisableHdmiInfoFrame,                   /* DisableHdmiInfoFrame */
+    nvEvo1SendDpInfoFrameSdp,                     /* SendDpInfoFrameSdp */
+    NULL,                                         /* SetDpVscSdp */
+    NULL,                                         /* InitHwHeadMultiTileConfig */
+    NULL,                                         /* SetMultiTileConfig */
     EvoAllocSurfaceDescriptorC3,                  /* AllocSurfaceDescriptor */
     EvoFreeSurfaceDescriptorC3,                   /* FreeSurfaceDescriptor */
     EvoBindSurfaceDescriptorC3,                   /* BindSurfaceDescriptor */
@@ -8034,6 +8240,9 @@ NVEvoHAL nvEvoC5 = {
         FALSE,                                    /* requiresScalingTapsInBothDimensions */
         TRUE,                                     /* supportsMergeMode */
         FALSE,                                    /* supportsHDMI10BPC */
+        FALSE,                                    /* supportsDPAudio192KHz */
+        TRUE,                                     /* supportsInputColorSpace */
+        TRUE,                                     /* supportsInputColorRange */
         NV_EVO3_SUPPORTED_DITHERING_MODES,        /* supportedDitheringModes */
         sizeof(NVC372_CTRL_IS_MODE_POSSIBLE_PARAMS), /* impStructSize */
         NV_EVO_SCALER_2TAPS,                      /* minScalerTaps */
@@ -8058,7 +8267,7 @@ NVEvoHAL nvEvoC6 = {
     nvEvoFlipC6,                                  /* Flip */
     nvEvoFlipTransitionWARC6,                     /* FlipTransitionWAR */
     nvEvoFillLUTSurfaceC5,                        /* FillLUTSurface */
-    EvoSetLUTContextDmaC5,                        /* SetLUTContextDma */
+    EvoSetOutputLutC5,                            /* SetOutputLut */
     EvoSetOutputScalerC3,                         /* SetOutputScaler */
     EvoSetViewportPointInC3,                      /* SetViewportPointIn */
     EvoSetViewportInOutC5,                        /* SetViewportInOut */
@@ -8095,6 +8304,12 @@ NVEvoHAL nvEvoC6 = {
     nvEvoComputeWindowScalingTapsC5,              /* ComputeWindowScalingTaps */
     nvEvoGetWindowScalingCapsC3,                  /* GetWindowScalingCaps */
     EvoSetMergeModeC5,                            /* SetMergeMode */
+    nvEvo1SendHdmiInfoFrame,                      /* SendHdmiInfoFrame */
+    nvEvo1DisableHdmiInfoFrame,                   /* DisableHdmiInfoFrame */
+    nvEvo1SendDpInfoFrameSdp,                     /* SendDpInfoFrameSdp */
+    NULL,                                         /* SetDpVscSdp */
+    NULL,                                         /* InitHwHeadMultiTileConfig */
+    NULL,                                         /* SetMultiTileConfig */
     EvoAllocSurfaceDescriptorC3,                  /* AllocSurfaceDescriptor */
     EvoFreeSurfaceDescriptorC3,                   /* FreeSurfaceDescriptor */
     EvoBindSurfaceDescriptorC3,                   /* BindSurfaceDescriptor */
@@ -8123,6 +8338,9 @@ NVEvoHAL nvEvoC6 = {
         FALSE,                                    /* requiresScalingTapsInBothDimensions */
         TRUE,                                     /* supportsMergeMode */
         TRUE,                                     /* supportsHDMI10BPC */
+        FALSE,                                    /* supportsDPAudio192KHz */
+        TRUE,                                     /* supportsInputColorSpace */
+        TRUE,                                     /* supportsInputColorRange */
         NV_EVO3_SUPPORTED_DITHERING_MODES,        /* supportedDitheringModes */
         sizeof(NVC372_CTRL_IS_MODE_POSSIBLE_PARAMS), /* impStructSize */
         NV_EVO_SCALER_2TAPS,                      /* minScalerTaps */

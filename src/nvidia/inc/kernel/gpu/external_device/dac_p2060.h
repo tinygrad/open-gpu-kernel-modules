@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -136,6 +136,8 @@ struct DACP2060EXTERNALDEVICE
         NvBool bReCheck;                       // Enabled to verify initialDifference 1 sec after initialization.
         NvBool enableFrmCmpMatchIntSlave;      // Enable the frmCmpMatchInt for slave, if this bit is set.
         NvBool isFrmCmpMatchIntMasterEnabled;  // To enable frmCmpMatchInt for master when gsync framecount exceeds (2^24 - 1000)
+
+        TMR_EVENT *pTimerEvents[NV_MAX_DEVICES]; // Used for supporting gsyncFrameCountTimerService_P2060
     } FrameCountData;
 
     struct {
@@ -233,7 +235,9 @@ NV_STATUS gsyncSetUseHouse_P2060             (OBJGPU *, PDACEXTERNALDEVICE, NvU3
 NV_STATUS gsyncGetSyncStartDelay_P2060       (OBJGPU *, PDACEXTERNALDEVICE, NvU32 *);
 NV_STATUS gsyncSetSyncStartDelay_P2060       (OBJGPU *, PDACEXTERNALDEVICE, NvU32);
 NV_STATUS gsyncRefSignal_P2060               (OBJGPU *, PDACEXTERNALDEVICE, REFTYPE, GSYNCSYNCSIGNAL, NvBool bRate, NvU32 *);
-NV_STATUS gsyncRefMaster_P2060               (OBJGPU *, PDACEXTERNALDEVICE, REFTYPE, NvU32 *DisplayMask, NvU32 *Refresh, NvBool retainMaster, NvBool skipSwapBarrierWar);
+NV_STATUS gsyncRefMaster_P2060               (OBJGPU *, OBJGSYNC *, REFTYPE, NvU32 *DisplayMask,
+                                              NvU32 *Refresh, NvBool retainMaster,
+                                              NvBool skipSwapBarrierWar);
 NV_STATUS gsyncRefSlaves_P2060               (OBJGPU *, PDACEXTERNALDEVICE, REFTYPE, NvU32 *DisplayMask_s, NvU32 *Refresh);
 NV_STATUS gsyncGetCplStatus_P2060            (OBJGPU *, PDACEXTERNALDEVICE, GSYNCSTATUS, NvU32 *);
 NV_STATUS gsyncGetEmitTestSignal_P2060       (OBJGPU *, PDACEXTERNALDEVICE, NvU32 *);
@@ -243,7 +247,7 @@ NV_STATUS gsyncSetInterlaceMode_P2060        (OBJGPU *, PDACEXTERNALDEVICE, NvU3
 NV_STATUS gsyncRefSwapBarrier_P2060          (OBJGPU *, PDACEXTERNALDEVICE, REFTYPE, NvBool *);
 NV_STATUS gsyncGetWatchdog_P2060             (OBJGPU *, PDACEXTERNALDEVICE, NvU32 *);
 NV_STATUS gsyncSetWatchdog_P2060             (OBJGPU *, PDACEXTERNALDEVICE, NvU32);
-NV_STATUS gsyncGetRevision_P2060             (OBJGPU *, PDACEXTERNALDEVICE, GSYNCCAPSPARAMS *);
+NV_STATUS gsyncGetRevision_P2060             (OBJGPU *, OBJGSYNC *, GSYNCCAPSPARAMS *);
 NV_STATUS gsyncOptimizeTimingParameters_P2060(OBJGPU *, GSYNCTIMINGPARAMS *);
 NV_STATUS gsyncGetStereoLockMode_P2060       (OBJGPU *, PDACEXTERNALDEVICE, NvU32 *);
 NV_STATUS gsyncSetStereoLockMode_P2060       (OBJGPU *, PDACEXTERNALDEVICE, NvU32);

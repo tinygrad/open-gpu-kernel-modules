@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -21,7 +21,7 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
-#include "objtmr.h"
+#include "gpu/timer/objtmr.h"
 #include "gpu/external_device/gsync.h"
 
 #include "gpu/external_device/external_device.h"
@@ -126,63 +126,12 @@ extdevDestroy(OBJGPU *pGpu)
     }
 }
 
-// Schedule Watchdog
-NV_STATUS extdevScheduleWatchdog
-(
-    OBJGPU *pGpu,
-    PDACEXTERNALDEVICE pExtDevice
-)
-{
-    OBJTMR *pTmr = GPU_GET_TIMER(pGpu);
-    NV_STATUS rmStatus = NV_ERR_GENERIC;
-
-    // make sure it isn't already scheduled
-    if (!pExtDevice->WatchdogControl.Scheduled)
-    {
-        pExtDevice->WatchdogControl.Scheduled = NV_TRUE;
-
-        rmStatus = tmrScheduleCallbackRel(
-            pTmr,
-            extdevServiceWatchdog,
-            pExtDevice,
-            pExtDevice->WatchdogControl.TimeOut,
-            TMR_FLAG_RECUR,
-            0);
-
-        if (NV_OK != rmStatus)
-        {
-            pExtDevice->WatchdogControl.Scheduled = NV_FALSE;
-        }
-    }
-
-    return rmStatus;
-}
-
-// deSchedule Watchdog
-NV_STATUS extdevCancelWatchdog
-(
-    OBJGPU *pGpu,
-    PDACEXTERNALDEVICE pExtDevice
-)
-{
-    OBJTMR *pTmr = GPU_GET_TIMER(pGpu);
-    NV_STATUS rmStatus;
-
-    // cancel first...
-    rmStatus = tmrCancelCallback(pTmr, pExtDevice);
-
-    // ... then lower the flag!
-    pExtDevice->WatchdogControl.Scheduled = NV_FALSE;
-
-    return rmStatus;
-}
-
 // Service the Watchdog
 NV_STATUS extdevServiceWatchdog
 (
     OBJGPU *pGpu,
     OBJTMR *pTmr,
-    void *_pComponent
+    TMR_EVENT *pTmrEvent
 )
 {
     PDACEXTERNALDEVICE pExtDevice = NULL;
@@ -202,6 +151,52 @@ NV_STATUS extdevServiceWatchdog
     pExtDevice->WatchdogControl.Scheduled = NV_FALSE;
 
     return pdsif->Watchdog(pGpu, pTmr, pExtDevice);
+}
+
+// Schedule Watchdog
+NV_STATUS extdevScheduleWatchdog
+(
+    OBJGPU *pGpu,
+    PDACEXTERNALDEVICE pExtDevice
+)
+{
+    OBJTMR *pTmr = GPU_GET_TIMER(pGpu);
+    NV_STATUS rmStatus = NV_ERR_GENERIC;
+
+    // make sure it isn't already scheduled
+    if (!pExtDevice->WatchdogControl.Scheduled)
+    {
+        pExtDevice->WatchdogControl.Scheduled = NV_TRUE;
+
+        rmStatus = tmrEventScheduleRel(pTmr,
+                                       pExtDevice->WatchdogControl.pTimerEvents[gpuGetInstance(pGpu)],
+                                       pExtDevice->WatchdogControl.TimeOut);
+
+        if (NV_OK != rmStatus)
+        {
+            pExtDevice->WatchdogControl.Scheduled = NV_FALSE;
+        }
+    }
+
+    return rmStatus;
+}
+
+// deSchedule Watchdog
+NV_STATUS extdevCancelWatchdog
+(
+    OBJGPU *pGpu,
+    PDACEXTERNALDEVICE pExtDevice
+)
+{
+    OBJTMR *pTmr = GPU_GET_TIMER(pGpu);
+
+    // cancel first...
+    tmrEventCancel(pTmr, pExtDevice->WatchdogControl.pTimerEvents[gpuGetInstance(pGpu)]);
+
+    // ... then lower the flag!
+    pExtDevice->WatchdogControl.Scheduled = NV_FALSE;
+
+    return NV_OK;
 }
 
 // Trivial validation
@@ -228,13 +223,9 @@ writeregu008_extdevice
     NvU8               Data
 )
 {
-
-    NV_STATUS status = NV_ERR_GENERIC;
-
     NvU32 i2cPort = (pGpu->i2cPortForExtdev < NV402C_CTRL_NUM_I2C_PORTS) ? pGpu->i2cPortForExtdev : pThis->I2CPort;
-    status = i2c_extdeviceHelper(pGpu, pThis, i2cPort, SubAdr, &Data, NV_TRUE);
 
-    return status;
+    return i2c_extdeviceHelper(pGpu, pThis, i2cPort, SubAdr, &Data, NV_TRUE);
 }
 
 //
@@ -283,13 +274,9 @@ readregu008_extdevice
     NvU8               *pData
 )
 {
-
-    NV_STATUS status = NV_ERR_GENERIC;
-
     NvU32 i2cPort = (pGpu->i2cPortForExtdev < NV402C_CTRL_NUM_I2C_PORTS) ? pGpu->i2cPortForExtdev : pThis->I2CPort;
-    status = i2c_extdeviceHelper(pGpu, pThis, i2cPort, SubAdr, pData, NV_FALSE);
 
-    return status;
+    return i2c_extdeviceHelper(pGpu, pThis, i2cPort, SubAdr, pData, NV_FALSE);
 }
 
 //

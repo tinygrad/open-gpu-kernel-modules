@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2020-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2020-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -80,19 +80,22 @@ sysmemConstruct_IMPL
     NvU32 gpuCacheAttrib;
     NV_STATUS rmStatus = NV_OK;
     NvHandle hClient = pCallContext->pClient->hClient;
+    RmClient *pRmClient = dynamicCast(pCallContext->pClient, RmClient);
     NvHandle hParent = pCallContext->pResourceRef->pParentRef->hResource;
     NvU64 sizeOut;
     NvU64 offsetOut;
     MEMORY_DESCRIPTOR *pMemDesc;
     NvU32 Cache;
     NvU32 flags;
-    StandardMemory *pStdMemory = staticCast(pSystemMemory, StandardMemory);
+    RM_ATTR_PAGE_SIZE pageSizeAttr;
+
+    NV_ASSERT_OR_RETURN(pRmClient != NULL, NV_ERR_INVALID_CLIENT);
 
     // Copy-construction has already been done by the base Memory class
     if (RS_IS_COPY_CTOR(pParams))
         return NV_OK;
 
-    NV_CHECK_OK_OR_RETURN(LEVEL_ERROR, stdmemValidateParams(pGpu, hClient, pAllocData));
+    NV_CHECK_OK_OR_RETURN(LEVEL_ERROR, stdmemValidateParams(pGpu, pRmClient, pAllocData));
     NV_CHECK_OR_RETURN(LEVEL_ERROR,
                        DRF_VAL(OS32, _ATTR, _LOCATION, pAllocData->attr) != NVOS32_ATTR_LOCATION_VIDMEM &&
                            !(pAllocData->flags & NVOS32_ALLOC_FLAGS_VIRTUAL),
@@ -148,42 +151,7 @@ sysmemConstruct_IMPL
     sizeOut = pMemDesc->Size;
     pAllocData->limit = sizeOut - 1;
 
-    //
-    // For system memory default to GPU uncached.  GPU caching is different from
-    // the expected default memory model since it is not coherent.  Clients must
-    // understand this an handle any coherency requirements explicitly.
-    //
-    if (DRF_VAL(OS32, _ATTR2, _GPU_CACHEABLE, pAllocData->attr2) ==
-        NVOS32_ATTR2_GPU_CACHEABLE_DEFAULT)
-    {
-        pAllocData->attr2 = FLD_SET_DRF(OS32, _ATTR2, _GPU_CACHEABLE, _NO,
-                                        pAllocData->attr2);
-    }
-
-    if (DRF_VAL(OS32, _ATTR2, _GPU_CACHEABLE, pAllocData->attr2) ==
-        NVOS32_ATTR2_GPU_CACHEABLE_YES)
-    {
-        gpuCacheAttrib = NV_MEMORY_CACHED;
-    }
-    else
-    {
-        gpuCacheAttrib = NV_MEMORY_UNCACHED;
-    }
-
-    if (DRF_VAL(OS32, _ATTR, _COHERENCY, pAllocData->attr) == NVOS32_ATTR_COHERENCY_UNCACHED)
-        Cache = NV_MEMORY_UNCACHED;
-    else if (DRF_VAL(OS32, _ATTR, _COHERENCY, pAllocData->attr) == NVOS32_ATTR_COHERENCY_CACHED)
-        Cache = NV_MEMORY_CACHED;
-    else if (DRF_VAL(OS32, _ATTR, _COHERENCY, pAllocData->attr) == NVOS32_ATTR_COHERENCY_WRITE_COMBINE)
-        Cache = NV_MEMORY_WRITECOMBINED;
-    else if (DRF_VAL(OS32, _ATTR, _COHERENCY, pAllocData->attr) == NVOS32_ATTR_COHERENCY_WRITE_THROUGH)
-        Cache = NV_MEMORY_CACHED;
-    else if (DRF_VAL(OS32, _ATTR, _COHERENCY, pAllocData->attr) == NVOS32_ATTR_COHERENCY_WRITE_PROTECT)
-        Cache = NV_MEMORY_CACHED;
-    else if (DRF_VAL(OS32, _ATTR, _COHERENCY, pAllocData->attr) == NVOS32_ATTR_COHERENCY_WRITE_BACK)
-        Cache = NV_MEMORY_CACHED;
-    else
-        Cache = 0;
+    memSetSysmemCacheAttrib(pGpu, pAllocData, &Cache, &gpuCacheAttrib);
 
     ct_assert(NVOS32_ATTR_COHERENCY_UNCACHED      == NVOS02_FLAGS_COHERENCY_UNCACHED);
     ct_assert(NVOS32_ATTR_COHERENCY_CACHED        == NVOS02_FLAGS_COHERENCY_CACHED);
@@ -243,26 +211,16 @@ sysmemConstruct_IMPL
         }
 
         memdescSetNumaNode(pMemDesc, pAllocData->numaNode);
-        //
-        // In order to allow EGM memory allocation to specify
-        // the page granularity of the physical allocation
-        // we need to force set the page size here.
-        //
-        // The expectation is that the EGM NUMA allocator is able to support any requested pagesize
-        // and that subsequent memdesc pagesize set requests will NOP as the pagesize matches.
-        //
-        if (memdescIsEgm(pMemDesc))
-        {
-            RM_ATTR_PAGE_SIZE pageSizeAttr = dmaNvos32ToPageSizeAttr(pAllocData->attr, pAllocData->attr2);
-            rmStatus = memmgrSetMemDescPageSize_HAL(pGpu, GPU_GET_MEMORY_MANAGER(pGpu), pMemDesc,
-                                                    AT_GPU, pageSizeAttr);
-            if (rmStatus != NV_OK)
-            {
-                NV_PRINTF(LEVEL_ERROR, "Failed to set memdesc page size for EGM.\n");
-                memdescDestroy(pMemDesc);
-                goto failed;
-            }
-        }
+    }
+
+    pageSizeAttr = dmaNvos32ToPageSizeAttr(pAllocData->attr, pAllocData->attr2);
+    rmStatus = memmgrSetMemDescPageSize_HAL(pGpu, GPU_GET_MEMORY_MANAGER(pGpu), pMemDesc,
+                                            AT_GPU, pageSizeAttr);
+    if (rmStatus != NV_OK)
+    {
+        NV_PRINTF(LEVEL_ERROR, "Failed to set memdesc page size\n");
+        memdescDestroy(pMemDesc);
+        goto failed;
     }
 
     memdescTagAlloc(rmStatus, NV_FB_ALLOC_RM_INTERNAL_OWNER_UNNAMED_TAG_132, 
@@ -327,18 +285,48 @@ sysmemConstruct_IMPL
     }
     else if ((FLD_TEST_DRF(OS32, _ATTR, _PAGE_SIZE, _BIG, pAllocData->attr) ||
               FLD_TEST_DRF(OS32, _ATTR, _PAGE_SIZE, _HUGE, pAllocData->attr)) &&
-              FLD_TEST_DRF(OS32, _ATTR, _PHYSICALITY, _NONCONTIGUOUS, pAllocData->attr) &&
-              !memdescIsEgm(pMemDesc) &&
-             (stdmemGetSysmemPageSize_HAL(pGpu, pStdMemory) == RM_PAGE_SIZE))
+              FLD_TEST_DRF(OS32, _ATTR, _PHYSICALITY, _NONCONTIGUOUS, pAllocData->attr))
     {
-        NV_PRINTF(LEVEL_ERROR,
-                  "Non-contiguous allocation not supported where requested page size is larger than sysmem page size.\n");
-        NV_ASSERT(0);
-        rmStatus = NV_ERR_NOT_SUPPORTED;
+        NvBool bLargePageNonContigAllocSupported;
 
-        memdescFree(pMemDesc);
-        memdescDestroy(pMemDesc);
-        goto failed;
+        //
+        // The below checks verify whether a non-contig large page size sysmem request is supported by
+        // the platform. In the MODS case we can only support large page size sysmem requests
+        // if MODS supplied the sysmem page size regkey that is >4K.
+        // This check could be performed better, but avoiding a change in MODS behavior for now.
+        //
+        if (RMCFG_FEATURE_PLATFORM_UNIX)
+        {
+            bLargePageNonContigAllocSupported = NV_TRUE;
+        }
+        else if (RMCFG_FEATURE_MODS_FEATURES)
+        {
+            StandardMemory *pStdMemory = staticCast(pSystemMemory, StandardMemory);
+
+            if (stdmemGetSysmemPageSize_HAL(pGpu, pStdMemory) > RM_PAGE_SIZE)
+            {
+                bLargePageNonContigAllocSupported = NV_TRUE;
+            }
+            else
+            {
+                bLargePageNonContigAllocSupported = NV_FALSE;
+            }
+        }
+        else
+        {
+            bLargePageNonContigAllocSupported = NV_FALSE;
+        }
+
+        if (!bLargePageNonContigAllocSupported)
+        {
+            NV_PRINTF(LEVEL_ERROR,
+                "Non-contiguous allocation not supported where requested page size is larger than sysmem page size.\n");
+            rmStatus = NV_ERR_NOT_SUPPORTED;
+
+            memdescFree(pMemDesc);
+            memdescDestroy(pMemDesc);
+            goto failed;
+        }
     }
 
     rmStatus = memConstructCommon(pMemory, pAllocRequest->classNum, flags, pMemDesc, 0,
@@ -533,7 +521,7 @@ sysmemAllocResources
     // than the capture OS so if we're running a replay where the requested page size is larger,
     // assume this is a contiguous piece of memory, if contiguity is not specified.
     //
-    if (FLD_TEST_DRF(OS32, _ATTR, _PHYSICALITY, _DEFAULT, pVidHeapAlloc->attr))
+    if (RMCFG_FEATURE_PLATFORM_MODS && FLD_TEST_DRF(OS32, _ATTR, _PHYSICALITY, _DEFAULT, pVidHeapAlloc->attr))
     {
         if ((FLD_TEST_DRF(OS32, _ATTR, _PAGE_SIZE, _BIG, pVidHeapAlloc->attr) ||
              FLD_TEST_DRF(OS32, _ATTR, _PAGE_SIZE, _HUGE, pVidHeapAlloc->attr)) &&

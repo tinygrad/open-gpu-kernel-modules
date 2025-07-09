@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2009-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2009-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -564,7 +564,6 @@ NV_STATUS CliDelThirdPartyP2PVidmemInfo
     PCLI_THIRD_PARTY_P2P_MAPPING_INFO pMappingInfo;
     PCLI_THIRD_PARTY_P2P_VIDMEM_INFO pVidmemInfo;
     void *pKey;
-    NvBool bPendingMappings = NV_FALSE;
 
     pVidmemInfo = mapFind(&pThirdPartyP2P->vidmemInfoMap, hMemory);
     if (pVidmemInfo == NULL)
@@ -583,18 +582,10 @@ NV_STATUS CliDelThirdPartyP2PVidmemInfo
             pMappingInfo->pFreeCallback(pMappingInfo->pData);
         }
 
-        status = thirdpartyp2pDelMappingInfoByKey(pThirdPartyP2P, pKey, NV_FALSE);
+        status = thirdpartyp2pDelMappingInfoByKey(pThirdPartyP2P, pKey);
         NV_ASSERT(status == NV_OK);
 
         pNode = pVidmemInfo->pMappingInfoList;
-
-        bPendingMappings = NV_TRUE;
-    }
-
-    // RSYNC is needed only if there are outstanding mappings.
-    if (bPendingMappings)
-    {
-        osWaitForIbmnpuRsync(pVidmemInfo->pMemDesc->pGpu->pOsGpuInfo);
     }
 
     mapRemove(&pThirdPartyP2P->vidmemInfoMap, pVidmemInfo);
@@ -787,7 +778,6 @@ static NV_STATUS _thirdpartyp2pDelMappingInfoByKey
 (
     ThirdPartyP2P                    *pThirdPartyP2P,
     void                             *pKey,
-    NvBool                            bIsRsyncNeeded,
     CLI_THIRD_PARTY_P2P_VIDMEM_INFO **ppVidmemInfo
 )
 {
@@ -866,14 +856,13 @@ static NV_STATUS _thirdpartyp2pDelMappingInfoByKey
                                                RES_GET_PARENT_HANDLE(pSubdevice),
                                                pVidmemInfo->hMemory,
                                                0,
-                                               pExtentInfo->fbApertureOffset, status);
+                                               pExtentInfo->memArea.pRanges[0].start, status);
                     }
                     else
                     {
                         status = kbusUnmapFbAperture_HAL(pGpu, pKernelBus,
                                                          pExtentInfo->pMemDesc,
-                                                         pExtentInfo->fbApertureOffset,
-                                                         pExtentInfo->length,
+                                                         pExtentInfo->memArea,
                                                          BUS_MAP_FB_FLAGS_MAP_UNICAST);
                     }
                     NV_ASSERT(status == NV_OK);
@@ -892,11 +881,6 @@ static NV_STATUS _thirdpartyp2pDelMappingInfoByKey
             if (status == NV_OK)
             {
                 portMemFree(pMappingInfo);
-            }
-
-            if (bIsRsyncNeeded)
-            {
-                osWaitForIbmnpuRsync(pVidmemInfo->pMemDesc->pGpu->pOsGpuInfo);
             }
 
             //
@@ -922,28 +906,25 @@ static NV_STATUS _thirdpartyp2pDelMappingInfoByKey
 NV_STATUS thirdpartyp2pDelMappingInfoByKey_IMPL
 (
     ThirdPartyP2P                    *pThirdPartyP2P,
-    void                             *pKey,
-    NvBool                            bIsRsyncNeeded
+    void                             *pKey
 )
 {
     return _thirdpartyp2pDelMappingInfoByKey(pThirdPartyP2P,
                                              pKey,
-                                             bIsRsyncNeeded,
                                              NULL);
 }
 
 NV_STATUS thirdpartyp2pDelPersistentMappingInfoByKey_IMPL
 (
     ThirdPartyP2P                    *pThirdPartyP2P,
-    void                             *pKey,
-    NvBool                            bIsRsyncNeeded
+    void                             *pKey
 )
 {
     CLI_THIRD_PARTY_P2P_VIDMEM_INFO *pVidmemInfo = NULL;
 
     NV_ASSERT_OK_OR_RETURN(
         _thirdpartyp2pDelMappingInfoByKey(pThirdPartyP2P, pKey,
-                                          bIsRsyncNeeded, &pVidmemInfo));
+                                          &pVidmemInfo));
 
     CliDelThirdPartyP2PVidmemInfoPersistent(pThirdPartyP2P, pVidmemInfo);
 
@@ -953,33 +934,20 @@ NV_STATUS thirdpartyp2pDelPersistentMappingInfoByKey_IMPL
 NV_STATUS
 CliAddThirdPartyP2PClientPid
 (
-    NvHandle hClient,
-    NvHandle hThirdPartyP2P,
-    NvU32    pid,
-    NvU32    client
+    ThirdPartyP2P* pThirdPartyP2P,
+    NvU32          pid,
+    NvHandle       hRegisterClient
 )
 {
-    RsResourceRef *pThirdPartyP2PRef;
-    ThirdPartyP2P *pThirdPartyP2P;
-    NvU32          pidIndex;
-    RsClient      *pClient;
+    NvU32    pidIndex;
 
-    NV_ASSERT_OK_OR_RETURN(
-        serverGetClientUnderLock(&g_resServ, hClient, &pClient));
-
-    NV_ASSERT_OK_OR_RETURN(
-        clientGetResourceRef(pClient,
-                                  hThirdPartyP2P,
-                                  &pThirdPartyP2PRef));
-
-    pThirdPartyP2P = dynamicCast(pThirdPartyP2PRef->pResource, ThirdPartyP2P);
     if (pThirdPartyP2P == NULL)
     {
         return NV_ERR_INVALID_OBJECT;
     }
 
     // Do not register another client if one already exists for this PID
-    if (thirdpartyp2pIsValidClientPid(pThirdPartyP2P, pid, client))
+    if (thirdpartyp2pIsValidClientPid(pThirdPartyP2P, pid, hRegisterClient))
     {
         return NV_OK;
     }
@@ -991,7 +959,7 @@ CliAddThirdPartyP2PClientPid
         if (0 == pThirdPartyP2P->pidClientList[pidIndex].pid)
         {
             pThirdPartyP2P->pidClientList[pidIndex].pid = pid;
-            pThirdPartyP2P->pidClientList[pidIndex].hClient = client;
+            pThirdPartyP2P->pidClientList[pidIndex].hClient = hRegisterClient;
             return NV_OK;
         }
     }

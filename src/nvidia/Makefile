@@ -109,7 +109,7 @@ CFLAGS += -DNVRM
 CFLAGS += -DLOCK_VAL_ENABLED=0
 CFLAGS += -DPORT_ATOMIC_64_BIT_SUPPORTED=1
 CFLAGS += -DPORT_IS_KERNEL_BUILD=1
-CFLAGS += -DPORT_IS_CHECKED_BUILD=1
+CFLAGS += -DPORT_IS_CHECKED_BUILD=0
 CFLAGS += -DPORT_MODULE_atomic=1
 CFLAGS += -DPORT_MODULE_core=1
 CFLAGS += -DPORT_MODULE_cpu=1
@@ -208,6 +208,8 @@ all: $(NV_KERNEL_O)
 
 LINKER_SCRIPT = nv-kernel.ld
 
+NV_KERNEL_O_LDFLAGS += $(LDFLAGS)
+
 $(NV_KERNEL_O): $(OBJS) $(EXPORTS_LINK_COMMAND) $(LINKER_SCRIPT)
 	$(call quiet_cmd,LD) \
 	  $(NV_KERNEL_O_LDFLAGS) \
@@ -216,6 +218,7 @@ $(NV_KERNEL_O): $(OBJS) $(EXPORTS_LINK_COMMAND) $(LINKER_SCRIPT)
 	$(call quiet_cmd,OBJCOPY) \
 	  --localize-symbol=memset \
 	  --localize-symbol=memcpy \
+	  --remove-section=.note.gnu.property \
 	  $@
 
 .PHONY: clean

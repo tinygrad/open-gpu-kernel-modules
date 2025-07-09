@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -736,7 +736,9 @@ _kgmmuFaultEntryRmServiceable_GV100
         engineId = (faultEntry >> DRF_SHIFT_MW(NVC369_BUF_ENTRY_ENGINE_ID))
                                 & DRF_MASK_MW(NVC369_BUF_ENTRY_ENGINE_ID);
 
-        bEngineCE = ((engineId >= kgmmuGetMinCeEngineId_HAL(pKernelGmmu)) && (engineId <= kgmmuGetMaxCeEngineId_HAL(pGpu, pKernelGmmu)));
+        bEngineCE = ((engineId >= pKernelGmmu->minCeMmuFaultId) &&
+                     (engineId <= pKernelGmmu->maxCeMmuFaultId));
+
         bPbdmaFault = kfifoIsMmuFaultEngineIdPbdma(pGpu, pKernelFifo, engineId);
 
         *bRmServiceable = (!bClientBufEnabled || !bUvmHandledNonFatal || !(bEngineCE || bPbdmaFault));
@@ -834,10 +836,12 @@ _kgmmuCopyFaultPktInShadowBuf_GV100
                 // Non-Replayable copies always need to succeed.
                 //
                 NV_ASSERT_OR_RETURN(type == REPLAYABLE_FAULT_BUFFER, NV_ERR_INVALID_STATE);
+
                 if (shadowBufPutIndex != origShadowBufPutIndex)
                 {
                     goto update_client_put;
                 }
+
 
                 // Signal the caller that no copies have taken place.
                 return NV_WARN_NOTHING_TO_DO;
@@ -1292,39 +1296,23 @@ kgmmuCopyFaultPacketToClientShadowBuffer_GV100
     return NV_OK;
 }
 
-/*!
- * @brief Get the engine ID associated with the min CE
- *
- * @param[in] pKernelGmmu  KernelGmmu object
- *
- * return engine ID of the min CE
- */
-NvU32
-kgmmuGetMinCeEngineId_GV100
-(
-    KernelGmmu *pKernelGmmu
-)
-{
-    return NV_PFAULT_MMU_ENG_ID_CE0;
-}
 
-/*!
- * @brief Get the engine ID associated with the max CE
- *
- * @param[in] pGpu         OBJGPU object
- * @param[in] pKernelGmmu  KernelGmmu object
- *
- * return engine ID of the max CE
- */
-NvU32
-kgmmuGetMaxCeEngineId_GV100
+NV_STATUS
+kgmmuInitCeMmuFaultIdRange_GV100
 (
     OBJGPU     *pGpu,
     KernelGmmu *pKernelGmmu
 )
 {
-    return NV_PFAULT_MMU_ENG_ID_CE8;
+    pKernelGmmu->minCeMmuFaultId = NV_PFAULT_MMU_ENG_ID_CE0;
+    pKernelGmmu->maxCeMmuFaultId = NV_PFAULT_MMU_ENG_ID_CE8;
+
+    NV_PRINTF(LEVEL_INFO, "CE MMU Fault ID range [0x%x - 0x%x]\n",
+                           pKernelGmmu->minCeMmuFaultId, pKernelGmmu->maxCeMmuFaultId);
+
+    return NV_OK;
 }
+
 
 /*!
  * @brief Creates shadow fault buffer for RM fatal fault handling
@@ -2065,10 +2053,9 @@ kgmmuServiceMmuFault_GV100
     if (IS_VIRTUAL_WITH_SRIOV(pGpu))
     {
         NvBool bIsMmuDebugModeEnabled = NV_FALSE;
-        NvU32 engDesc;
+        RM_ENGINE_TYPE rmEngineType = kchannelGetEngineType(pKernelChannel);
 
-        rmStatus = kchannelGetEngine_HAL(pGpu, pKernelChannel, &engDesc);
-        if ((rmStatus == NV_OK) && IS_GR(engDesc))
+        if ((rmStatus == NV_OK) && RM_ENGINE_TYPE_IS_GR(rmEngineType))
         {
             NV0090_CTRL_GET_MMU_DEBUG_MODE_PARAMS params;
 
@@ -2180,7 +2167,7 @@ kgmmuServiceMmuFault_GV100
         //
         kchannelFillMmuExceptionInfo(pKernelChannel, pMmuExceptionData);
 
-        if (IS_GR(engDesc) && pMmuExceptionData->bGpc)
+        if (RM_ENGINE_TYPE_IS_GR(rmEngineType) && pMmuExceptionData->bGpc)
         {
             KernelGraphicsContext *pKernelGraphicsContext;
 
@@ -2363,7 +2350,7 @@ _kgmmuServiceBar2Faults_GV100
                                                     _REPLAYABLE_ERROR, _SET, faultStatus);
     NvBool nonReplayableFaultError = FLD_TEST_DRF(_PFB_PRI, _MMU_FAULT_STATUS,
                                                       _NON_REPLAYABLE_ERROR, _SET, faultStatus);
-    NvBool accessCntrError = kgmmuTestAccessCounterWriteNak_HAL(pGpu, pKernelGmmu);
+    NvBool bServiceActrs = kgmmuCheckAccessCounterBar2FaultServicingState_HAL(pGpu, pKernelGmmu);
 
     NvBool bVidmemAccessBitBufError = kgmmuTestVidmemAccessBitBufferError_HAL(pGpu, pKernelGmmu, faultStatus);
 
@@ -2382,7 +2369,7 @@ _kgmmuServiceBar2Faults_GV100
     }
 
     // Access counter Bar2 fault handling
-    if (accessCntrError)
+    if (bServiceActrs)
     {
         for (i = 0; i < pUvm->accessCounterBufferCount; i++)
         {
@@ -2412,7 +2399,7 @@ _kgmmuServiceBar2Faults_GV100
         faultStatus |= _kgmmuResetFaultBufferError_GV100(faultBufType);
     }
 
-    if (accessCntrError)
+    if (bServiceActrs)
     {
         for (i = 0; i < pUvm->accessCounterBufferCount; i++)
         {
@@ -2623,3 +2610,20 @@ kgmmuServicePriFaults_GV100
     }
     return rmStatus;
 }
+
+/*!
+ *  @brief Checks whether the access counter reset sequence
+ *         should be performed on BAR2 fault servicing
+ *
+ * @returns NvBool indicating whether servicing should be performed.
+ */
+NvBool
+kgmmuCheckAccessCounterBar2FaultServicingState_GV100
+(
+    OBJGPU *pGpu,
+    KernelGmmu *pKernelGmmu
+)
+{
+    return kgmmuTestAccessCounterWriteNak_HAL(pGpu, pKernelGmmu);
+}
+

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -22,7 +22,6 @@
  */
 
 #include "mem_mgr/egm_mem.h"
-
 #include "gpu/mem_mgr/mem_mgr.h"
 #include "gpu/mem_mgr/mem_utils.h"
 #include "os/os.h"
@@ -42,6 +41,7 @@ egmmemConstruct_IMPL
     Memory                      *pMemory            = staticCast(pExtendedGpuMemory, Memory);
     OBJGPU                      *pGpu               = pMemory->pGpu;
     MemoryManager               *pMemoryManager     = GPU_GET_MEMORY_MANAGER(pGpu);
+    RmClient                    *pRmClient          = dynamicCast(pCallContext->pClient, RmClient);
     NvHandle                     hClient            = pCallContext->pClient->hClient;
     NvHandle                     hParent            = pCallContext->pResourceRef->pParentRef->hResource;
     NV_MEMORY_ALLOCATION_PARAMS *pAllocData         = pParams->pAllocParams;
@@ -60,11 +60,13 @@ egmmemConstruct_IMPL
     NvU32 gpuCacheAttrib;
     NvU32 Cache;
 
+
     // Copy-construction has already been done by the base Memory class
     if (RS_IS_COPY_CTOR(pParams))
         return NV_OK;
 
-    NV_CHECK_OK_OR_RETURN(LEVEL_ERROR, egmmemValidateParams(pGpu, hClient, pAllocData));
+    NV_ASSERT_OR_RETURN(pRmClient != NULL, NV_ERR_INVALID_CLIENT);
+    NV_CHECK_OK_OR_RETURN(LEVEL_ERROR, egmmemValidateParams(pGpu, pRmClient, pAllocData));
 
     //
     // For non self-hosted case, we mimic vidmem as EGM and is only used for
@@ -121,42 +123,7 @@ egmmemConstruct_IMPL
     sizeOut = pMemDesc->Size;
     pAllocData->limit = sizeOut - 1;
 
-    if (FLD_TEST_DRF(OS32, _ATTR2, _GPU_CACHEABLE, _DEFAULT, pAllocData->attr2))
-    {
-        pAllocData->attr2 = FLD_SET_DRF(OS32, _ATTR2, _GPU_CACHEABLE, _NO,
-                                        pAllocData->attr2);
-    }
-
-    if (FLD_TEST_DRF(OS32, _ATTR2, _GPU_CACHEABLE, _YES, pAllocData->attr2))
-    {
-        gpuCacheAttrib = NV_MEMORY_CACHED;
-    }
-    else
-    {
-        gpuCacheAttrib = NV_MEMORY_UNCACHED;
-    }
-
-    if (FLD_TEST_DRF(OS32, _ATTR, _COHERENCY, _UNCACHED, pAllocData->attr))
-        Cache = NV_MEMORY_UNCACHED;
-    else if (FLD_TEST_DRF(OS32, _ATTR, _COHERENCY, _CACHED, pAllocData->attr))
-        Cache = NV_MEMORY_CACHED;
-    else if (FLD_TEST_DRF(OS32, _ATTR, _COHERENCY, _WRITE_COMBINE, pAllocData->attr))
-        Cache = NV_MEMORY_WRITECOMBINED;
-    else if (FLD_TEST_DRF(OS32, _ATTR, _COHERENCY, _WRITE_THROUGH, pAllocData->attr))
-        Cache = NV_MEMORY_CACHED;
-    else if (FLD_TEST_DRF(OS32, _ATTR, _COHERENCY, _WRITE_PROTECT, pAllocData->attr))
-        Cache = NV_MEMORY_CACHED;
-    else if (FLD_TEST_DRF(OS32, _ATTR, _COHERENCY, _WRITE_BACK, pAllocData->attr))
-        Cache = NV_MEMORY_CACHED;
-    else
-        Cache = 0;
-
-    ct_assert(NVOS32_ATTR_COHERENCY_UNCACHED      == NVOS02_FLAGS_COHERENCY_UNCACHED);
-    ct_assert(NVOS32_ATTR_COHERENCY_CACHED        == NVOS02_FLAGS_COHERENCY_CACHED);
-    ct_assert(NVOS32_ATTR_COHERENCY_WRITE_COMBINE == NVOS02_FLAGS_COHERENCY_WRITE_COMBINE);
-    ct_assert(NVOS32_ATTR_COHERENCY_WRITE_THROUGH == NVOS02_FLAGS_COHERENCY_WRITE_THROUGH);
-    ct_assert(NVOS32_ATTR_COHERENCY_WRITE_PROTECT == NVOS02_FLAGS_COHERENCY_WRITE_PROTECT);
-    ct_assert(NVOS32_ATTR_COHERENCY_WRITE_BACK    == NVOS02_FLAGS_COHERENCY_WRITE_BACK);
+    memSetSysmemCacheAttrib(pGpu, pAllocData, &Cache, &gpuCacheAttrib);
 
     flags = DRF_DEF(OS02, _FLAGS, _LOCATION, _PCI) |
             DRF_DEF(OS02, _FLAGS, _MAPPING, _NO_MAP) |
@@ -247,13 +214,13 @@ NV_STATUS
 egmmemValidateParams
 (
     OBJGPU                      *pGpu,
-    NvHandle                     hClient,
+    RmClient                    *pRmClient,
     NV_MEMORY_ALLOCATION_PARAMS *pAllocData
 )
 {
     MemoryManager *pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
 
-    NV_CHECK_OK_OR_RETURN(LEVEL_ERROR, stdmemValidateParams(pGpu, hClient, pAllocData));
+    NV_CHECK_OK_OR_RETURN(LEVEL_ERROR, stdmemValidateParams(pGpu, pRmClient, pAllocData));
 
     NV_CHECK_OR_RETURN(LEVEL_ERROR,
                        FLD_TEST_DRF(OS32, _ATTR2, _USE_EGM, _TRUE, pAllocData->attr2),

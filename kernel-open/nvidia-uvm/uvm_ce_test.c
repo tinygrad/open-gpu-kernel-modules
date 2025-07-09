@@ -65,7 +65,10 @@ static NV_STATUS test_non_pipelined(uvm_gpu_t *gpu)
     memset(host_ptr, 0, CE_TEST_MEM_SIZE);
 
     for (i = 0; i < CE_TEST_MEM_COUNT; ++i) {
-        status = uvm_rm_mem_alloc(gpu, UVM_RM_MEM_TYPE_GPU, CE_TEST_MEM_SIZE, 0, &mem[i]);
+        uvm_rm_mem_type_t type;
+
+        type = gpu->mem_info.size ? UVM_RM_MEM_TYPE_GPU : UVM_RM_MEM_TYPE_SYS;
+        status = uvm_rm_mem_alloc(gpu, type, CE_TEST_MEM_SIZE, 0, &mem[i]);
         TEST_CHECK_GOTO(status == NV_OK, done);
     }
 
@@ -405,6 +408,7 @@ static NV_STATUS test_memcpy_and_memset(uvm_gpu_t *gpu)
     uvm_rm_mem_t *sys_rm_mem = NULL;
     uvm_rm_mem_t *gpu_rm_mem = NULL;
     uvm_gpu_address_t gpu_addresses[4] = {0};
+    size_t gpu_addresses_length = 0;
     size_t size = gpu->big_page.internal_size;
     static const size_t element_sizes[] = {1, 4, 8};
     const size_t iterations = 4;
@@ -435,7 +439,7 @@ static NV_STATUS test_memcpy_and_memset(uvm_gpu_t *gpu)
 
     // Virtual address (in UVM's internal address space) backed by sysmem
     TEST_NV_CHECK_GOTO(uvm_rm_mem_alloc(gpu, UVM_RM_MEM_TYPE_SYS, size, 0, &sys_rm_mem), done);
-    gpu_addresses[0] = uvm_rm_mem_get_gpu_va(sys_rm_mem, gpu, is_proxy_va_space);
+    gpu_addresses[gpu_addresses_length++] = uvm_rm_mem_get_gpu_va(sys_rm_mem, gpu, is_proxy_va_space);
 
     if (g_uvm_global.conf_computing_enabled) {
         for (i = 0; i < iterations; ++i) {
@@ -472,21 +476,23 @@ static NV_STATUS test_memcpy_and_memset(uvm_gpu_t *gpu)
     // Physical address in sysmem
     TEST_NV_CHECK_GOTO(uvm_mem_alloc(&mem_params, &sys_uvm_mem), done);
     TEST_NV_CHECK_GOTO(uvm_mem_map_gpu_phys(sys_uvm_mem, gpu), done);
-    gpu_addresses[1] = uvm_mem_gpu_address_physical(sys_uvm_mem, gpu, 0, size);
+    gpu_addresses[gpu_addresses_length++] = uvm_mem_gpu_address_physical(sys_uvm_mem, gpu, 0, size);
 
-    // Physical address in vidmem
-    mem_params.backing_gpu = gpu;
-    TEST_NV_CHECK_GOTO(uvm_mem_alloc(&mem_params, &gpu_uvm_mem), done);
-    gpu_addresses[2] = uvm_mem_gpu_address_physical(gpu_uvm_mem, gpu, 0, size);
+    if (gpu->mem_info.size > 0) {
+        // Physical address in vidmem
+        mem_params.backing_gpu = gpu;
+        TEST_NV_CHECK_GOTO(uvm_mem_alloc(&mem_params, &gpu_uvm_mem), done);
+        gpu_addresses[gpu_addresses_length++] = uvm_mem_gpu_address_physical(gpu_uvm_mem, gpu, 0, size);
 
-    // Virtual address (in UVM's internal address space) backed by vidmem
-    TEST_NV_CHECK_GOTO(uvm_rm_mem_alloc(gpu, UVM_RM_MEM_TYPE_GPU, size, 0, &gpu_rm_mem), done);
-    gpu_addresses[3] = uvm_rm_mem_get_gpu_va(gpu_rm_mem, gpu, is_proxy_va_space);
+        // Virtual address (in UVM's internal address space) backed by vidmem
+        TEST_NV_CHECK_GOTO(uvm_rm_mem_alloc(gpu, UVM_RM_MEM_TYPE_GPU, size, 0, &gpu_rm_mem), done);
+        gpu_addresses[gpu_addresses_length++] = uvm_rm_mem_get_gpu_va(gpu_rm_mem, gpu, is_proxy_va_space);
+    }
 
 
     for (i = 0; i < iterations; ++i) {
-        for (j = 0; j < ARRAY_SIZE(gpu_addresses); ++j) {
-            for (k = 0; k < ARRAY_SIZE(gpu_addresses); ++k) {
+        for (j = 0; j < gpu_addresses_length; ++j) {
+            for (k = 0; k < gpu_addresses_length; ++k) {
                 for (s = 0; s < ARRAY_SIZE(element_sizes); s++) {
                     TEST_NV_CHECK_GOTO(test_memcpy_and_memset_inner(gpu,
                                                                     gpu_addresses[k],
@@ -855,6 +861,7 @@ static NV_STATUS cpu_decrypt_in_order(uvm_channel_t *channel,
                                       uvm_mem_t *dst_mem,
                                       uvm_mem_t *src_mem,
                                       const UvmCslIv *decrypt_iv,
+                                      NvU32 key_version,
                                       uvm_mem_t *auth_tag_mem,
                                       size_t size,
                                       NvU32 copy_size)
@@ -869,6 +876,7 @@ static NV_STATUS cpu_decrypt_in_order(uvm_channel_t *channel,
                                                          dst_plain + i * copy_size,
                                                          src_cipher + i * copy_size,
                                                          decrypt_iv + i,
+                                                         key_version,
                                                          copy_size,
                                                          auth_tag_buffer + i * UVM_CONF_COMPUTING_AUTH_TAG_SIZE));
     }
@@ -879,6 +887,7 @@ static NV_STATUS cpu_decrypt_out_of_order(uvm_channel_t *channel,
                                           uvm_mem_t *dst_mem,
                                           uvm_mem_t *src_mem,
                                           const UvmCslIv *decrypt_iv,
+                                          NvU32 key_version,
                                           uvm_mem_t *auth_tag_mem,
                                           size_t size,
                                           NvU32 copy_size)
@@ -896,6 +905,7 @@ static NV_STATUS cpu_decrypt_out_of_order(uvm_channel_t *channel,
                                                          dst_plain + i * copy_size,
                                                          src_cipher + i * copy_size,
                                                          decrypt_iv + i,
+                                                         key_version,
                                                          copy_size,
                                                          auth_tag_buffer + i * UVM_CONF_COMPUTING_AUTH_TAG_SIZE));
     }
@@ -959,7 +969,7 @@ static void gpu_encrypt(uvm_push_t *push,
                                                           i * UVM_CONF_COMPUTING_AUTH_TAG_SIZE,
                                                           dst_cipher);
 
-        uvm_conf_computing_log_gpu_encryption(push->channel, decrypt_iv);
+        uvm_conf_computing_log_gpu_encryption(push->channel, copy_size, decrypt_iv);
 
         if (i > 0)
             uvm_push_set_flag(push, UVM_PUSH_FLAG_CE_NEXT_PIPELINED);
@@ -1020,6 +1030,7 @@ static NV_STATUS test_cpu_to_gpu_roundtrip(uvm_gpu_t *gpu,
     size_t auth_tag_buffer_size = (size / copy_size) * UVM_CONF_COMPUTING_AUTH_TAG_SIZE;
     UvmCslIv *decrypt_iv = NULL;
     UvmCslIv *encrypt_iv = NULL;
+    NvU32 key_version;
     uvm_tracker_t tracker;
     size_t src_plain_size;
 
@@ -1089,6 +1100,11 @@ static NV_STATUS test_cpu_to_gpu_roundtrip(uvm_gpu_t *gpu,
 
     gpu_encrypt(&push, dst_cipher, dst_plain_gpu, auth_tag_mem, decrypt_iv, size, copy_size);
 
+    // There shouldn't be any key rotation between the end of the push and the
+    // CPU decryption(s), but it is more robust against test changes to force
+    // decryption to use the saved key.
+    key_version = uvm_channel_pool_key_version(push.channel->pool);
+
     TEST_NV_CHECK_GOTO(uvm_push_end_and_wait(&push), out);
 
     TEST_CHECK_GOTO(!mem_match(src_plain, src_cipher, size), out);
@@ -1101,6 +1117,7 @@ static NV_STATUS test_cpu_to_gpu_roundtrip(uvm_gpu_t *gpu,
                                                 dst_plain,
                                                 dst_cipher,
                                                 decrypt_iv,
+                                                key_version,
                                                 auth_tag_mem,
                                                 size,
                                                 copy_size),
@@ -1111,6 +1128,7 @@ static NV_STATUS test_cpu_to_gpu_roundtrip(uvm_gpu_t *gpu,
                                                     dst_plain,
                                                     dst_cipher,
                                                     decrypt_iv,
+                                                    key_version,
                                                     auth_tag_mem,
                                                     size,
                                                     copy_size),

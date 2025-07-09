@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2016-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2016-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -29,7 +29,7 @@
 #include "kernel/gpu/mig_mgr/kernel_mig_manager.h"
 #include "gpu/bus/kern_bus.h"
 #include "kernel/gpu/fifo/kernel_fifo.h"
-#include "objtmr.h"
+#include "gpu/timer/objtmr.h"
 #include "gpu/mem_mgr/mem_desc.h"
 #include "kernel/gpu/intr/intr.h"
 
@@ -61,16 +61,20 @@
 
 #include "class/clc86f.h"   // HOPPER_CHANNEL_GPFIFO_A
 
+#include "class/clc9b5.h"      // BLACKWELL_DMA_COPY_A
+
+#include "class/clcab5.h"      // BLACKWELL_DMA_COPY_B
+
 static NvU64  _scrubCheckProgress(OBJMEMSCRUB *pScrubber);
 static NvU64  _searchScrubList(OBJMEMSCRUB *pScrubber, RmPhysAddr base, NvU64 size);
 static void   _waitForPayload(OBJMEMSCRUB  *pScrubber, RmPhysAddr  base, RmPhysAddr end);
 static void   _scrubAddWorkToList(OBJMEMSCRUB  *pScrubber, RmPhysAddr  base, NvU64  size, NvU64  newId);
 static NvU32  _scrubMemory(OBJMEMSCRUB  *pScrubber, RmPhysAddr base, NvU64 size,
-                           NvU32 dstCpuCacheAttrib, NvU32 freeToken);
+                           NvU32 dstCpuCacheAttrib, NvU32 freeToken, NvU32 flags);
 static void   _scrubWaitAndSave(OBJMEMSCRUB *pScrubber, PSCRUB_NODE pList, NvLength  itemsToSave);
 static NvU64  _scrubGetFreeEntries(OBJMEMSCRUB *pScrubber);
 static NvU64  _scrubCheckAndSubmit(OBJMEMSCRUB *pScrubber, NvU64 pageCount, PSCRUB_NODE  pList,
-                                   PSCRUB_NODE pScrubListCopy, NvLength  pagesToScrubCheck);
+                                   PSCRUB_NODE pScrubListCopy, NvLength  pagesToScrubCheck, NvU32 flags);
 static void   _scrubCopyListItems(OBJMEMSCRUB *pScrubber, PSCRUB_NODE pList, NvLength itemsToSave);
 
 static NV_STATUS _scrubCheckLocked(OBJMEMSCRUB  *pScrubber, PSCRUB_NODE *ppList, NvU64 *pSize);
@@ -169,13 +173,14 @@ scrubberConstruct
         {
             NV_ASSERT_OK_OR_GOTO(status, objCreate(&pScrubber->pSec2Utils, pHeap, Sec2Utils, pGpu, pKernelMIGGPUInstance),
                destroyscrublist);
-            pScrubber->engineType = NV2080_ENGINE_TYPE_SEC2;
+            pScrubber->bIsEngineTypeSec2 = NV_TRUE;
         }
         else
         {
             NV_ASSERT_OK_OR_GOTO(status, objCreate(&pScrubber->pCeUtils, pHeap, CeUtils, pGpu, pKernelMIGGPUInstance, &ceUtilsAllocParams),
                destroyscrublist);
-            pScrubber->engineType = NV2080_ENGINE_TYPE_COPY2;
+
+            pScrubber->bIsEngineTypeSec2 = NV_FALSE;
         }
         NV_ASSERT_OK_OR_GOTO(status, pmaRegMemScrub(pPma, pScrubber), destroyscrublist);
     }
@@ -212,7 +217,7 @@ _isScrubWorkPending(
     else
     {
         NvU64 lastCompleted;
-        if (pScrubber->engineType ==  NV2080_ENGINE_TYPE_SEC2)
+        if (pScrubber->bIsEngineTypeSec2)
         {
             lastCompleted = sec2utilsUpdateProgress(pScrubber->pSec2Utils);
         }
@@ -295,7 +300,7 @@ scrubberDestruct
 
     portMemFree(pScrubber->pScrubList);
     {
-        if (pScrubber->engineType == NV2080_ENGINE_TYPE_SEC2)
+        if (pScrubber->bIsEngineTypeSec2)
         {
             objDelete(pScrubber->pSec2Utils);
         }
@@ -400,7 +405,8 @@ scrubSubmitPages
     NvU64       *pPages,
     NvU64        pageCount,
     PSCRUB_NODE *ppList,
-    NvU64       *pSize
+    NvU64       *pSize,
+    NvU32        flags
 )
 {
     NvU64       curPagesSaved     = 0;
@@ -462,7 +468,8 @@ scrubSubmitPages
             numFinished = _scrubCheckAndSubmit(pScrubber, scrubCount,
                                                &pScrubList[totalSubmitted],
                                                &pScrubListCopy[curPagesSaved],
-                                               pagesToScrubCheck);
+                                               pagesToScrubCheck,
+                                               flags);
 
             scrubListSize     -= numFinished;
             curPagesSaved     += pagesToScrubCheck;
@@ -476,7 +483,7 @@ scrubSubmitPages
     else
     {
         totalSubmitted = _scrubCheckAndSubmit(pScrubber, scrubListSize,
-                                              pScrubList, NULL, 0);
+                                              pScrubList, NULL, 0, flags);
         *ppList = NULL;
         *pSize  = 0;
     }
@@ -699,7 +706,8 @@ _scrubCheckAndSubmit
     NvU64        pageCount,
     PSCRUB_NODE  pList,
     PSCRUB_NODE  pScrubListCopy,
-    NvLength     pagesToScrubCheck
+    NvLength     pagesToScrubCheck,
+    NvU32        flags
 )
 {
     NvU64     iter = 0;
@@ -725,7 +733,7 @@ _scrubCheckAndSubmit
 
         {
             status =_scrubMemory(pScrubber, pList[iter].base, pList[iter].size, NV_MEMORY_DEFAULT,
-                                 (NvU32)newId);
+                                 (NvU32)newId, flags);
         }
 
         if(status != NV_OK)
@@ -822,7 +830,7 @@ _scrubWaitAndSave
     while (currentCompletedId < (pScrubber->lastSeenIdByClient + itemsToSave))
     {
         {
-            if (pScrubber->engineType == NV2080_ENGINE_TYPE_SEC2)
+            if (pScrubber->bIsEngineTypeSec2)
                 sec2utilsServiceInterrupts(pScrubber->pSec2Utils);
             else
                 ceutilsServiceInterrupts(pScrubber->pCeUtils);
@@ -932,7 +940,7 @@ _scrubCheckProgress
     }
     else
     {
-        if (pScrubber->engineType ==  NV2080_ENGINE_TYPE_SEC2)
+        if (pScrubber->bIsEngineTypeSec2)
             lastSWSemaphoreDone = sec2utilsUpdateProgress(pScrubber->pSec2Utils);
         else
             lastSWSemaphoreDone = ceutilsUpdateProgress(pScrubber->pCeUtils);
@@ -955,7 +963,8 @@ _scrubMemory
     RmPhysAddr   base,
     NvU64        size,
     NvU32        dstCpuCacheAttrib,
-    NvU32        payload
+    NvU32        payload,
+    NvU32        flags
 )
 {
     NV_STATUS status = NV_OK;
@@ -965,7 +974,12 @@ _scrubMemory
 
     memdescDescribe(pMemDesc, ADDR_FBMEM, base, size);
 
-    if (pScrubber->engineType ==  NV2080_ENGINE_TYPE_SEC2)
+    if ((flags & SCRUBBER_SUBMIT_FLAGS_LOCALIZED_SCRUB) != 0)
+    {
+        memdescSetFlag(pMemDesc, MEMDESC_FLAGS_ALLOC_AS_LOCALIZED, NV_TRUE);
+    }
+
+    if (pScrubber->bIsEngineTypeSec2)
     {
         SEC2UTILS_MEMSET_PARAMS memsetParams = {0};
         memsetParams.pMemDesc = pMemDesc;

@@ -1,5 +1,5 @@
 /*******************************************************************************
-    Copyright (c) 2020-2023 NVIDIA Corporation
+    Copyright (c) 2020-2024 NVIDIA Corporation
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"), to
@@ -36,12 +36,6 @@ static uvm_gpu_peer_copy_mode_t hopper_peer_copy_mode(uvm_parent_gpu_t *parent_g
     if (g_uvm_global.conf_computing_enabled)
         return UVM_GPU_PEER_COPY_MODE_UNSUPPORTED;
 
-    // TODO: Bug 4174553: In some Grace Hopper setups, physical peer copies
-    // result on errors. Force peer copies to use virtual addressing until the
-    // issue is clarified.
-    if (uvm_parent_gpu_is_coherent(parent_gpu))
-        return UVM_GPU_PEER_COPY_MODE_VIRTUAL;
-
     return g_uvm_global.peer_copy_mode;
 }
 
@@ -56,18 +50,19 @@ void uvm_hal_hopper_arch_init_properties(uvm_parent_gpu_t *parent_gpu)
 
     parent_gpu->utlb_per_gpc_count = uvm_hopper_get_utlbs_per_gpc(parent_gpu);
 
-    parent_gpu->fault_buffer_info.replayable.utlb_count = parent_gpu->rm_info.maxGpcCount *
-                                                          parent_gpu->utlb_per_gpc_count;
+    parent_gpu->fault_buffer.replayable.utlb_count = parent_gpu->rm_info.maxGpcCount * parent_gpu->utlb_per_gpc_count;
     {
         uvm_fault_buffer_entry_t *dummy;
-        UVM_ASSERT(parent_gpu->fault_buffer_info.replayable.utlb_count <= (1 <<
-                                                                           (sizeof(dummy->fault_source.utlb_id) * 8)));
+        UVM_ASSERT(parent_gpu->fault_buffer.replayable.utlb_count <= (1 << (sizeof(dummy->fault_source.utlb_id) * 8)));
     }
 
     // A single top level PDE on Hopper covers 64 PB and that's the minimum
     // size that can be used.
     parent_gpu->rm_va_base = 0;
     parent_gpu->rm_va_size = 64 * UVM_SIZE_1PB;
+
+    parent_gpu->peer_va_base = parent_gpu->rm_va_base + parent_gpu->rm_va_size;
+    parent_gpu->peer_va_size = NV_MAX_DEVICES * UVM_PEER_IDENTITY_VA_SIZE;
 
     parent_gpu->uvm_mem_va_base = parent_gpu->rm_va_size + 384 * UVM_SIZE_1TB;
     parent_gpu->uvm_mem_va_size = UVM_MEM_VA_SIZE;
@@ -100,10 +95,6 @@ void uvm_hal_hopper_arch_init_properties(uvm_parent_gpu_t *parent_gpu)
 
     parent_gpu->non_replayable_faults_supported = true;
 
-    parent_gpu->access_counters_supported = true;
-
-    parent_gpu->access_counters_can_use_physical_addresses = false;
-
     parent_gpu->fault_cancel_va_supported = true;
 
     parent_gpu->scoped_atomics_supported = true;
@@ -121,4 +112,9 @@ void uvm_hal_hopper_arch_init_properties(uvm_parent_gpu_t *parent_gpu)
     parent_gpu->plc_supported = true;
 
     parent_gpu->no_ats_range_required = true;
+
+    // In Hopper there are not enough HW key slots available to support
+    // individual channel encryption keys, so channels on the same engine share
+    // the keys.
+    parent_gpu->conf_computing.per_channel_key_rotation = false;
 }

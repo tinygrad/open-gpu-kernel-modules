@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2022-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -29,7 +29,7 @@
 #include "gpu/gpu.h"
 #include "gpu/mem_mgr/mem_mgr.h"
 #include "nverror.h"
-#include "objtmr.h"
+#include "gpu/timer/objtmr.h"
 #include "gpu_mgr/gpu_mgr.h"
 #include "gpu/gpu_fabric_probe.h"
 #include "platform/sli/sli.h"
@@ -49,7 +49,7 @@ knvlinkIsAliSupported_GH100
 {
     NvU32 status = NV_OK;
 
-    NV2080_CTRL_NVLINK_GET_ALI_ENABLED_PARAMS params;
+    NV2080_CTRL_INTERNAL_NVLINK_GET_ALI_ENABLED_PARAMS params;
 
     portMemSet(&params, 0, sizeof(params));
 
@@ -57,7 +57,7 @@ knvlinkIsAliSupported_GH100
     params.bEnableAli = NV_FALSE;
 
     status = knvlinkExecGspRmRpc(pGpu, pKernelNvlink,
-                                 NV2080_CTRL_CMD_NVLINK_GET_ALI_ENABLED,
+                                 NV2080_CTRL_CMD_INTERNAL_NVLINK_GET_ALI_ENABLED,
                                  (void *)&params, sizeof(params));
     if (status != NV_OK)
     {
@@ -112,6 +112,39 @@ knvlinkValidateFabricBaseAddress_GH100
 }
 
 /*!
+ * @brief   Validates fabric EGM base address.
+ *
+ * @param[in]  pGpu              OBJGPU pointer
+ * @param[in]  pKernelNvlink     KernelNvlink pointer
+ * @param[in]  fabricEgmBaseAddr Address to be validated
+ *
+ * @returns On success, NV_OK.
+ *          On failure, returns NV_ERR_XXX.
+ */
+NV_STATUS
+knvlinkValidateFabricEgmBaseAddress_GH100
+(
+    OBJGPU       *pGpu,
+    KernelNvlink *pKernelNvlink,
+    NvU64         fabricEgmBaseAddr
+)
+{
+    //
+    // Hopper SKUs will be paired with NVSwitches supporting 2K
+    // mapslots that can cover 512GB each. Make sure that the EGM fabric base
+    // address being used is valid to cover whole frame buffer.
+    //
+
+    // Check if fabric EGM address is aligned to mapslot size.
+    if (fabricEgmBaseAddr & (NVBIT64(39) - 1))
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    return NV_OK;
+}
+
+/*!
  * @brief Do post setup on nvlink peers
  *
  * @param[in] pGpu           OBJGPU pointer
@@ -125,14 +158,14 @@ knvlinkPostSetupNvlinkPeer_GH100
 )
 {
     NvU32 status = NV_OK;
-    NV2080_CTRL_NVLINK_POST_SETUP_NVLINK_PEER_PARAMS postSetupNvlinkPeerParams;
+    NV2080_CTRL_INTERNAL_NVLINK_POST_SETUP_NVLINK_PEER_PARAMS postSetupNvlinkPeerParams;
 
     portMemSet(&postSetupNvlinkPeerParams, 0, sizeof(postSetupNvlinkPeerParams));
 
     postSetupNvlinkPeerParams.peerMask = (1 << NVLINK_MAX_PEERS_SW) - 1;
 
     status = knvlinkExecGspRmRpc(pGpu, pKernelNvlink,
-                                 NV2080_CTRL_CMD_NVLINK_POST_SETUP_NVLINK_PEER,
+                                 NV2080_CTRL_CMD_INTERNAL_NVLINK_POST_SETUP_NVLINK_PEER,
                                  (void *)&postSetupNvlinkPeerParams,
                                  sizeof(postSetupNvlinkPeerParams));
     if (status != NV_OK)
@@ -321,15 +354,23 @@ NV_STATUS
 knvlinkLogAliDebugMessages_GH100
 (
     OBJGPU       *pGpu,
-    KernelNvlink *pKernelNvlink
+    KernelNvlink *pKernelNvlink,
+    NvBool        bFinal
 )
 {
-    NV2080_CTRL_NVLINK_GET_ERR_INFO_PARAMS *nvlinkErrInfoParams = portMemAllocNonPaged(sizeof(NV2080_CTRL_NVLINK_GET_ERR_INFO_PARAMS));
-    portMemSet(nvlinkErrInfoParams, 0, sizeof(NV2080_CTRL_NVLINK_GET_ERR_INFO_PARAMS));
-    nvlinkErrInfoParams->ErrInfoFlags |= NV2080_CTRL_NVLINK_ERR_INFO_FLAGS_ALI_STATUS;
+    NV2080_CTRL_NVLINK_GET_ERR_INFO_PARAMS *nvlinkErrInfoParams;
     NvU32         i;
     // This is a Physical, Hopper specific HAL for debug purposes.
-    NV_STATUS status = knvlinkExecGspRmRpc(pGpu, pKernelNvlink,
+    NV_STATUS status;
+
+    if (bFinal)
+        return NV_OK;
+
+    nvlinkErrInfoParams = portMemAllocNonPaged(sizeof(NV2080_CTRL_NVLINK_GET_ERR_INFO_PARAMS));
+    portMemSet(nvlinkErrInfoParams, 0, sizeof(NV2080_CTRL_NVLINK_GET_ERR_INFO_PARAMS));
+    nvlinkErrInfoParams->ErrInfoFlags |= NV2080_CTRL_NVLINK_ERR_INFO_FLAGS_ALI_STATUS;
+
+    status = knvlinkExecGspRmRpc(pGpu, pKernelNvlink,
                         NV2080_CTRL_CMD_NVLINK_GET_ERR_INFO,
                         (void *)nvlinkErrInfoParams,
                         sizeof(NV2080_CTRL_NVLINK_GET_ERR_INFO_PARAMS));
@@ -340,7 +381,7 @@ knvlinkLogAliDebugMessages_GH100
         return status;
     }
 
-    FOR_EACH_INDEX_IN_MASK(32, i, pKernelNvlink->postRxDetLinkMask)
+    FOR_EACH_INDEX_IN_MASK(32, i, KNVLINK_GET_MASK(pKernelNvlink, postRxDetLinkMask, 32))
     {
         nvErrorLog_va((void *)pGpu, ALI_TRAINING_FAIL,
                 "NVLink: Link training failed for link %u"
@@ -453,7 +494,7 @@ knvlinkGetEffectivePeerLinkMask_GH100
     OBJGPU *pGpu,
     KernelNvlink *pKernelNvlink,
     OBJGPU *pRemoteGpu,
-    NvU32  *pPeerLinkMask
+    NvU64  *pPeerLinkMask
 )
 {
     NvU32 peerLinkMask, remotePeerLinkMask, effectivePeerLinkMask, peerLinkMaskPerIoctrl;
@@ -479,7 +520,7 @@ knvlinkGetEffectivePeerLinkMask_GH100
         return;
     }
 
-    peerLinkMask = pKernelNvlink->peerLinkMasks[remoteGpuInstance];
+    peerLinkMask = KNVLINK_GET_MASK(pKernelNvlink, peerLinkMasks[remoteGpuInstance], 32);
     if (peerLinkMask == 0)
     {
         return;
@@ -491,7 +532,7 @@ knvlinkGetEffectivePeerLinkMask_GH100
     // the masks must be equal.
     //
     pRemoteKernelNvlink = GPU_GET_KERNEL_NVLINK(pRemoteGpu);
-    remotePeerLinkMask = pRemoteKernelNvlink->peerLinkMasks[gpuInstance];
+    remotePeerLinkMask = KNVLINK_GET_MASK(pRemoteKernelNvlink, peerLinkMasks[gpuInstance], 32);
     NV_ASSERT(nvPopCount32(remotePeerLinkMask) == nvPopCount32(peerLinkMask));
 
     // Find out number of active NVLinks between the two GPUs.
@@ -571,6 +612,87 @@ knvlinkGetEffectivePeerLinkMask_GH100
 }
 
 /*!
+ * Check if requested BW mode is supported by GPU
+ */
+NvBool
+knvlinkIsBwModeSupported_GH100
+(
+    OBJGPU *pGpu,
+    KernelNvlink *pKernelNvlink,
+    NvU8    mode
+)
+{
+    // _LINK_COUNT BW modes are not supported on HOPPER
+    if (mode > GPU_NVLINK_BW_MODE_3QUARTER)
+    {
+        return NV_FALSE;
+    }
+
+    // Direct-Connect supports all modes
+    if (!gpuFabricProbeIsSupported(pGpu))
+    {
+        return NV_TRUE;
+    }
+
+    // Nvswitch supports _MIN and _FULL only
+    if (mode == GPU_NVLINK_BW_MODE_MIN || mode == GPU_NVLINK_BW_MODE_FULL)
+    {
+        return NV_TRUE;
+    }
+
+    NV_PRINTF(LEVEL_ERROR, "BW mode requested is not supported. Mode: %d\n",
+              mode);
+    return NV_FALSE;
+}
+
+/*!
+ * Retrieve Platform-dependent list of supported legacy BW modes
+ */
+NV_STATUS
+knvlinkGetSupportedBwMode_GH100
+(
+    OBJGPU *pGpu,
+    KernelNvlink *pKernelNvlink,
+    NV2080_CTRL_NVLINK_GET_SUPPORTED_BW_MODE_PARAMS *pParams
+)
+{
+    // Direct-Connect supports all legacy modes
+    const NvU8 directConnectBwModeList[] =
+    {
+        GPU_NVLINK_BW_MODE_FULL,
+        GPU_NVLINK_BW_MODE_OFF,
+        GPU_NVLINK_BW_MODE_MIN,
+        GPU_NVLINK_BW_MODE_HALF,
+        GPU_NVLINK_BW_MODE_3QUARTER
+    };
+    // Nvswitch supports _MIN and _FULL only
+    const NvU8 switchBwModeList[] =
+    {
+        GPU_NVLINK_BW_MODE_FULL,
+        GPU_NVLINK_BW_MODE_MIN
+    };
+    NvU32 i;
+
+    if (pGpu->fabricProbeRetryDelay == 0)
+    {
+        for (i = 0; i < NV_ARRAY_ELEMENTS(directConnectBwModeList); i++)
+        {
+            pParams->rbmModesList[i] = directConnectBwModeList[i];
+        }
+    }
+    else
+    {
+        for (i = 0; i < NV_ARRAY_ELEMENTS(switchBwModeList); i++)
+        {
+            pParams->rbmModesList[i] = switchBwModeList[i];
+        }
+    }
+    pParams->rbmTotalModes = i;
+
+    return NV_OK;
+}
+
+/*!
  * @brief   Set unique fabric address for NVSwitch enabled systems.
  *
  * @param[in] pGpu           OBJGPU pointer
@@ -644,6 +766,90 @@ knvlinkClearUniqueFabricBaseAddress_GH100
 )
 {
     pKernelNvlink->fabricBaseAddr = NVLINK_INVALID_FABRIC_ADDR;
+}
+
+/*!
+ * @brief   Set unique EGM fabric base address for NVSwitch enabled systems.
+ *
+ * @param[in] pGpu              OBJGPU pointer
+ * @param[in] pKernelNvlink     KernelNvlink pointer
+ * @param[in] fabricEgmBaseAddr EGM Fabric Address to set
+ *
+ * @returns On success, sets unique EGM fabric address and returns NV_OK.
+ *          On failure, returns NV_ERR_XXX.
+ */
+NV_STATUS
+knvlinkSetUniqueFabricEgmBaseAddress_GH100
+(
+    OBJGPU       *pGpu,
+    KernelNvlink *pKernelNvlink,
+    NvU64         fabricEgmBaseAddr
+)
+{
+    NV_STATUS status = NV_OK;
+
+    // Ensure EGM is enabled in RM before proceeding
+    if (!memmgrIsLocalEgmEnabled(GPU_GET_MEMORY_MANAGER(pGpu)))
+    {
+        NV_PRINTF(LEVEL_ERROR,
+                  "EGM is not enabled in RM for GPU %x\n", pGpu->gpuInstance);
+        return NV_ERR_INVALID_STATE;
+    }
+
+    status = knvlinkValidateFabricEgmBaseAddress_HAL(pGpu, pKernelNvlink,
+                                                  fabricEgmBaseAddr);
+    if (status != NV_OK)
+    {
+        NV_PRINTF(LEVEL_ERROR, "EGM Fabric base addr validation failed for GPU %x\n",
+                  pGpu->gpuInstance);
+        return status;
+    }
+
+    if (IsSLIEnabled(pGpu))
+    {
+        NV_PRINTF(LEVEL_ERROR,
+                  "Operation is unsupported on SLI enabled GPU %x\n",
+                  pGpu->gpuInstance);
+        return NV_ERR_NOT_SUPPORTED;
+    }
+
+    if (pKernelNvlink->fabricEgmBaseAddr == fabricEgmBaseAddr)
+    {
+        NV_PRINTF(LEVEL_INFO,
+                  "The same EGM fabric base addr is being re-assigned to GPU %x\n",
+                  pGpu->gpuInstance);
+        return NV_OK;
+    }
+
+    if (pKernelNvlink->fabricEgmBaseAddr != NVLINK_INVALID_FABRIC_ADDR)
+    {
+        NV_PRINTF(LEVEL_ERROR, "EGM Fabric base addr is already assigned to GPU %x\n",
+                  pGpu->gpuInstance);
+        return NV_ERR_STATE_IN_USE;
+    }
+
+    pKernelNvlink->fabricEgmBaseAddr = fabricEgmBaseAddr;
+
+    NV_PRINTF(LEVEL_INFO, "EGM Fabric base addr %llx is assigned to GPU %x\n",
+              pKernelNvlink->fabricEgmBaseAddr, pGpu->gpuInstance);
+
+    return NV_OK;
+}
+
+/*!
+ * @brief   Clear unique EGM fabric base address for NVSwitch enabled systems.
+ *
+ * @param[in] pGpu           OBJGPU pointer
+ * @param[in] pKernelNvlink  KernelNvlink pointer
+ */
+void
+knvlinkClearUniqueFabricEgmBaseAddress_GH100
+(
+    OBJGPU       *pGpu,
+    KernelNvlink *pKernelNvlink
+)
+{
+    pKernelNvlink->fabricEgmBaseAddr = NVLINK_INVALID_FABRIC_ADDR;
 }
 
 /*!

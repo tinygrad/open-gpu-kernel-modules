@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -40,9 +40,11 @@
 #include "virtualization/hypervisor/hypervisor.h"
 #include "gpu/gsp/kernel_gsp.h"
 #include "platform/sli/sli.h"
+#include "gpu/disp/kern_disp.h"
+
 
 #include "nv_ref.h"
-#include "nvRmReg.h"
+#include "nvrm_registry.h"
 #include "nvmisc.h"
 
 
@@ -57,6 +59,7 @@ static struct
 } stuckIntr[MC_ENGINE_IDX_MAX];
 
 static NvBool _intrServiceStallExactList(OBJGPU *pGpu, Intr *pIntr, MC_ENGINE_BITVECTOR *pEngines);
+static void _intrLogLongRunningInterrupts(Intr *pIntr);
 static void _intrInitServiceTable(OBJGPU *pGpu, Intr *pIntr);
 
 
@@ -143,6 +146,8 @@ intrServiceStall_IMPL(OBJGPU *pGpu, Intr *pIntr)
         intrProcessDPCQueue_HAL(pGpu, pIntr);
     }
 
+    _intrLogLongRunningInterrupts(pIntr);
+
 exit:
     return;
 }
@@ -170,7 +175,7 @@ subdeviceCtrlCmdMcServiceInterrupts_IMPL
 
         //
         // Force kernel-RM to service interrupts from GSP-RM. This will allow
-        // kernel-RM to write notifiers and send an ack back to GSP. 
+        // kernel-RM to write notifiers and send an ack back to GSP.
         // GSP waits for this ack before clearing fast path POSSIBLE_ERR interrupt.
         //
         if (pGpu->getProperty(pGpu, PDB_PROP_GPU_FASTPATH_SEQ_ENABLED))
@@ -242,7 +247,7 @@ subdeviceCtrlCmdMcServiceInterrupts_IMPL
     }
 
     intrServiceStallList_HAL(pGpu, pIntr, &engines, NV_TRUE);
-
+    
     return NV_OK;
 }
 
@@ -463,6 +468,12 @@ intrServiceStallListAllGpusCond_IMPL
     {
         pIntr = GPU_GET_INTR(pGpu);
 
+        // Intr is missing on soc-disp
+        if (pIntr == NULL)
+        {
+            continue;
+        }
+
         //
         // deviceInstance can be invalid when we loop over all attached gpus
         // in SLI unlink path: Bug 2462254
@@ -592,13 +603,24 @@ intrGetVectorFromEngineId_IMPL
     NvBool  bNonStall
 )
 {
+    NvU32 intrVector;
     INTR_TABLE_ENTRY *pEntry = intrGetInterruptTableEntryFromEngineId(pGpu,
         pIntr,
         mcEngineId,
         bNonStall);
 
     NV_ASSERT_OR_RETURN(pEntry != NULL, NV_INTR_VECTOR_INVALID);
-    return bNonStall ? pEntry->intrVectorNonStall : pEntry->intrVector;
+    intrVector = bNonStall ? pEntry->intrVectorNonStall : pEntry->intrVector;
+
+    if (intrVector == NV_INTR_VECTOR_INVALID)
+    {
+        NV_PRINTF(LEVEL_ERROR, "mcEngineIdx %d with bNonStall = %d has invalid vector\n",
+                                mcEngineId, bNonStall);
+
+        NV_ASSERT_OR_RETURN(intrVector != NV_INTR_VECTOR_INVALID, NV_INTR_VECTOR_INVALID);
+    }
+
+    return intrVector;
 }
 
 
@@ -790,6 +812,29 @@ intrDestruct_IMPL
 
 
 NV_STATUS
+intrStatePreInitLocked_IMPL
+(
+    OBJGPU *pGpu,
+    Intr   *pIntr
+)
+{
+    NV_STATUS status = NV_OK;
+
+    for (NvU32 i = 0; i < NV_ARRAY_ELEMENTS(pIntr->subtreeMap); i++)
+    {
+        pIntr->subtreeMap[i].subtreeStart = NV2080_INTR_INVALID_SUBTREE;
+        pIntr->subtreeMap[i].subtreeEnd   = NV2080_INTR_INVALID_SUBTREE;
+    }
+
+    NV_ASSERT_OK_OR_GOTO(status, intrInitInterruptTable_HAL(pGpu, pIntr), exit);
+    _intrInitServiceTable(pGpu, pIntr);
+
+exit:
+
+    return status;
+}
+
+NV_STATUS
 intrStateInitUnlocked_IMPL
 (
     OBJGPU *pGpu,
@@ -797,7 +842,6 @@ intrStateInitUnlocked_IMPL
 )
 {
     NvU32 data = 0;
-    NvU32 i;
 
     if (osReadRegistryDword(pGpu,
                             NV_REG_STR_RM_INTR_DETAILED_LOGS, &data) == NV_OK)
@@ -812,12 +856,6 @@ intrStateInitUnlocked_IMPL
 
     _intrInitRegistryOverrides(pGpu, pIntr);
 
-    for (i = 0; i < NV_ARRAY_ELEMENTS(pIntr->subtreeMap); ++i)
-    {
-        pIntr->subtreeMap[i].subtreeStart = NV2080_INTR_INVALID_SUBTREE;
-        pIntr->subtreeMap[i].subtreeEnd   = NV2080_INTR_INVALID_SUBTREE;
-    }
-
     return NV_OK;
 }
 
@@ -829,7 +867,6 @@ intrStateInitLocked_IMPL
     Intr     *pIntr
 )
 {
-    NV_STATUS status = NV_OK;
     // Enable interrupts in the HAL
     pIntr->halIntrEnabled = NV_TRUE;
 
@@ -847,28 +884,18 @@ intrStateInitLocked_IMPL
         pKernelGmmu->uvmSharedIntrRmOwnsMask = RM_UVM_SHARED_INTR_MASK_ALL;
     }
 
-    NV_ASSERT_OK_OR_GOTO(status, intrInitInterruptTable_HAL(pGpu, pIntr), exit);
-    _intrInitServiceTable(pGpu, pIntr);
-
     if (pIntr->getProperty(pIntr, PDB_PROP_INTR_USE_INTR_MASK_FOR_LOCKING))
     {
-        intrGetIntrMask_HAL(pGpu, pIntr, &pIntr->intrMask.engMaskOrig, NULL /* threadstate */);
-        if (RMCFG_FEATURE_PLATFORM_WINDOWS)
-        {
-            MC_ENGINE_BITVECTOR engines;
+        MC_ENGINE_BITVECTOR engines;
 
-            bitVectorClrAll(&engines);
-            bitVectorSet(&engines, MC_ENGINE_IDX_FIFO);
-            bitVectorSet(&engines, MC_ENGINE_IDX_DISP);
+        bitVectorClrAll(&engines);
+        bitVectorSet(&engines, MC_ENGINE_IDX_DISP);
 
-            intrSetIntrMaskUnblocked(pIntr, &engines);
-        }
+        intrSetIntrMaskUnblocked(pIntr, &engines);
         // Hypervisor will set the intr unblocked mask later at the time of SWRL init.
     }
 
-exit:
-
-    return status;
+    return NV_OK;
 }
 
 void
@@ -954,35 +981,31 @@ _intrInitRegistryOverrides
     if (RMCFG_FEATURE_PLATFORM_WINDOWS || hypervisorIsVgxHyper())
     {
         // Enable IntrMask Locking by default if supported
-        if (pIntr->getProperty(pIntr, PDB_PROP_INTR_MASK_SUPPORTED) &&
-            (!IS_VIRTUAL(pGpu) && !IS_GSP_CLIENT(pGpu)))
+        if (pIntr->getProperty(pIntr, PDB_PROP_INTR_MASK_SUPPORTED) && !IS_VIRTUAL(pGpu))
         {
             pIntr->setProperty(pIntr, PDB_PROP_INTR_USE_INTR_MASK_FOR_LOCKING, NV_TRUE);
         }
+    }
 
-        if (osReadRegistryDword(pGpu, NV_REG_STR_RM_LOCKING_MODE, &data) == NV_OK)
+    if (osReadRegistryDword(pGpu, NV_REG_STR_RM_INTR_LOCKING_MODE, &data) == NV_OK)
+    {
+        NV_PRINTF(LEVEL_ERROR,
+                  "NV_REG_STR_RM_INTR_LOCKING_MODE was set to: 0x%x\n", data);
+
+        switch (data)
         {
-            NV_PRINTF(LEVEL_ERROR,
-                      "NV_REG_STR_RM_LOCKING_MODE was set to: 0x%x\n", data);
-
-            switch (data)
+            case NV_REG_STR_RM_INTR_LOCKING_MODE_INTR_MASK:
             {
-                case NV_REG_STR_RM_LOCKING_MODE_INTR_MASK:
+                if (pIntr->getProperty(pIntr, PDB_PROP_INTR_MASK_SUPPORTED))
                 {
-                    if (pIntr->getProperty(pIntr, PDB_PROP_INTR_MASK_SUPPORTED))
-                    {
-                        pIntr->setProperty(pIntr, PDB_PROP_INTR_USE_INTR_MASK_FOR_LOCKING, NV_TRUE);
-                    }
+                    pIntr->setProperty(pIntr, PDB_PROP_INTR_USE_INTR_MASK_FOR_LOCKING, NV_TRUE);
                 }
-                break;
+            }
+            break;
 
-                case NV_REG_STR_RM_LOCKING_MODE_LAZY_INTR_DISABLE:
-                break;
-
-                default:
-                {
-                    pIntr->setProperty(pIntr, PDB_PROP_INTR_USE_INTR_MASK_FOR_LOCKING, NV_FALSE);
-                }
+            default:
+            {
+                pIntr->setProperty(pIntr, PDB_PROP_INTR_USE_INTR_MASK_FOR_LOCKING, NV_FALSE);
             }
         }
     }
@@ -1072,18 +1095,14 @@ _intrInitServiceTable
     Intr *pIntr
 )
 {
-    ENGSTATE_ITER iter = gpuGetEngstateIter(pGpu);
-    OBJENGSTATE *pEngstate;
+    GPU_CHILD_ITER iter = {0};
+    IntrService *pIntrService;
 
     portMemSet(pIntr->intrServiceTable, 0, sizeof(pIntr->intrServiceTable));
 
-    while (gpuGetNextEngstate(pGpu, &iter, &pEngstate))
+    while ((pIntrService = GPU_GET_NEXT_CHILD_OF_TYPE(pGpu, &iter, IntrService)))
     {
-        IntrService *pIntrService = dynamicCast(pEngstate, IntrService);
-        if (pIntrService != NULL)
-        {
-            intrservRegisterIntrService(pGpu, pIntrService, pIntr->intrServiceTable);
-        }
+        intrservRegisterIntrService(pGpu, pIntrService, pIntr->intrServiceTable);
     }
 
     gpuRegisterGenericKernelFalconIntrService(pGpu, pIntr->intrServiceTable);
@@ -1100,6 +1119,7 @@ NvU32 intrServiceInterruptRecords_IMPL
     IntrService *pIntrService = pIntr->intrServiceTable[engineIdx].pInterruptService;
     NvU32 ret = 0;
     NvBool bShouldService;
+    NvU64 intrTiming, intrTiming2;
     IntrServiceClearInterruptArguments clearParams = {engineIdx};
     IntrServiceServiceInterruptArguments serviceParams = {engineIdx};
 
@@ -1121,10 +1141,20 @@ NvU32 intrServiceInterruptRecords_IMPL
 
     if (bShouldService)
     {
-        GSP_TRACE_RATS_ADD_RECORD(NV_RATS_GSP_TRACE_TYPE_INTR_INFO, pGpu, (NvU32) engineIdx);
-        GSP_TRACE_RATS_ADD_RECORD(NV_RATS_GSP_TRACE_TYPE_INTR_START, pGpu, 0);
+        osGetPerformanceCounter(&intrTiming);
+
+        GSP_TRACE_RATS_ADD_RECORD(NV_RATS_GSP_TRACE_TYPE_INTR_START, pGpu, (NvU32) engineIdx);
         ret = intrservServiceInterrupt(pGpu, pIntrService, &serviceParams);
-        GSP_TRACE_RATS_ADD_RECORD(NV_RATS_GSP_TRACE_TYPE_INTR_END, pGpu, 0);
+        GSP_TRACE_RATS_ADD_RECORD(NV_RATS_GSP_TRACE_TYPE_INTR_END, pGpu, (NvU32) engineIdx);
+
+        osGetPerformanceCounter(&intrTiming2);
+        intrTiming = intrTiming2 - intrTiming;
+        if (intrTiming > LONG_INTR_LOG_LENGTH_NS)
+        {
+            pIntr->longIntrStats[engineIdx].intrCount++;
+            if (intrTiming > pIntr->longIntrStats[engineIdx].intrLength)
+                pIntr->longIntrStats[engineIdx].intrLength = intrTiming;
+        }
     }
     return ret;
 }
@@ -1341,111 +1371,77 @@ void intrProcessDPCQueue_IMPL
 }
 
 /*!
- * @brief Prevent the isr from coming in.
+ * @brief Allow the unblocked intrMask isr to come in.
  *
- * Disable intrs to prevent the ISR from coming in and enable all engine intrs
- * so that intrs will be reflected in NV_PMC_INTR_0. If the ISR was already
- * executing, prevent it from updating engIntrs via setting
- * INTR_MASK_FLAGS_ISR_SKIP_MASK_UPDATE.
+ * Re-allow the isr to come in if it was previously disabled.
  *
  * @param[in]  pGpu         OBJGPU pointer
  * @param[in]  pIntr        Intr pointer
- * @param[out] pIntrMaskCtx Pointer to INTR_MASK_CTX where the current
- *                          interrupt mask related information (intr enable and
- *                          intr mask) is to be stored. The information here
- *                          will be used to restore the original state of
- *                          interrup mask when we're allowing the ISR again.
  */
 static void
-_intrEnterCriticalSection
+_intrReenableIntrMask
 (
     OBJGPU            *pGpu,
-    Intr              *pIntr,
-    INTR_MASK_CTX     *pIntrMaskCtx
+    Intr              *pIntr
 )
 {
-    NvU64 oldIrql;
-    NvU32 intrMaskFlags;
-    MC_ENGINE_BITVECTOR engines;
-
-    bitVectorSetAll(&engines);
+    KernelDisplay *pKernelDisplay = GPU_GET_KERNEL_DISPLAY(pGpu);
 
     if (pIntr->getProperty(pIntr, PDB_PROP_INTR_USE_INTR_MASK_FOR_LOCKING))
     {
-        NV_ASSERT(pIntrMaskCtx != NULL);
-
-        // Cannot do this outside of here because of bug 657283.
-        NV_ASSERT(rmDeviceGpuLockIsOwner(pGpu->gpuInstance));
-
         //
-        // Disable intrs to prevent the ISR from coming in and enable all engine
-        // intrs so that intrs will be reflected in NV_PMC_INTR_0.
-        // If the ISR was already executing, prevent it from updating engIntrs
-        // via setting MC_INTR_MASK_FLAGS_ISR_SKIP_MASK_UPDATE.
+        // If separate latency line is present, it will always be enabled,
+        // so no need to re-enable.
         //
-        oldIrql = rmIntrMaskLockAcquire(pGpu);
-
-        pIntrMaskCtx->intrEnable = intrGetIntrEnFromHw_HAL(pGpu, pIntr, NULL /* threadstate */);
-        intrSetIntrEnInHw_HAL(pGpu, pIntr, INTERRUPT_TYPE_DISABLED, NULL /* threadstate */);
-        intrSetStall_HAL(pGpu, pIntr, INTERRUPT_TYPE_DISABLED, NULL /* threadstate */);
-        intrMaskFlags = intrGetIntrMaskFlags(pIntr);
-        intrMaskFlags |= INTR_MASK_FLAGS_ISR_SKIP_MASK_UPDATE;
-        intrSetIntrMaskFlags(pIntr, intrMaskFlags);
-
-        if (pIntr->getProperty(pIntr, PDB_PROP_INTR_USE_INTR_MASK_FOR_LOCKING))
+        if ((pKernelDisplay != NULL) && !pKernelDisplay->getProperty(pKernelDisplay, PDB_PROP_KDISP_HAS_SEPARATE_LOW_LATENCY_LINE))
         {
-            intrGetIntrMask_HAL(pGpu, pIntr, &pIntrMaskCtx->intrMask, NULL /* threadstate */);
-            intrSetIntrMask_HAL(pGpu, pIntr, &engines,                NULL /* threadstate */);
-        }
+            // Same code as locks.c
+            NvU64 oldIrql;
+            NvU32 intrMaskFlags;
 
-        rmIntrMaskLockRelease(pGpu, oldIrql);
+            oldIrql = rmIntrMaskLockAcquire(pGpu);
+
+            intrMaskFlags = intrGetIntrMaskFlags(pIntr);
+            intrMaskFlags &= ~INTR_MASK_FLAGS_ISR_SKIP_MASK_UPDATE;
+            intrSetIntrMaskFlags(pIntr, intrMaskFlags);
+
+            // Allow some intrs to come in.
+            if (pIntr->getProperty(pIntr, PDB_PROP_INTR_USE_TOP_EN_FOR_VBLANK_HANDLING))
+            {
+                intrSetDisplayInterruptEnable_HAL(pGpu, pIntr, NV_TRUE,  NULL /* threadstate */);
+            }
+            else
+            {
+                intrSetIntrMask_HAL(pGpu, pIntr, &pIntr->intrMask.engMaskUnblocked, NULL /* threadstate */);
+            }
+
+            intrSetIntrEnInHw_HAL(pGpu, pIntr, intrGetIntrEn(pIntr), NULL /* threadstate */);
+
+            rmIntrMaskLockRelease(pGpu, oldIrql);
+        }
     }
 }
 
-/*!
- * @brief Allow the isr to come in.
- *
- * Allow the isr to come in if it was already allowed when lazy intr disable
- * for locking is in use.
- *
- * @param[in]  pGpu         OBJGPU pointer
- * @param[in]  pIntr        Intr pointer
- * @param[out] pIntrMaskCtx Pointer to INTR_MASK_CTX where the current
- *                          interrupt mask related information (intr enable and
- *                          intr mask) is to be stored. The information here
- *                          will be used to restore the original state of
- *                          interrup mask when we're allowing the ISR again.
- */
 static void
-_intrExitCriticalSection
-(
-    OBJGPU            *pGpu,
-    Intr              *pIntr,
-    INTR_MASK_CTX     *pIntrMaskCtx
-)
+_intrLogLongRunningInterrupts(Intr *pIntr)
 {
-    NvU64 oldIrql;
-    NvU32 intrMaskFlags;
+    NvU64 now;
+    osGetPerformanceCounter(&now);
 
-    if (pIntr->getProperty(pIntr, PDB_PROP_INTR_USE_INTR_MASK_FOR_LOCKING))
+    for (NvU32 i = 0; i < MC_ENGINE_IDX_MAX; ++i)
     {
-        NV_ASSERT(pIntrMaskCtx != NULL);
-
-        // Restore intrEnable and allow the ISR to come in.
-        oldIrql = rmIntrMaskLockAcquire(pGpu);
-
-        intrMaskFlags = intrGetIntrMaskFlags(pIntr);
-        intrMaskFlags &= ~INTR_MASK_FLAGS_ISR_SKIP_MASK_UPDATE;
-        intrSetIntrMaskFlags(pIntr, intrMaskFlags);
-
-        if (pIntr->getProperty(pIntr, PDB_PROP_INTR_USE_INTR_MASK_FOR_LOCKING))
+        if (pIntr->longIntrStats[i].intrCount > 0)
         {
-            intrSetIntrMask_HAL(pGpu, pIntr, &pIntrMaskCtx->intrMask, NULL /* threadstate */);
+            if (now - pIntr->longIntrStats[i].lastPrintTime > LONG_INTR_LOG_RATELIMIT_NS)
+            {
+                NV_PRINTF(LEVEL_WARNING, "%u long-running interrupts (%llu ns or slower) from engine %u, longest taking %llu ns\n",
+                          pIntr->longIntrStats[i].intrCount, LONG_INTR_LOG_LENGTH_NS, i, pIntr->longIntrStats[i].intrLength);
+
+                pIntr->longIntrStats[i].intrCount = 0;
+                pIntr->longIntrStats[i].intrLength = 0;
+                pIntr->longIntrStats[i].lastPrintTime = now;
+            }
         }
-
-        intrSetIntrEnInHw_HAL(pGpu, pIntr, pIntrMaskCtx->intrEnable, NULL /* threadstate */);
-
-        rmIntrMaskLockRelease(pGpu, oldIrql);
     }
 }
 
@@ -1525,6 +1521,11 @@ _intrServiceStallExactList
         vgpuService(pGpu);
     }
 
+    if (bitVectorTest(pEngines, MC_ENGINE_IDX_DISP))
+    {
+        _intrReenableIntrMask(pGpu, pIntr);
+    }
+
     if (bIntrStuck)
     {
         NV_PRINTF(LEVEL_ERROR,
@@ -1563,14 +1564,13 @@ intrServiceStallList_IMPL
 )
 {
     NV_STATUS           status;
-    INTR_MASK_CTX       intrMaskCtx;
     MC_ENGINE_BITVECTOR exactEngines;
     NvBool              bPending;
     CALL_CONTEXT       *pOldContext = NULL;
 
-    if (gpumgrGetBcEnabledStatus(pGpu))
+    if (gpumgrGetBcEnabledStatus(pGpu) && !rmDeviceGpuLockIsOwner(pGpu->gpuInstance))
     {
-        NV_ASSERT_FAILED("intrServiceStallList_IMPL is expected to be unicast! Please post a stacktrace in bug 2003060!");
+        NV_ASSERT_FAILED("intrServiceStallList_IMPL is expected to be unicast or own all its locks! Please post a stacktrace in bug 2003060!");
     }
 
     if (!RMCFG_FEATURE_PLATFORM_GSP)
@@ -1604,9 +1604,6 @@ intrServiceStallList_IMPL
 
     NV_ASSERT_OK_OR_ELSE(status, resservSwapTlsCallContext(&pOldContext, NULL), return);
 
-    // prevent the isr from coming in
-    _intrEnterCriticalSection(pGpu, pIntr, &intrMaskCtx);
-
     portMemSet(stuckIntr, 0, sizeof(stuckIntr));
 
     do
@@ -1628,8 +1625,8 @@ intrServiceStallList_IMPL
     while (bPending && bLoop);
 
 done:
-    // allow the isr to come in.
-    _intrExitCriticalSection(pGpu, pIntr, &intrMaskCtx);
+    // Delay prints until after exiting critical sections to save perf impact
+    _intrLogLongRunningInterrupts(pIntr);
 
     NV_ASSERT_OK(resservRestoreTlsCallContext(pOldContext));
 }
@@ -1649,37 +1646,6 @@ intrServiceStallSingle_IMPL
     bitVectorSet(&engines, engIdx);
     intrServiceStallList_HAL(pGpu, pIntr, &engines, bLoop);
 }
-
-/*!
- * @brief Allow the isr to come in.
- *
- * Checks whether the interrupts are enabled in HW.
- *
- * @param[in]  pGpu         OBJGPU pointer
- * @param[in]  pIntr        Intr pointer
- * @param[in]  pThreadState THREAD_STATE information
- * @returns                 Returns whether interrupts are enabled
- */
-NvBool
-intrIsIntrEnabled_IMPL
-(
-    OBJGPU            *pGpu,
-    Intr              *pIntr,
-    THREAD_STATE_NODE *pThreadState
-)
-{
-    NvU32 intrEn;
-
-    intrEn = intrGetIntrEnFromHw_HAL(pGpu, pIntr, pThreadState);
-
-    if (INTERRUPT_TYPE_DISABLED == intrEn)
-    {
-        return NV_FALSE;
-    }
-
-    return NV_TRUE;
-}
-
 
 NvU64
 intrGetIntrTopCategoryMask_IMPL
@@ -1775,5 +1741,80 @@ NV_STATUS intrSetInterruptEntry_IMPL
         pIntr->vectorToMcIdx[tree][vector].mcEngine == MC_ENGINE_IDX_NULL,
         NV_ERR_INVALID_STATE);
     pIntr->vectorToMcIdx[tree][vector] = *pEntry;
+    return NV_OK;
+}
+
+
+NvU64
+intrGetUvmSharedLeafEnDisableMask_IMPL
+(
+    OBJGPU *pGpu,
+    Intr   *pIntr
+)
+{
+    NvU64 mask = 0;
+    NV2080_INTR_CATEGORY_SUBTREE_MAP uvmShared;
+
+    // GSP RM services both MMU non-replayable fault and FIFO interrupts
+    if (IS_GSP_CLIENT(pGpu))
+    {
+        return ~mask;
+    }
+
+    NvU32 locklessRmVectors[2];
+    intrGetLocklessVectorsInRmSubtree_HAL(pGpu, pIntr, &locklessRmVectors);
+
+    NV_ASSERT_OK(intrGetSubtreeRange(pIntr,
+                                     NV2080_INTR_CATEGORY_UVM_SHARED,
+                                     &uvmShared));
+    //
+    // Ascertain that we only have 1 client subtree (we assume
+    // this since we cache only 64 bits).
+    //
+    NV_ASSERT(uvmShared.subtreeStart == uvmShared.subtreeEnd);
+
+    //
+    // Ascertain that we only have 2 subtrees as this is what we currently
+    // support by only caching 64 bits
+    //
+    NV_ASSERT(
+        (NV_CTRL_INTR_SUBTREE_TO_LEAF_IDX_END(uvmShared.subtreeEnd) - 1) ==
+        NV_CTRL_INTR_SUBTREE_TO_LEAF_IDX_START(uvmShared.subtreeStart));
+
+    NvU32 i;
+    for (i = 0; i < NV_ARRAY_ELEMENTS(locklessRmVectors); ++i)
+    {
+        NvU32 vector = locklessRmVectors[i];
+        if (vector == NV_INTR_VECTOR_INVALID)
+        {
+            continue;
+        }
+
+        // Ascertain that they're in the first leaf
+        NV_ASSERT(
+            NV_CTRL_INTR_GPU_VECTOR_TO_LEAF_REG(vector) ==
+            NV_CTRL_INTR_SUBTREE_TO_LEAF_IDX_START(uvmShared.subtreeStart));
+
+        mask |= NVBIT64(NV_CTRL_INTR_GPU_VECTOR_TO_LEAF_BIT(vector));
+    }
+
+    mask <<= 32;
+
+    return ~mask;
+}
+
+NV_STATUS
+intrRefetchInterruptTable_IMPL
+(
+    OBJGPU *pGpu,
+    Intr   *pIntr
+)
+{
+    NV_ASSERT_OK_OR_RETURN(intrStateUnload_HAL(pGpu, pIntr, GPU_STATE_FLAGS_PRESERVING));
+
+    NV_ASSERT_OK_OR_RETURN(intrInitInterruptTable_HAL(pGpu, pIntr));
+
+    NV_ASSERT_OK_OR_RETURN(intrStateLoad_HAL(pGpu, pIntr, GPU_STATE_FLAGS_PRESERVING));
+
     return NV_OK;
 }

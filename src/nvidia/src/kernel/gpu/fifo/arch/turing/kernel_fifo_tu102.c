@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -40,15 +40,13 @@
  * @param[in] pGpu
  * @param[in] pKernelFifo
  * @param[in] workSubmitToken Token to update the doorbell with
- * @param[in] runlistId       Runlist ID
  */
 NV_STATUS
 kfifoUpdateUsermodeDoorbell_TU102
 (
     OBJGPU     *pGpu,
     KernelFifo *pKernelFifo,
-    NvU32       workSubmitToken,
-    NvU32       runlistId
+    NvU32       workSubmitToken
 )
 {
     NV_PRINTF(LEVEL_INFO, "Poking workSubmitToken 0x%x\n", workSubmitToken);
@@ -69,7 +67,7 @@ kfifoUpdateUsermodeDoorbell_TU102
  *
  */
 NV_STATUS
-kfifoGenerateWorkSubmitToken_TU102
+kfifoGenerateWorkSubmitTokenHal_TU102
 (
     OBJGPU        *pGpu,
     KernelFifo    *pKernelFifo,

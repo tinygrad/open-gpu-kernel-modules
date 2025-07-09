@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -27,9 +27,11 @@
 #include "gpu_mgr/gpu_mgr.h"
 #include "gpu/mem_mgr/mem_mgr.h"
 #include "gpu/mem_mgr/mem_desc.h"
+#include "gpu/fifo/kernel_channel.h"
 #include "gpu/gpu.h"
 #include "rmapi/client.h"
 #include "rmapi/rs_utils.h"
+#include "platform/sli/sli.h"
 
 #include "class/cl0080.h"
 #include "class/cl2080.h"
@@ -38,46 +40,19 @@
 #include "class/cl0040.h" // NV01_MEMORY_LOCAL_USER
 
 static void
-_semsurfFreeRmClient
-(
-    SEM_SHARED_DATA *pShared
-)
-{
-    RM_API *pRmApi = rmapiGetInterface(RMAPI_GPU_LOCK_INTERNAL);
-
-    if (pShared->hClient != NV01_NULL_OBJECT)
-    {
-        pRmApi->Free(pRmApi,
-                     pShared->hClient,
-                     pShared->hClient);
-    }
-
-    pShared->hClient    = NV01_NULL_OBJECT;
-    pShared->hDevice    = NV01_NULL_OBJECT;
-    pShared->hSubDevice = NV01_NULL_OBJECT;
-}
-
-static void
 _semsurfUnregisterCallback
 (
-    SEM_SHARED_DATA *pShared
+    SEM_NOTIFIER_NODE *pNotNode
 )
 {
     RM_API *pRmApi = rmapiGetInterface(RMAPI_GPU_LOCK_INTERNAL);
-    NvU32 i;
 
-    if ((pShared->hClient != NV01_NULL_OBJECT) && (pShared->phEvents != NULL))
+    if (pNotNode->hClient != NV01_NULL_OBJECT)
     {
-        for (i = 0; i < pShared->numEvents; i++)
-        {
-            pRmApi->Free(pRmApi,
-                         pShared->hClient,
-                         pShared->phEvents[i]);
-        }
+        pRmApi->Free(pRmApi,
+                     pNotNode->hClient,
+                     pNotNode->hEvent);
     }
-
-    portMemFree(pShared->phEvents);
-    pShared->phEvents = NULL;
 }
 
 static NvU64
@@ -293,7 +268,7 @@ _semsurfSetMonitoredValue
                            pShared->layout.size * index +
                            pShared->layout.monitoredFenceThresholdOffset);
 
-    NV_PRINTF(LEVEL_NOTICE,
+    NV_PRINTF(LEVEL_INFO,
               "SemMem(0x%08x, 0x%08x): "
               "Setting monitored fence value at index %" NvU64_fmtu
               " to %" NvU64_fmtu "\n",
@@ -404,60 +379,6 @@ _semsurfEventCallback
     }
 }
 
-static NV_STATUS
-_semsurfAllocRmClient
-(
-    SemaphoreSurface *pSemSurf
-)
-{
-    SEM_SHARED_DATA *pShared = pSemSurf->pShared;
-    NV0080_ALLOC_PARAMETERS nv0080AllocParams;
-    NV2080_ALLOC_PARAMETERS nv2080AllocParams;
-    RM_API *pRmApi = rmapiGetInterface(RMAPI_GPU_LOCK_INTERNAL);
-
-    // Allocate an internal client, device, and subDevice for the semaphore
-    // surface. These will be used to allocate the internally-managed memory
-    // object wrapped by the semaphore surface, and to to register callbacks
-    // on the GPU for semaphore awaken/notification interrupts.
-    NV_ASSERT_OK_OR_RETURN(
-        pRmApi->AllocWithHandle(pRmApi,
-                                NV01_NULL_OBJECT,
-                                NV01_NULL_OBJECT,
-                                NV01_NULL_OBJECT,
-                                NV01_ROOT,
-                                &pShared->hClient,
-                                sizeof(pShared->hClient)));
-
-    portMemSet(&nv0080AllocParams, 0, sizeof(nv0080AllocParams));
-    nv0080AllocParams.deviceId =
-        gpuGetDeviceInstance(GPU_RES_GET_GPU(pSemSurf));
-
-    NV_ASSERT_OK_OR_RETURN(
-        pRmApi->Alloc(pRmApi,
-                      pShared->hClient,
-                      pShared->hClient,
-                      &pShared->hDevice,
-                      NV01_DEVICE_0,
-                      &nv0080AllocParams,
-                      sizeof(nv0080AllocParams)));
-
-    // Allocate a subDevice
-    portMemSet(&nv2080AllocParams, 0, sizeof(nv2080AllocParams));
-    nv2080AllocParams.subDeviceId =
-        gpumgrGetSubDeviceInstanceFromGpu(GPU_RES_GET_GPU(pSemSurf));
-
-    NV_ASSERT_OK_OR_RETURN(
-        pRmApi->Alloc(pRmApi,
-                      pShared->hClient,
-                      pShared->hDevice,
-                      &pShared->hSubDevice,
-                      NV20_SUBDEVICE_0,
-                      &nv2080AllocParams,
-                      sizeof(nv2080AllocParams)));
-
-    return NV_OK;
-}
-
 static void
 _semsurfFreeMemory
 (
@@ -505,7 +426,7 @@ _semsurfDupMemory
 
     if (pAllocParams->hMaxSubmittedMem != NV01_NULL_OBJECT)
     {
-        NV_CHECK_OR_RETURN(LEVEL_ERROR,
+        NV_CHECK_OR_RETURN(LEVEL_NOTICE,
                            !pSemSurf->pShared->bIs64Bit,
                            NV_ERR_INVALID_PARAMETER);
 
@@ -537,111 +458,115 @@ _semsurfDupMemory
 static NV_STATUS
 _semsurfRegisterCallback
 (
-    SemaphoreSurface *pSemSurf
+    SemaphoreSurface *pSemSurf,
+    OBJGPU *pGpu,
+    KernelChannel *pKernelChannel,
+    SEM_NOTIFIER_NODE *pNotNode,
+    NvU32 notifyIndex
 )
 {
     SEM_SHARED_DATA *pShared = pSemSurf->pShared;
     NV0005_ALLOC_PARAMETERS nv0005AllocParams;
     RM_API *pRmApi = rmapiGetInterface(RMAPI_GPU_LOCK_INTERNAL);
-    static const NvU32 eventNotifiers[] =
-    {
-        NV2080_NOTIFIERS_GR0, // NV2080_NOTIFIERS_GRAPHICS
-        NV2080_NOTIFIERS_GR1,
-        NV2080_NOTIFIERS_GR2,
-        NV2080_NOTIFIERS_GR3,
-        NV2080_NOTIFIERS_GR4,
-        NV2080_NOTIFIERS_GR5,
-        NV2080_NOTIFIERS_GR6,
-        NV2080_NOTIFIERS_GR7,
-        NV2080_NOTIFIERS_PPP,
-        NV2080_NOTIFIERS_VLD,
-        NV2080_NOTIFIERS_NVDEC0,
-        NV2080_NOTIFIERS_NVDEC1,
-        NV2080_NOTIFIERS_NVDEC2,
-        NV2080_NOTIFIERS_NVDEC3,
-        NV2080_NOTIFIERS_NVDEC4,
-        NV2080_NOTIFIERS_NVDEC5,
-        NV2080_NOTIFIERS_NVDEC6,
-        NV2080_NOTIFIERS_NVDEC7,
-        NV2080_NOTIFIERS_PDEC,
-        NV2080_NOTIFIERS_CE0,
-        NV2080_NOTIFIERS_CE1,
-        NV2080_NOTIFIERS_CE2,
-        NV2080_NOTIFIERS_CE3,
-        NV2080_NOTIFIERS_CE4,
-        NV2080_NOTIFIERS_CE5,
-        NV2080_NOTIFIERS_CE6,
-        NV2080_NOTIFIERS_CE7,
-        NV2080_NOTIFIERS_CE8,
-        NV2080_NOTIFIERS_CE9,
-        NV2080_NOTIFIERS_MSENC,
-        NV2080_NOTIFIERS_NVENC0,
-        NV2080_NOTIFIERS_NVENC1,
-        NV2080_NOTIFIERS_NVENC2,
-        NV2080_NOTIFIERS_SEC2,
-        NV2080_NOTIFIERS_NVJPEG0, // NV2080_NOTIFIERS_NVJPG
-        NV2080_NOTIFIERS_NVJPEG1,
-        NV2080_NOTIFIERS_NVJPEG2,
-        NV2080_NOTIFIERS_NVJPEG3,
-        NV2080_NOTIFIERS_NVJPEG4,
-        NV2080_NOTIFIERS_NVJPEG5,
-        NV2080_NOTIFIERS_NVJPEG6,
-        NV2080_NOTIFIERS_NVJPEG7,
-        NV2080_NOTIFIERS_OFA0, // NV2080_NOTIFIERS_OFA
-        NV2080_NOTIFIERS_FIFO_EVENT_MTHD,
-    };
-    NV_STATUS status = NV_OK;
-    NvU32 i;
-    NvU32 j;
+    NvHandle hSubdevice = 0;
 
-    pShared->numEvents = NV_ARRAY_ELEMENTS(eventNotifiers);
-    pShared->phEvents = portMemAllocNonPaged(pShared->numEvents *
-                                             sizeof(*pShared->phEvents));
-
-    NV_ASSERT_OR_RETURN(pShared->phEvents != NULL, NV_ERR_NO_MEMORY);
-
-    portMemSet(pShared->phEvents, 0, sizeof(*pShared->phEvents) * pShared->numEvents);
-    pShared->callback.func = _semsurfEventCallback;
-    pShared->callback.arg = pShared;
+    NV_ASSERT_OK_OR_RETURN(memmgrGetInternalClientHandles(pGpu,
+                                                          GPU_GET_MEMORY_MANAGER(pGpu),
+                                                          GPU_RES_GET_DEVICE(pKernelChannel),
+                                                          &pNotNode->hClient,
+                                                          NULL,
+                                                          &hSubdevice));
 
     portMemSet(&nv0005AllocParams, 0, sizeof(nv0005AllocParams));
-    nv0005AllocParams.hParentClient = pShared->hClient;
+    nv0005AllocParams.hParentClient = pNotNode->hClient;
     nv0005AllocParams.hClass        = NV01_EVENT_KERNEL_CALLBACK_EX;
     nv0005AllocParams.data          = NV_PTR_TO_NvP64(&pShared->callback);
-    for (i = 0; i < pShared->numEvents; i++)
+    nv0005AllocParams.notifyIndex = notifyIndex |
+        NV01_EVENT_NONSTALL_INTR |
+        NV01_EVENT_WITHOUT_EVENT_DATA |
+        NV01_EVENT_SUBDEVICE_SPECIFIC |
+        DRF_NUM(0005, _NOTIFY_INDEX, _SUBDEVICE,
+                gpumgrGetSubDeviceInstanceFromGpu(pGpu));
+
+    NV_ASSERT_OK_OR_RETURN(pRmApi->Alloc(pRmApi,
+                                         pNotNode->hClient,
+                                         hSubdevice,
+                                         &pNotNode->hEvent,
+                                         NV01_EVENT_KERNEL_CALLBACK_EX,
+                                         &nv0005AllocParams,
+                                         sizeof(nv0005AllocParams)));
+
+    pNotNode->nUsers = 1;
+
+    return NV_OK;
+}
+
+NV_STATUS
+_semsurfRemoveNotifyBinding
+(
+    SemaphoreSurface *pSemSurf,
+    NvU32 gpuIdx,
+    NvU32 notifyIndex
+)
+{
+    const NvU64 mapKey = ((NvU64)gpuIdx << 32) | notifyIndex;
+    SEM_NOTIFIER_NODE *pNotNode = mapFind(&pSemSurf->pShared->notifierMap, mapKey);
+
+    NV_ASSERT_OR_RETURN(pNotNode != NULL, NV_ERR_INVALID_STATE);
+    NV_ASSERT_OR_RETURN(pNotNode->nUsers >= 1, NV_ERR_INVALID_STATE);
+    pNotNode->nUsers--;
+
+    if (pNotNode->nUsers != 0)
     {
-        nv0005AllocParams.notifyIndex = eventNotifiers[i] |
-            NV01_EVENT_NONSTALL_INTR |
-            NV01_EVENT_WITHOUT_EVENT_DATA |
-            NV01_EVENT_SUBDEVICE_SPECIFIC |
-            DRF_NUM(0005, _NOTIFY_INDEX, _SUBDEVICE,
-                    gpumgrGetSubDeviceInstanceFromGpu(GPU_RES_GET_GPU(pSemSurf)));
-
-        status = pRmApi->Alloc(pRmApi,
-                               pShared->hClient,
-                               pShared->hSubDevice,
-                               &pShared->phEvents[i],
-                               NV01_EVENT_KERNEL_CALLBACK_EX,
-                               &nv0005AllocParams,
-                               sizeof(nv0005AllocParams));
-
-        NV_ASSERT_OR_GOTO(status == NV_OK, eventAllocFailed);
+        return NV_OK;
     }
 
-    return status;
+    _semsurfUnregisterCallback(pNotNode);
+    mapRemove(&pSemSurf->pShared->notifierMap, pNotNode);
+    portMemFree(pNotNode);
 
-eventAllocFailed:
-    for (j = 0; j < i; j++)
+    return NV_OK;
+}
+
+static NV_STATUS
+_semsurfUnbindChannel
+(
+    SemaphoreSurface *pSemSurf,
+    SEM_CHANNEL_NODE *pChannelNode
+)
+{
+    NV_STATUS rmStatus = NV_OK;
+    NvU32 i;
+
+    for (i = 0; i < pChannelNode->numNotifyIndices; i++)
     {
-        pRmApi->Free(pRmApi,
-                     pShared->hClient,
-                     pShared->phEvents[j]);
+        //
+        // Soldier on if removal of one notification index fails, but preserve
+        // the first failure status code.
+        //
+        NV_STATUS tmpStatus =
+            _semsurfRemoveNotifyBinding(pSemSurf,
+                                        pChannelNode->gpuIdx,
+                                        pChannelNode->notifyIndices[i]);
+
+        if (tmpStatus == NV_OK)
+        {
+            NV_PRINTF(LEVEL_INFO,
+                      "SemSurf(0x%08x, 0x%08x): "
+                      "Unbound event for GPU instance 0x%08x notify index 0x%08x\n",
+                      RES_GET_CLIENT_HANDLE(pSemSurf), RES_GET_HANDLE(pSemSurf),
+                      pChannelNode->gpuIdx, pChannelNode->notifyIndices[i]);
+        }
+        else if (rmStatus == NV_OK)
+        {
+            rmStatus = tmpStatus;
+        }
     }
 
-    portMemFree(pShared->phEvents);
-    pShared->phEvents = NULL;
+    mapRemove(&pSemSurf->boundChannelMap, pChannelNode);
+    portMemFree(pChannelNode);
 
-    return status;
+    return rmStatus;
 }
 
 static NV_STATUS
@@ -660,6 +585,8 @@ semsurfCopyConstruct
     NV_ASSERT(pSemSurf->pShared->refCount > 0);
     pSemSurf->pShared->refCount++;
 
+    mapInitIntrusive(&pSemSurf->boundChannelMap);
+
     NV_PRINTF(LEVEL_NOTICE,
               "SemSurf(0x%08x, 0x%08x): Copied with SemMem(0x%08x, 0x%08x)\n",
               RES_GET_CLIENT_HANDLE(pSemSurf), RES_GET_HANDLE(pSemSurf),
@@ -675,11 +602,28 @@ _semsurfDestroyShared
 )
 {
     RM_API *pRmApi = rmapiGetInterface(RMAPI_GPU_LOCK_INTERNAL);
+    SEM_NOTIFIERIter notIter;
 
     if (pShared == NULL)
         return;
 
-    _semsurfUnregisterCallback(pShared);
+    //
+    // Any notifier entries should have been cleaned up as part of the
+    // destructors of the semaphore surface objects sharing this data.
+    //
+    NV_ASSERT(mapCount(&pShared->notifierMap) == 0);
+
+    for (notIter = mapIterAll(&pShared->notifierMap);
+         mapIterNext(&notIter);
+         notIter = mapIterAll(&pShared->notifierMap))
+    {
+        _semsurfUnregisterCallback(notIter.pValue);
+        mapRemove(&pShared->notifierMap, notIter.pValue);
+        portMemFree(notIter.pValue);
+    }
+
+    mapDestroy(&pShared->notifierMap);
+    mapDestroy(&pShared->listenerMap);
 
     if (pShared->pMaxSubmittedMem)
     {
@@ -717,7 +661,6 @@ _semsurfDestroyShared
     pShared->pSemaphoreMem = NULL;
 
     _semsurfFreeMemory(pShared);
-    _semsurfFreeRmClient(pShared);
 
     if (pShared->pSpinlock)
         portSyncSpinlockDestroy(pShared->pSpinlock);
@@ -746,7 +689,9 @@ semsurfConstruct_IMPL
     RS_RES_ALLOC_PARAMS_INTERNAL *pParams
 )
 {
-    RM_API *pRmApi = rmapiGetInterface(RMAPI_GPU_LOCK_INTERNAL);
+    RM_API                                 *pRmApi         = rmapiGetInterface(RMAPI_GPU_LOCK_INTERNAL);
+    OBJGPU                                 *pGpu           = GPU_RES_GET_GPU(pSemSurf);
+    MemoryManager                          *pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
     SEM_SHARED_DATA                        *pShared;
     RmClient                               *pClient;
     RsClient                               *pRsClient;
@@ -754,6 +699,8 @@ semsurfConstruct_IMPL
     NvU32                                   maxSubmittedCoherency;
     NV_STATUS                               status = NV_OK;
     NvU64                                   i;
+
+    NV_CHECK_OR_RETURN(LEVEL_INFO, !IsSLIEnabled(pGpu), NV_ERR_INVALID_STATE);
 
     if (RS_IS_COPY_CTOR(pParams))
     {
@@ -763,7 +710,7 @@ semsurfConstruct_IMPL
         return semsurfCopyConstruct(pSemSurf, pCallContext, pParams);
     }
 
-    NV_CHECK_OR_RETURN(LEVEL_ERROR,
+    NV_CHECK_OR_RETURN(LEVEL_NOTICE,
                        pAllocParams->flags == 0ULL,
                        NV_ERR_INVALID_ARGUMENT);
 
@@ -773,16 +720,21 @@ semsurfConstruct_IMPL
     portMemSet(pShared, 0, sizeof(*pShared));
     pShared->refCount = 1;
     mapInitIntrusive(&pShared->listenerMap);
+    mapInitIntrusive(&pShared->notifierMap);
+    mapInitIntrusive(&pSemSurf->boundChannelMap);
 
     pShared->pSpinlock = portSyncSpinlockCreate(portMemAllocatorGetGlobalNonPaged());
     NV_ASSERT_TRUE_OR_GOTO(status, pShared->pSpinlock != NULL, NV_ERR_NO_MEMORY, ctorFailed);
 
-    NV_ASSERT_OK_OR_GOTO(status, _semsurfAllocRmClient(pSemSurf), ctorFailed);
+    NV_ASSERT_OK_OR_GOTO(status,
+        memmgrGetInternalClientHandles(pGpu, pMemoryManager, GPU_RES_GET_DEVICE(pSemSurf),
+                                            &pShared->hClient, &pShared->hDevice, &pShared->hSubdevice),
+    ctorFailed);
 
     NV_ASSERT_OK_OR_GOTO(status,
         pRmApi->Control(pRmApi,
                         pShared->hClient,
-                        pShared->hSubDevice,
+                        pShared->hSubdevice,
                         NV2080_CTRL_CMD_FB_GET_SEMAPHORE_SURFACE_LAYOUT,
                        &pShared->layout,
                         sizeof pShared->layout),
@@ -796,7 +748,7 @@ semsurfConstruct_IMPL
 
     pRsClient = staticCast(pClient, RsClient);
 
-    NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR,
+    NV_CHECK_OK_OR_GOTO(status, LEVEL_NOTICE,
         _semsurfDupMemory(pSemSurf, pAllocParams),
         ctorFailed);
 
@@ -891,8 +843,8 @@ semsurfConstruct_IMPL
                          goto ctorFailed);
     }
 
-
-    NV_ASSERT_OK_OR_GOTO(status, _semsurfRegisterCallback(pSemSurf), ctorFailed);
+    pShared->callback.func = _semsurfEventCallback;
+    pShared->callback.arg = pShared;
 
     for (i = 0; _semsurfValidateIndex(pShared, i); i++)
     {
@@ -902,7 +854,7 @@ semsurfConstruct_IMPL
     /* Any failures should have already taken the ctorFailed path */
     NV_ASSERT_OR_GOTO(status == NV_OK, ctorFailed);
 
-    NV_PRINTF(LEVEL_NOTICE,
+    NV_PRINTF(LEVEL_INFO,
               "SemSurf(0x%08x, 0x%08x): Constructed with SemMem(0x%08x, 0x%08x)\n",
               RES_GET_CLIENT_HANDLE(pSemSurf), RES_GET_HANDLE(pSemSurf),
               pShared->hClient, pShared->hSemaphoreMem);
@@ -910,6 +862,7 @@ semsurfConstruct_IMPL
     return NV_OK;
 
 ctorFailed:
+    mapDestroy(&pSemSurf->boundChannelMap);
     _semsurfDestroyShared(pShared);
 
     return status;
@@ -925,6 +878,7 @@ semsurfDestruct_IMPL
     SEM_INDEX_LISTENERS_NODE *pIndexListeners;
     SEM_VALUE_LISTENERS_NODE *pValueListeners;
     SEM_VALUE_LISTENERS_NODE *pNextValueListeners;
+    SEM_CHANNEL_NODE *pChannelNode;
     EVENTNOTIFICATION *pListener;
     EVENTNOTIFICATION *pNextListener;
     NvU64 minWaitValue;
@@ -933,11 +887,13 @@ semsurfDestruct_IMPL
     NvHandle hSemSurf = RES_GET_HANDLE(pSemSurf);
     NvHandle hSharedClient = pShared->hClient;
     NvHandle hSharedMem = pShared->hSemaphoreMem;
+    PORT_UNREFERENCED_VARIABLE(hSharedClient);
+    PORT_UNREFERENCED_VARIABLE(hSharedMem);
 
     NV_ASSERT_OR_RETURN_VOID(pShared);
     NV_ASSERT_OR_GOTO(pShared->pSpinlock, skipRemoveListeners);
 
-    NV_PRINTF(LEVEL_NOTICE,
+    NV_PRINTF(LEVEL_INFO,
               "SemSurf(0x%08x, 0x%08x): Destructor with SemMem(0x%08x, 0x%08x)\n",
               hSemClient, hSemSurf, hSharedClient, hSharedMem);
 
@@ -1016,6 +972,11 @@ semsurfDestruct_IMPL
     NV_PRINTF(LEVEL_INFO, "SemMem(0x%08x, 0x%08x): Exited spinlock\n",
               hSharedClient, hSharedMem);
 
+    while ((pChannelNode = mapFindGEQ(&pSemSurf->boundChannelMap, 0)))
+    {
+        (void)_semsurfUnbindChannel(pSemSurf, pChannelNode);
+    }
+    mapDestroy(&pSemSurf->boundChannelMap);
 skipRemoveListeners:
     NV_ASSERT(pShared->refCount > 0);
     --pShared->refCount;
@@ -1118,7 +1079,194 @@ semsurfCtrlCmdBindChannel_IMPL
     NV_SEMAPHORE_SURFACE_CTRL_BIND_CHANNEL_PARAMS *pParams
 )
 {
-    return NV_ERR_NOT_SUPPORTED;
+    SEM_NOTIFIER_NODE *pNotNode;
+    SEM_CHANNEL_NODE *pChannelNode;
+    OBJGPU *pGpu;
+    RsClient *pRsClient = staticCast(RES_GET_CLIENT(pSemSurf), RsClient);
+    KernelChannel *pKernelChannel;
+    NvU64 mapKey;
+    NV_STATUS rmStatus = NV_OK;
+    NvU32 gpuIdx;
+    NvU32 i, j;
+
+    // The channel isn't actually used for anything here yet. However, validate
+    // it to ensure using it in the future (E.g., for robust channel error
+    // notification registration) won't break buggy clients.
+    NV_CHECK_OK_OR_RETURN(LEVEL_INFO, CliGetKernelChannel(pRsClient,
+                                                          pParams->hChannel,
+                                                          &pKernelChannel));
+
+    pGpu = GPU_RES_GET_GPU(pKernelChannel);
+
+    NV_CHECK_OR_RETURN(LEVEL_INFO, !IsSLIEnabled(pGpu), NV_ERR_INVALID_STATE);
+
+    gpuIdx = gpuGetInstance(pGpu);
+
+    if (pParams->numNotifyIndices > NV_ARRAY_ELEMENTS(pParams->notifyIndices))
+    {
+        return NV_ERR_INVALID_PARAMETER;
+    }
+
+    for (i = 0; i < pParams->numNotifyIndices; i++)
+    {
+        mapKey = ((NvU64)gpuIdx << 32) | pParams->notifyIndices[i];
+        pNotNode = mapFind(&pSemSurf->pShared->notifierMap, mapKey);
+
+        if (pNotNode != NULL)
+        {
+            NV_ASSERT(pNotNode->nUsers >= 1);
+
+            if (pNotNode->nUsers == NV_U32_MAX)
+            {
+                NV_PRINTF(LEVEL_WARNING,
+                          "SemSurf(0x%08x, 0x%08x): "
+                          "GPU instance 0x%08x notify index 0x%08x number of bound channels at max\n",
+                          RES_GET_CLIENT_HANDLE(pSemSurf),
+                          RES_GET_HANDLE(pSemSurf),
+                          gpuIdx, pParams->notifyIndices[i]);
+
+                rmStatus = NV_ERR_INVALID_STATE;
+                goto undoBound;
+            }
+
+            pNotNode->nUsers++;
+
+            NV_PRINTF(LEVEL_INFO,
+                      "SemSurf(0x%08x, 0x%08x): "
+                      "Bound to existing event for GPU instance 0x%08x notify index 0x%08x\n",
+                      RES_GET_CLIENT_HANDLE(pSemSurf),
+                      RES_GET_HANDLE(pSemSurf),
+                      gpuIdx, pParams->notifyIndices[i]);
+
+            continue;
+        }
+
+        pNotNode = portMemAllocNonPaged(sizeof(*pNotNode));
+        if (pNotNode == NULL)
+        {
+            NV_PRINTF(LEVEL_WARNING,
+                      "SemSurf(0x%08x, 0x%08x): "
+                      "Failed to allocate an event notifier map node\n",
+                      RES_GET_CLIENT_HANDLE(pSemSurf),
+                      RES_GET_HANDLE(pSemSurf));
+
+            rmStatus = NV_ERR_NO_MEMORY;
+            goto undoBound;
+        }
+        portMemSet(pNotNode, 0, sizeof(*pNotNode));
+
+        rmStatus = _semsurfRegisterCallback(pSemSurf,
+                                            pGpu,
+                                            pKernelChannel,
+                                            pNotNode,
+                                            pParams->notifyIndices[i]);
+        if (rmStatus != NV_OK)
+        {
+            portMemFree(pNotNode);
+            goto undoBound;
+        }
+
+        if (!mapInsertExisting(&pSemSurf->pShared->notifierMap,
+                               mapKey,
+                               pNotNode))
+        {
+            NV_PRINTF(LEVEL_WARNING,
+                      "SemSurf(0x%08x, 0x%08x): "
+                      "Duplicate entry found for new event notifier map node\n",
+                      RES_GET_CLIENT_HANDLE(pSemSurf),
+                      RES_GET_HANDLE(pSemSurf));
+
+            _semsurfUnregisterCallback(pNotNode);
+            portMemFree(pNotNode);
+            rmStatus = NV_ERR_INVALID_STATE;
+            goto undoBound;
+        }
+
+        NV_PRINTF(LEVEL_INFO,
+                  "SemSurf(0x%08x, 0x%08x): "
+                  "Bound to new event for GPU instance 0x%08x notify index 0x%08x\n",
+                  RES_GET_CLIENT_HANDLE(pSemSurf), RES_GET_HANDLE(pSemSurf),
+                  gpuIdx, pParams->notifyIndices[i]);
+    }
+
+    pChannelNode = portMemAllocNonPaged(sizeof(*pChannelNode));
+    if (pChannelNode == NULL)
+    {
+        NV_PRINTF(LEVEL_WARNING,
+                  "SemSurf(0x%08x, 0x%08x): "
+                  "Failed to allocate an channel binding map node for channel 0x%08x\n",
+                  RES_GET_CLIENT_HANDLE(pSemSurf),
+                  RES_GET_HANDLE(pSemSurf),
+                  pParams->hChannel);
+
+        rmStatus = NV_ERR_NO_MEMORY;
+        goto undoBound;
+    }
+
+    pChannelNode->gpuIdx = gpuIdx;
+    pChannelNode->numNotifyIndices = pParams->numNotifyIndices;
+    (void)portMemCopy(pChannelNode->notifyIndices,
+                      pChannelNode->numNotifyIndices *
+                      sizeof(pChannelNode->notifyIndices[0]),
+                      pParams->notifyIndices,
+                      pParams->numNotifyIndices *
+                      sizeof(pParams->notifyIndices[0]));
+
+    if (!mapInsertExisting(&pSemSurf->boundChannelMap, pParams->hChannel, pChannelNode))
+    {
+        NV_PRINTF(LEVEL_WARNING,
+                  "SemSurf(0x%08x, 0x%08x): "
+                  "Attempt to register duplicate channel binding for channel 0x%08x\n",
+                  RES_GET_CLIENT_HANDLE(pSemSurf),
+                  RES_GET_HANDLE(pSemSurf),
+                  pParams->hChannel);
+
+        portMemFree(pChannelNode);
+        rmStatus = NV_ERR_INSERT_DUPLICATE_NAME;
+        goto undoBound;
+    }
+
+    return NV_OK;
+
+undoBound:
+    for (j = 0; j < i; j++)
+    {
+        _semsurfRemoveNotifyBinding(pSemSurf,
+                                    gpuIdx,
+                                    pParams->notifyIndices[j]);
+
+    }
+
+    return rmStatus;
+}
+
+NV_STATUS
+semsurfCtrlCmdUnbindChannel_IMPL
+(
+    SemaphoreSurface *pSemSurf,
+    NV_SEMAPHORE_SURFACE_CTRL_UNBIND_CHANNEL_PARAMS *pParams
+)
+{
+    RsClient *pRsClient = staticCast(RES_GET_CLIENT(pSemSurf), RsClient);
+    KernelChannel *pKernelChannel;
+    SEM_CHANNEL_NODE *pChannelNode;
+
+    // The channel isn't actually used for anything here yet. However, validate
+    // it to ensure using it in the future (E.g., for robust channel error
+    // notification registration) won't break buggy clients.
+    NV_CHECK_OK_OR_RETURN(LEVEL_INFO, CliGetKernelChannel(pRsClient,
+                                                          pParams->hChannel,
+                                                          &pKernelChannel));
+
+    if (pParams->numNotifyIndices > NV_ARRAY_ELEMENTS(pParams->notifyIndices))
+    {
+        return NV_ERR_INVALID_PARAMETER;
+    }
+
+    pChannelNode = mapFind(&pSemSurf->boundChannelMap, pParams->hChannel);
+    NV_CHECK_OR_RETURN(LEVEL_INFO, pChannelNode != NULL, NV_ERR_INVALID_OBJECT);
+
+    return _semsurfUnbindChannel(pSemSurf, pChannelNode);
 }
 
 NV_STATUS

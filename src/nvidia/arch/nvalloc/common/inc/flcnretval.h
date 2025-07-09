@@ -152,6 +152,7 @@ typedef NvU8 FLCN_STATUS;
 #define FLCN_ERR_VPR_APP_DISP_FALCON_IS_NOT_IN_LS_MODE                     (0x61U)
 #define FLCN_ERR_VPR_APP_VPR_IS_ALREADY_ENABLED                            (0x62U)
 #define FLCN_ERR_VPR_APP_UNEXPECTEDLY_RUNNING_ON_RISCV                     (0x63U)
+#define FLCN_ERR_INVALID_SR_CONFIGURATION                                  (0x64U)
 
 // Clocks Errors
 #define FLCN_ERR_CYCLE_DETECTED                                            (0x70U)
@@ -183,6 +184,9 @@ typedef NvU8 FLCN_STATUS;
 #define FLCN_ERR_NVRNG_INIT_CRYPTO_DEVICE_FAILED                           (0x95U)
 #define FLCN_ERR_NVRNG_SELECT_ENGINE_FAILED                                (0x96U)
 #define FLCN_ERR_NVRNG_GENERATE_FAILED                                     (0x97U)
+#define FLCN_ERR_NVPKA_ECDSA_INIT_FAILED                                   (0x98U)
+#define FLCN_ERR_NVPKA_ECDSA_SIGN_FAILED                                   (0x99U)
+#define FLCN_ERR_NVPKA_GET_ECC_KEY_PAIR_FAILED                             (0x9AU)
 
 // Heavy Secure Errors
 #define FLCN_ERR_HS_CHK_INVALID_INPUT                                      (0xA0U)

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -138,10 +138,13 @@ subdeviceCtrlCmdGpuResetEccErrorStatus_VF
     NV2080_CTRL_GPU_RESET_ECC_ERROR_STATUS_PARAMS *pParams
 )
 {
-    OBJGPU           *pGpu  = GPU_RES_GET_GPU(pSubdevice);
-    OBJVGPU          *pVGpu = GPU_GET_VGPU(pGpu);
-    VGPU_STATIC_INFO *pVSI  = GPU_GET_STATIC_INFO(pGpu);
+    OBJGPU           *pGpu        = GPU_RES_GET_GPU(pSubdevice);
+    OBJVGPU          *pVGpu       = GPU_GET_VGPU(pGpu);
+    VGPU_STATIC_INFO *pVSI        = GPU_GET_STATIC_INFO(pGpu);
+    NvBool            bMigEnabled = IS_MIG_ENABLED(pGpu);
     NvU32 i;
+
+    NV_CHECK_OR_RETURN(LEVEL_INFO, !bMigEnabled, NV_ERR_NOT_SUPPORTED);
 
     if ((pVGpu == NULL) || (!pVGpu->bECCSupported) ||
         (pParams->statuses & NV2080_CTRL_GPU_ECC_ERROR_STATUS_AGGREGATE))
@@ -188,4 +191,101 @@ subdeviceCtrlCmdGpuQueryEccStatus_VF
     }
 
     return status;
+}
+
+/*!
+ * @brief   This Command is used to report if the specified logo illumination attribute
+ *          is supported
+ *
+ * @param[in,out]   pConfigParams
+ *                  attribute:  The attribute whose support is to be determined.
+ *                  bSupported: indicator if the specified attribute is supported.
+ *
+ * @return  Returns NV_STATUS
+ *          NV_OK                     Success
+ *
+ */
+NV_STATUS
+subdeviceCtrlCmdGpuQueryIllumSupport_VF
+(
+    Subdevice *pSubdevice,
+    NV2080_CTRL_CMD_GPU_QUERY_ILLUM_SUPPORT_PARAMS *pConfigParams
+)
+{
+    pConfigParams->bSupported = NV_FALSE;
+
+    return NV_OK;
+}
+
+NV_STATUS subdeviceCtrlCmdBiosGetInfoV2_VF
+(
+    Subdevice *pSubdevice,
+    NV2080_CTRL_BIOS_GET_INFO_V2_PARAMS *pBiosInfoParams
+)
+{
+    NV2080_CTRL_BIOS_INFO *pBiosInfos = pBiosInfoParams->biosInfoList;
+    NvU32 i;
+
+    if ((pBiosInfoParams->biosInfoListSize == 0) ||
+        (pBiosInfoParams->biosInfoListSize > NV2080_CTRL_BIOS_INFO_MAX_SIZE))
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    for (i = 0; i < pBiosInfoParams->biosInfoListSize; i++)
+    {
+        pBiosInfos[i].data = 0;
+    }
+
+    return NV_OK;
+}
+
+NV_STATUS
+subdeviceCtrlCmdMemSysQueryDramEncryptionPendingConfiguration_VF
+(
+    Subdevice                                                           *pSubdevice,
+    NV2080_CTRL_FB_QUERY_DRAM_ENCRYPTION_PENDING_CONFIGURATION_PARAMS   *pConfig
+)
+{
+    // TODO: Will implement the functionality for VF in a subsequent changelist (Bug 4308325)
+    return NV_OK;
+}
+
+NV_STATUS
+subdeviceCtrlCmdMemSysSetDramEncryptionConfiguration_VF
+(
+    Subdevice                                                   *pSubdevice,
+    NV2080_CTRL_FB_SET_DRAM_ENCRYPTION_CONFIGURATION_PARAMS     *pConfig
+)
+{
+    // TODO: Will implement the functionality for VF in a subsequent changelist (Bug 4308325)
+    return NV_OK;
+}
+
+NV_STATUS
+subdeviceCtrlCmdMemSysQueryDramEncryptionStatus_VF
+(
+    Subdevice                                           *pSubdevice,
+    NV2080_CTRL_FB_QUERY_DRAM_ENCRYPTION_STATUS_PARAMS  *pConfig
+)
+{
+    // TODO: Will implement the functionality for VF in a subsequent changelist (Bug 4308325)
+    return NV_OK;
+}
+
+NV_STATUS
+subdeviceCtrlCmdCcuGetSampleInfo_VF
+(
+    Subdevice *pSubdevice,
+    NV2080_CTRL_INTERNAL_CCU_SAMPLE_INFO_PARAMS *pParams
+)
+{
+    OBJGPU           *pGpu = GPU_RES_GET_GPU(pSubdevice);
+    VGPU_STATIC_INFO *pVSI = GPU_GET_STATIC_INFO(pGpu);
+
+    NV_ASSERT_OR_RETURN(pVSI != NULL, NV_ERR_INVALID_STATE);
+
+    portMemCopy(pParams, sizeof(*pParams), &pVSI->ccuSampleInfo, sizeof(pVSI->ccuSampleInfo));
+
+    return NV_OK;
 }

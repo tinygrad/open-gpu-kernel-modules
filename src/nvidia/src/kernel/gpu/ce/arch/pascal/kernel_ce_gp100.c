@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -39,44 +39,80 @@ NV_STATUS kceStateLoad_GP100(OBJGPU *pGpu, KernelCE *pKCe, NvU32 flags)
 
     if (!IS_VIRTUAL(pGpu) && pKCe->bShimOwner)
     {
-        NV_ASSERT_OK_OR_RETURN(kceTopLevelPceLceMappingsUpdate(pGpu, pKCe));
+        pKCe->bMapComplete = NV_FALSE;
+
+        //
+        // Don't create a new object on suspend/resume path.
+        //
+        if (!(flags & GPU_STATE_FLAGS_PRESERVING))
+        {
+            pKCe->pPceLceMap = portMemAllocNonPaged(sizeof(NvU32[NV2080_CTRL_MAX_PCES]));
+            if (pKCe->pPceLceMap == NULL)
+            {
+                return NV_ERR_NO_MEMORY;
+            }
+        }
+
+        NvU32   numPcesPerLce;
+        NvU32   numLces;
+        NvU32   supportedPceMask;
+        NvU32   supportedLceMask;
+        NvU32   pcesPerHshub;
+
+        NV_ASSERT_OK_OR_RETURN(kceGetPceConfigForLceType(pGpu,
+                                                         pKCe,
+                                                         NV2080_CTRL_CE_LCE_TYPE_DECOMP,
+                                                         &numPcesPerLce,
+                                                         &numLces,
+                                                         &supportedPceMask,
+                                                         &supportedLceMask,
+                                                         &pcesPerHshub));
+
+        pKCe->decompPceMask         = supportedPceMask;
+        pKCe->shimConnectingHubMask = 0;
+
+        KernelCE *pKCeIter = NULL;
+        KCE_ITER_SHIM_BEGIN(pGpu, pKCeIter)
+        {
+            NV_ASSERT_OK_OR_RETURN(kceTopLevelPceLceMappingsUpdate(pGpu, pKCeIter));
+        }
+        KCE_ITER_END;
     }
+
     if (gpuIsCCFeatureEnabled(pGpu))
     {
-        ConfidentialCompute *pCC = GPU_GET_CONF_COMPUTE(pGpu);
-
-        switch (pKCe->publicID)
+        if (kceIsSecureCe_HAL(pGpu, pKCe))
         {
-            case 2:
-                NV_ASSERT_OK_OR_RETURN(confComputeDeriveSecrets(pCC, MC_ENGINE_IDX_CE2));
-                break;
-            case 3:
-                NV_ASSERT_OK_OR_RETURN(confComputeDeriveSecrets(pCC, MC_ENGINE_IDX_CE3));
-                break;
-            case 4:
-                NV_ASSERT_OK_OR_RETURN(confComputeDeriveSecrets(pCC, MC_ENGINE_IDX_CE4));
-                break;
-            case 5:
-                NV_ASSERT_OK_OR_RETURN(confComputeDeriveSecrets(pCC, MC_ENGINE_IDX_CE5));
-                break;
-            case 6:
-                NV_ASSERT_OK_OR_RETURN(confComputeDeriveSecrets(pCC, MC_ENGINE_IDX_CE6));
-                break;
-            case 7:
-                NV_ASSERT_OK_OR_RETURN(confComputeDeriveSecrets(pCC, MC_ENGINE_IDX_CE7));
-                break;
-            case 8:
-                NV_ASSERT_OK_OR_RETURN(confComputeDeriveSecrets(pCC, MC_ENGINE_IDX_CE8));
-                break;
-            case 9:
-                NV_ASSERT_OK_OR_RETURN(confComputeDeriveSecrets(pCC, MC_ENGINE_IDX_CE9));
-                break;
-            default:
-                break;
+            ConfidentialCompute *pCC = GPU_GET_CONF_COMPUTE(pGpu);
+
+            NvU32 mcEngineIdx = MC_ENGINE_IDX_CE(pKCe->publicID);
+
+            NV_ASSERT_OR_RETURN(mcEngineIdx <= MC_ENGINE_IDX_CE_MAX, NV_ERR_NOT_SUPPORTED);
+
+            NV_ASSERT_OK_OR_RETURN(confComputeDeriveSecrets(pCC, mcEngineIdx));
         }
     }
     return NV_OK;
 }
+
+NV_STATUS
+kceStateUnload_GP100(OBJGPU* pGpu, KernelCE* pKCe, NvU32 flags)
+{
+    //
+    // Don't tear down when undergoing suspend/resume
+    //
+    if (!(flags & GPU_STATE_FLAGS_PRESERVING))
+    {
+        if (!IS_VIRTUAL(pGpu) && pKCe->bShimOwner)
+        {
+            portMemFree(pKCe->pPceLceMap);
+            pKCe->pPceLceMap = NULL;
+        }
+    }
+
+    return NV_OK;
+}
+
 
 /*!
  * Determine if CE should be used for sysmem read
@@ -265,4 +301,25 @@ kceGetNvlinkMaxTopoForTable_GP100
 done:
     portMemFree(pCachedTopo);
     return result;
+}
+
+/**
+ * @brief Sets the CE capabilities based on PCE-LCE mapping algorithm
+ *
+ * @param[in]      pGpu       OBJGPU pointer
+ * @param[in]      pKCe       KernelCE pointer
+ * @param[in]      pKCeCaps   CE capabilities table
+ */
+void
+kceAssignCeCaps_GP100
+(
+    OBJGPU      *pGpu,
+    KernelCE    *pKCe,
+    NvU8        *pKCeCaps
+)
+{
+    KernelNvlink *pKernelNvlink = GPU_GET_KERNEL_NVLINK(pGpu);
+
+    if (pKernelNvlink != NULL)
+        kceGetNvlinkCaps(pGpu, pKCe, pKCeCaps); 
 }

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2015-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2015-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -46,6 +46,7 @@
 
 #if defined(SRT_BUILD)
 #define RMCFG_MODULE_x 1
+#define RMCFG_FEATURE_x 1
 #else
 #include "rmconfig.h"
 #endif
@@ -57,7 +58,7 @@ extern "C" {
 typedef struct OBJMEMSCRUB OBJMEMSCRUB;
 typedef struct SCRUB_NODE SCRUB_NODE;
 
-#define PMA_REGION_SIZE 64
+#define PMA_REGION_SIZE 32
 #define PMA_ADDR2FRAME(addr, base)  (((addr) - (base)) >> PMA_PAGE_SHIFT)
 #define PMA_FRAME2ADDR(frame, base) ((base) + ((frame) << PMA_PAGE_SHIFT))
 
@@ -99,6 +100,8 @@ typedef struct SCRUB_NODE SCRUB_NODE;
 #define PMA_ALLOCATE_TURN_BLACKLIST_OFF     NVBIT(11)
 #define PMA_ALLOCATE_ALLOW_PARTIAL          NVBIT(12)
 #define PMA_ALLOCATE_REVERSE_ALLOC          NVBIT(13)
+#define PMA_ALLOCATE_LOCALIZED_UGPU0        NVBIT(14)
+#define PMA_ALLOCATE_LOCALIZED_UGPU1        NVBIT(15)
 
 // Output flags
 #define PMA_ALLOCATE_RESULT_IS_ZERO         NVBIT(0)
@@ -178,7 +181,7 @@ typedef NV_STATUS (*pmaEvictRangeCb_t)(void *ctxPtr, NvU64 physBegin, NvU64 phys
                                        MEMORY_PROTECTION prot);
 
 /*!
- * @brief Pluggable data structure management. Currently we have regmap and address tree.
+ * @brief Pluggable data structure management. Currently we have regmap.
  */
 typedef void *(*pmaMapInit_t)(NvU64 numFrames, NvU64 addrBase, PMA_STATS *pPmaStats, NvBool bProtected);
 typedef void  (*pmaMapDestroy_t)(void *pMap);
@@ -188,9 +191,11 @@ typedef void  (*pmaMapChangeBlockStateAttrib_t)(void *pMap, NvU64 frameNum, NvU6
 typedef PMA_PAGESTATUS (*pmaMapRead_t)(void *pMap, NvU64 frameNum, NvBool readAttrib);
 typedef NV_STATUS (*pmaMapScanContiguous_t)(void *pMap, NvU64 addrBase, NvU64 rangeStart, NvU64 rangeEnd,
                                             NvU64 numPages, NvU64 *freelist, NvU64 pageSize, NvU64 alignment,
+                                            NvU64 stride, NvU32 strideStart,
                                             NvU64 *pagesAllocated, NvBool bSkipEvict, NvBool bReverseAlloc);
 typedef NV_STATUS (*pmaMapScanDiscontiguous_t)(void *pMap, NvU64 addrBase, NvU64 rangeStart, NvU64 rangeEnd,
                                                NvU64 numPages, NvU64 *freelist, NvU64 pageSize, NvU64 alignment,
+                                               NvU64 stride, NvU32 strideStart,
                                                NvU64 *pagesAllocated, NvBool bSkipEvict, NvBool bReverseAlloc);
 typedef void (*pmaMapGetSize_t)(void *pMap, NvU64 *pBytesTotal);
 typedef void (*pmaMapGetLargestFree_t)(void *pMap, NvU64 *pLargestFree);
@@ -292,7 +297,7 @@ NV_STATUS pmaInitialize(PMA *pPma, NvU32 initFlags);
  *
  * All eviction handlers must have been unregistered by this point.
  *
- * @param[in] pma       Pointer to PMA object being destroyed.
+ * @param[in] pPma      Pointer to PMA object being destroyed.
  */
 void  pmaDestroy(PMA *pPma);
 
@@ -303,11 +308,23 @@ void  pmaDestroy(PMA *pPma);
  * Any clients of PMA can query config and state with a valid PMA object.
  * Querying at different times may return different values when states change.
  *
- * @param[in]     pma       Pointer to PMA object being destroyed.
+ * @param[in]     pPma      Pointer to PMA object
  * @param[in/out] pConfigs  Configs/states to query. See PMA_QUERY_* above.
  */
 NV_STATUS pmaQueryConfigs(PMA* pPma, NvU32 *pConfigs);
 
+/*!
+ * @brief Identify if an FB range is PMA-managed
+ *
+ *
+ * @param[in] pPma    Pointer to PMA object
+ * @param[in] offset  FB block offset
+ * @param[in] limit   FB block limit
+ *
+ * @return NV_TRUE      offset is PMA-managed
+ *         NV_FALSE     offset is not managed by PMA
+*/
+NvBool pmaIsPmaManaged(PMA* pPma, NvU64 offset, NvU64 limit);
 
 /*!
  * @brief Attaches a region of physical memory to be managed by the PMA.
@@ -650,6 +667,20 @@ NV_STATUS pmaGetRegionInfo(PMA *pPma, NvU32 *pRegSize, PMA_REGION_DESCRIPTOR **p
  *      void
  */
 void pmaGetFreeMemory(PMA *pPma, NvU64 *pBytesFree);
+
+/*!
+ * @brief Returns information about the client address space size
+ *        that can be allocated
+ *
+ * @param[in]  pPma           PMA pointer
+ * @param[in]  pSize          Pointer that will return the size of the
+ *                            client-allocatable address space
+ *
+ * @return
+ *      void
+ */
+void
+pmaGetClientAddrSpaceSize(PMA *pPma, NvU64 *pSize);
 
 /*!
  * @brief Returns information about the largest free FB memory chunk across all regions.

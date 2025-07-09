@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -22,10 +22,13 @@
  */
 
 #include "gpu/gpu.h"
+#include "gpu/gpu_access.h"
 #include "gpu/gpu_child_class_defs.h"
 #include "os/os.h"
 #include "nverror.h"
 #include "vgpu/rpc.h"
+#include "gpu/fsp/kern_fsp.h"
+#include "fsp/fsp_nvdm_format.h"
 
 #include "published/hopper/gh100/hwproject.h"
 #include "published/hopper/gh100/dev_gc6_island.h"
@@ -35,6 +38,9 @@
 #include "published/hopper/gh100/pri_nv_xal_ep.h"
 #include "published/hopper/gh100/dev_vm.h"
 #include "published/hopper/gh100/dev_xtl_ep_pri.h"
+
+#include "published/hopper/gh100/dev_therm.h"
+#include "published/hopper/gh100/dev_therm_addendum.h"
 
 #include "ctrl/ctrl2080/ctrl2080mc.h"
 
@@ -57,7 +63,7 @@ gpuWriteBusConfigReg_GH100
     NvU32      value
 )
 {
-    return gpuWriteBusConfigCycle(pGpu, index, value);
+    return gpuWriteBusConfigCycle_HAL(pGpu, index, value);
 }
 
 /*!
@@ -77,7 +83,7 @@ gpuReadBusConfigReg_GH100
     NvU32     *pData
 )
 {
-    return gpuReadBusConfigCycle(pGpu, index, pData);
+    return gpuReadBusConfigCycle_HAL(pGpu, index, pData);
 }
 
 /*!
@@ -90,14 +96,14 @@ gpuReadBusConfigReg_GH100
  * @returns    NV_OK on success
  */
 NV_STATUS
-gpuReadVgpuConfigReg_GH100
+gpuReadPassThruConfigReg_GH100
 (
     OBJGPU    *pGpu,
     NvU32      index,
     NvU32     *pData
 )
 {
-    *pData = GPU_REG_RD32(pGpu, DEVICE_BASE(NV_EP_PCFGM) + index);
+    *pData = GPU_REG_RD32_UNCHECKED(pGpu, DEVICE_BASE(NV_EP_PCFGM) + index);
 
     return NV_OK;
 }
@@ -204,7 +210,8 @@ gpuHandleSecFault_GH100
     OBJGPU *pGpu
 )
 {
-    NvU32   secDebug = 0;
+    NvU32 secDebug = 0;
+    NvU32 iffPos;
 
     //
     // Read SEC_FAULT config space to determine what went wrong.
@@ -216,9 +223,7 @@ gpuHandleSecFault_GH100
     NV_PRINTF(LEVEL_FATAL, "SEC_FAULT lockdown detected. This is fatal. "
                             "RM will now shut down. NV_EP_PCFG_GPU_VSEC_DEBUG_SEC: 0x%x\n", secDebug);
 
-// (void)REF_NUM grants us mcheck protection
 #define LOG_SEC_FAULT(field) \
-    (void)REF_NUM(NV_EP_PCFG_GPU_VSEC_DEBUG_SEC##field, 0); \
     if (DRF_VAL(_EP_PCFG_GPU, _VSEC_DEBUG_SEC, field, secDebug) != 0) \
     { \
         MODS_ARCH_ERROR_PRINTF("NV_EP_PCFG_GPU_VSEC_DEBUG_SEC" #field "\n"); \
@@ -243,9 +248,18 @@ gpuHandleSecFault_GH100
     LOG_SEC_FAULT(_FAULT_PRI);
     LOG_SEC_FAULT(_FAULT_WDG);
     LOG_SEC_FAULT(_FAULT_BOOTFSM);
-    LOG_SEC_FAULT(_IFF_POS);
 
 #undef LOG_SEC_FAULT
+
+    // IFF_POS has a multi-bit value
+    iffPos = DRF_VAL(_EP_PCFG_GPU, _VSEC_DEBUG_SEC, _IFF_POS, secDebug);
+    if (iffPos != 0)
+    {
+        MODS_ARCH_ERROR_PRINTF("NV_EP_PCFG_GPU_VSEC_DEBUG_SEC_IFF_POS value: 0x%x\n", iffPos);
+        NV_PRINTF(LEVEL_FATAL, "SEC_FAULT type: _IFF_POS value: 0x%x\n", iffPos);
+        nvErrorLog_va((void *)(pGpu), SEC_FAULT_ERROR,
+                      "SEC_FAULT: _IFF_POS value: 0x%x", iffPos);
+    }
 
     //
     // After SEC_FAULT occurs, the GPU will only return SCPM dummy values until properly reset.
@@ -339,6 +353,7 @@ gpuGetFlaVasSize_GH100
     return 0x8000000000;  // 512GB
 }
 
+
 //
 // List of GPU children that present for the chip. List entries contain$
 // {CLASS-ID, # of instances} pairs, e.g.: {CE, 2} is 2 instance of OBJCE. This$
@@ -360,7 +375,6 @@ static const GPUCHILDPRESENT gpuChildrenPresent_GH100[] =
     GPU_CHILD_PRESENT(KernelRc, 1),
     GPU_CHILD_PRESENT(Intr, 1),
     GPU_CHILD_PRESENT(NvDebugDump, 1),
-    GPU_CHILD_PRESENT(OBJGPUMON, 1),
     GPU_CHILD_PRESENT(OBJSWENG, 1),
     GPU_CHILD_PRESENT(OBJUVM, 1),
     GPU_CHILD_PRESENT(KernelBif, 1),
@@ -379,10 +393,11 @@ static const GPUCHILDPRESENT gpuChildrenPresent_GH100[] =
     GPU_CHILD_PRESENT(KernelNvlink, 1),
     GPU_CHILD_PRESENT(KernelPerf, 1),
     GPU_CHILD_PRESENT(KernelPmu, 1),
+    GPU_CHILD_PRESENT(Spdm, 1),
+    GPU_CHILD_PRESENT(ConfidentialCompute, 1),
     GPU_CHILD_PRESENT(KernelFsp, 1),
     GPU_CHILD_PRESENT(KernelGsp, 1),
     GPU_CHILD_PRESENT(KernelSec2, 1),
-    GPU_CHILD_PRESENT(ConfidentialCompute, 1),
     GPU_CHILD_PRESENT(KernelCcu, 1),
 };
 
@@ -392,6 +407,7 @@ gpuGetChildrenPresent_GH100(OBJGPU *pGpu, NvU32 *pNumEntries)
     *pNumEntries = NV_ARRAY_ELEMENTS(gpuChildrenPresent_GH100);
     return gpuChildrenPresent_GH100;
 }
+
 
 /*!
  * @brief Determine if GPU is configured in Self Hosted mode.
@@ -429,27 +445,23 @@ gpuDetermineSelfHostedMode_KERNEL_GH100
 }
 
 /*!
- * @brief Determine if MIG can be supported.
- * In self hosted hopper, MIG can be supported only from specific
- * GH100 revisions.
+ * @brief Determine SoC type if GPU is configured in Self Hosted mode.
  *
  * @param[in]      pGpu           OBJGPU pointer
  *
- * @return void
+ * @return SoC type
  */
-void
-gpuDetermineMIGSupport_GH100
+NvU32
+gpuDetermineSelfHostedSocType_GH100
 (
     OBJGPU *pGpu
 )
 {
-    if (gpuIsSelfHosted(pGpu) &&
-        (gpuGetChipSubRev_HAL(pGpu) < NV2080_CTRL_MC_ARCH_INFO_SUBREVISION_R))
+    if (!gpuIsSelfHosted(pGpu))
     {
-        NV_PRINTF(LEVEL_ERROR, "Disabling MIG Support. MIG can be supported on self hosted hopper "
-                  "only from revision R onwards\n");
-        pGpu->setProperty(pGpu, PDB_PROP_GPU_MIG_SUPPORTED, NV_FALSE);
+        return NV0000_CTRL_SYSTEM_SH_SOC_TYPE_NA;
     }
+    return NV0000_CTRL_SYSTEM_SH_SOC_TYPE_NV_GRACE;
 }
 
 /*!
@@ -480,6 +492,27 @@ gpuIsDevModeEnabledInHw_GH100
 {
     NvU32 val = GPU_REG_RD32(pGpu, NV_PGC6_AON_SECURE_SCRATCH_GROUP_20_CC);
     return FLD_TEST_DRF(_PGC6, _AON_SECURE_SCRATCH_GROUP_20_CC, _DEV_ENABLED, _TRUE, val);
+}
+
+/*!
+ * Check if protected pcie has been set in the scratch register
+ *
+ * @param[in]  pGpu  GPU object pointer
+ */
+NvBool
+gpuIsProtectedPcieEnabledInHw_GH100
+(
+    OBJGPU *pGpu
+)
+{
+    NvU32 scratchVal = GPU_REG_RD32(pGpu, NV_PGC6_AON_SECURE_SCRATCH_GROUP_20_CC);
+    NvBool bIsScratchSet = FLD_TEST_DRF(_PGC6, _AON_SECURE_SCRATCH_GROUP_20_CC, _MULTI_GPU_MODE,
+                                        _PROTECTED_PCIE, scratchVal);
+
+    if (!bIsScratchSet)
+        return NV_FALSE;
+
+    return gpuIsProtectedPcieSupportedInFirmware_HAL(pGpu);
 }
 
 /*!
@@ -515,4 +548,84 @@ gpuSanityCheckVirtRegAccess_GH100
     }
 
     return NV_ERR_INVALID_ADDRESS;
+}
+
+#pragma pack(1)
+typedef struct
+{
+    NvU8  prcObjType;
+    NvU8  numBytes;
+    NvU16 knobId;
+} NVDM_PAYLOAD_PRC_OBJECT_READ;
+#pragma pack()
+
+#pragma pack(1)
+typedef struct
+{
+    NvU8    messageType;
+    NvU32   taskId;
+    NvU32   commandNvdmType;
+    NvU32   errorCode;
+    NvU16   knobValue;
+    NvU16   misc;
+} NVDM_PAYLOAD_PRC_OBJECT_RESPONSE;
+#pragma pack()
+
+#define NVDM_PRC_PPCIE_READ_OBJECT          0x0C
+#define NVDM_PRC_PPCIE_NUM_BYTES            0x02
+#define NVDM_PRC_PPCIE_KNOB_ID              0x2D
+
+/*!
+ * @brief Check if protected pcie is actually supported in firmware
+ *
+ * @param[in]  pGpu          OBJGPU pointer
+ *
+ * @return NV_TRUE if the firmware supports PPCIE and NV_FALSE otherwise
+ */
+NvBool
+gpuIsProtectedPcieSupportedInFirmware_GH100
+(
+    OBJGPU *pGpu
+)
+{
+    KernelFsp *pKernelFsp = GPU_GET_KERNEL_FSP(pGpu);
+    NVDM_PAYLOAD_PRC_OBJECT_READ prcKnobReadPayload = {0};
+    NVDM_PAYLOAD_PRC_OBJECT_RESPONSE responsePayload = {0};
+    NV_STATUS status;
+
+    prcKnobReadPayload.prcObjType   = NVDM_PRC_PPCIE_READ_OBJECT;
+    prcKnobReadPayload.numBytes     = NVDM_PRC_PPCIE_NUM_BYTES;
+    prcKnobReadPayload.knobId       = NVDM_PRC_PPCIE_KNOB_ID;
+
+   // This function returns an error code in case we read an invalid knob id
+    status = kfspSendAndReadMessage(pGpu, pKernelFsp,
+                                    (NvU8*)&prcKnobReadPayload,
+                                    sizeof(NVDM_PAYLOAD_PRC_OBJECT_READ),
+                                    NVDM_TYPE_PRC,
+                                    (NvU8 *)&responsePayload,
+                                    sizeof(NVDM_PAYLOAD_PRC_OBJECT_RESPONSE));
+    NV_ASSERT(status == NV_OK || status == NV_ERR_INVALID_ARGUMENT);
+    NV_PRINTF(LEVEL_INFO,"kfspSendAndReadMessage status: 0x%x knobValue: 0x%x\n",
+              (NvU32) status,
+              (NvU32) responsePayload.knobValue);
+
+    // PPCIE is ON only if PRC_KNOB is present and value is 1
+    return (status == NV_OK && responsePayload.knobValue == 1);
+}
+
+/*!
+ * @brief Check if GSP-FMC Inst_in_sys ucode needs to be booted.
+ *
+ * @param[in]  pGpu          OBJGPU pointer
+ *
+ * @return NV_TRUE if GSP Inst_in_sys FMC needs to be booted, or NV_FALSE otherwise
+ */
+NvBool
+gpuIsGspToBootInInstInSysMode_GH100
+(
+    OBJGPU    *pGpu
+)
+{
+
+    return NV_FALSE;
 }

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -29,23 +29,59 @@
 #include "kernel/gpu/mig_mgr/kernel_mig_manager.h"
 #include "kernel/gpu/fifo/kernel_fifo.h"
 #include "kernel/gpu/nvlink/kernel_nvlink.h"
-#include "gpu/bus/kern_bus.h"
+#include "gpu/mem_mgr/mem_mgr.h"
+#include "gpu/mem_mgr/ce_utils.h"
 #include "gpu/ce/kernel_ce.h"
 #include "gpu/ce/kernel_ce_private.h"
+#include "nvmisc.h"
 
 NvBool ceIsCeGrce(OBJGPU *pGpu, RM_ENGINE_TYPE rmCeEngineType)
 {
     NV2080_CTRL_GPU_GET_ENGINE_PARTNERLIST_PARAMS partnerParams = {0};
     KernelFifo *pKernelFifo = GPU_GET_KERNEL_FIFO(pGpu);
 
-    if (IsAMODEL(pGpu) || IsT234DorBetter(pGpu))
+    if (IsT234DorBetter(pGpu))
         return NV_FALSE;
 
     NV_ASSERT_OR_RETURN(RM_ENGINE_TYPE_IS_COPY(rmCeEngineType), NV_FALSE);
 
-    NvU32   i;
-    NV_STATUS status = NV_OK;
+    //
+    // If the GRCE config register exists on chips, refer to it directly
+    // to get the mask of GRCEs, else revert to checking the partnerlist
+    // to see if this CE shares runlist with any GR engine
+    //
+    NvU32     lceNum   = RM_ENGINE_TYPE_COPY_IDX(rmCeEngineType);
+    NvU32     grceMask = 0;
+    NV_STATUS status   = NV_ERR_NOT_SUPPORTED;
 
+    if (!IS_VIRTUAL(pGpu))
+    {
+        {
+            KernelCE *pKCe = GPU_GET_KCE(pGpu, 0);
+            if (pKCe != NULL)
+            {
+                status = kceGetGrceMaskReg_HAL(pGpu, pKCe, &grceMask);
+            }
+        }
+
+        if (status == NV_OK)
+        {
+            if (NVBIT32(lceNum) & grceMask)
+            {
+                return NV_TRUE;
+            }
+
+            return NV_FALSE;
+        }
+    }
+
+    //
+    // If GRCE mask register is not supported, then fallback to checking the
+    // partnerlist for any GRrunlist match
+    //
+    NvU32 i;
+
+    status = NV_OK;
     partnerParams.engineType = gpuGetNv2080EngineType(rmCeEngineType);
     partnerParams.numPartners = 0;
 
@@ -99,13 +135,86 @@ NvBool ceIsCeGrce(OBJGPU *pGpu, RM_ENGINE_TYPE rmCeEngineType)
     return NV_FALSE;
 }
 
+/*!
+ * Checks if a given GRCE is partnered with the given GR engine
+ * 
+ * @param[in] rmCeEngineType CE Engine to check
+ * @param[in] rmGrEngineType GR Engine type to check if the CE is partnered with
+ * 
+ * @return NvBool depending on whether the engines passed in are partnered or not. 
+ */
+NvBool
+ceIsPartneredWithGr
+(
+    OBJGPU *pGpu,
+    RM_ENGINE_TYPE rmCeEngineType,
+    RM_ENGINE_TYPE rmGrEngineType
+)
+{
+    NV2080_CTRL_GPU_GET_ENGINE_PARTNERLIST_PARAMS partnerParams = {0};
+    KernelFifo *pKernelFifo = GPU_GET_KERNEL_FIFO(pGpu);
+
+    if (IsAMODEL(pGpu) || IsT234DorBetter(pGpu))
+        return NV_FALSE;
+
+    NV_ASSERT_OR_RETURN(RM_ENGINE_TYPE_IS_COPY(rmCeEngineType), NV_FALSE);
+
+    NvU32   i;
+    NV_STATUS status = NV_OK;
+
+    partnerParams.engineType = gpuGetNv2080EngineType(rmCeEngineType);
+    partnerParams.numPartners = 0;
+
+    // See if the hal wants to handle this
+    status = kfifoGetEnginePartnerList_HAL(pGpu, pKernelFifo, &partnerParams);
+    if (status != NV_OK)
+    {
+        // For channels that the hal didnt handle, we should just return
+        // all of the supported engines except for the target engine.
+        //
+        // Update the engine Database
+        status = gpuUpdateEngineTable(pGpu);
+        if (status != NV_OK)
+        {
+            NV_PRINTF(LEVEL_ERROR,
+                      "Could not update the engine db. This is fatal\n");
+            DBG_BREAKPOINT();
+            return NV_FALSE;
+        }
+
+        NV_ASSERT_OR_RETURN(pGpu->engineDB.size <= NV2080_CTRL_GPU_MAX_ENGINE_PARTNERS, NV_FALSE);
+
+        // Copy over all of the engines except the target
+        for (i = 0; i < pGpu->engineDB.size; i++)
+        {
+            // Skip the engine handed in
+            if (pGpu->engineDB.pType[i] != rmCeEngineType )
+            {
+                partnerParams.partnerList[partnerParams.numPartners++] =
+                    gpuGetNv2080EngineType(pGpu->engineDB.pType[i]);
+            }
+        }
+    }
+
+    // check if gr is in the partnerList
+    for (i = 0; i < partnerParams.numPartners; i++)
+    {
+        if (NV2080_ENGINE_TYPE_IS_GR(partnerParams.partnerList[i]) &&
+            (gpuGetNv2080EngineType(rmGrEngineType) == partnerParams.partnerList[i]))
+        {
+            return NV_TRUE;
+        }
+    }
+
+    return NV_FALSE;
+}
+
 NvU32 ceCountGrCe(OBJGPU *pGpu)
 {
-    KernelBus *pKernelBus = GPU_GET_KERNEL_BUS(pGpu);
     NvU32      engIdx;
     NvU32      grCeCount;
 
-    if (pKernelBus == NULL || IsAMODEL(pGpu))
+    if (IsAMODEL(pGpu))
         return 0;
 
     grCeCount = 0;
@@ -116,7 +225,7 @@ NvU32 ceCountGrCe(OBJGPU *pGpu)
     //
     for (engIdx = 0; engIdx < GPU_MAX_CES; ++engIdx)
     {
-        if (kbusCheckEngine_HAL(pGpu, pKernelBus, ENG_CE(engIdx)) &&
+        if (gpuCheckEngine_HAL(pGpu, ENG_CE(engIdx)) &&
             ceIsCeGrce(pGpu, RM_ENGINE_TYPE_COPY(engIdx)))
         {
             grCeCount++;
@@ -141,7 +250,7 @@ subdeviceCtrlCmdCeGetCapsV2_IMPL
     NvU32 ceNumber;
     RM_ENGINE_TYPE rmEngineType = gpuGetRmEngineType(pCeCapsParams->ceEngineType);
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     NV_PRINTF(LEVEL_INFO, "NV2080_CTRL_CE_GET_CAPS_V2 ceEngineType = %d\n", pCeCapsParams->ceEngineType);
 
@@ -180,8 +289,10 @@ subdeviceCtrlCmdCeGetAllCaps_IMPL
     RM_API *pRmApi;
     OBJGPU *pGpu = GPU_RES_GET_GPU(pSubdevice);
     Device *pDevice = GPU_RES_GET_DEVICE(pSubdevice);
+    NvHandle hClient = RES_GET_CLIENT_HANDLE(pSubdevice);
+    NvHandle hSubdevice = RES_GET_HANDLE(pSubdevice);
 
-    ct_assert(NV2080_CTRL_MAX_CES  <= sizeof(pCeCapsParams->capsTbl) / sizeof(pCeCapsParams->capsTbl[0]));
+    ct_assert(NV2080_CTRL_MAX_CES  <= NV_ARRAY_ELEMENTS(pCeCapsParams->capsTbl));
 
     if (!RMCFG_FEATURE_PLATFORM_GSP)
     {
@@ -202,15 +313,14 @@ subdeviceCtrlCmdCeGetAllCaps_IMPL
 
     pRmApi = GPU_GET_PHYSICAL_RMAPI(pGpu);
     NV_ASSERT_OK_OR_RETURN(pRmApi->Control(pRmApi,
-                                           pGpu->hInternalClient,
-                                           pGpu->hInternalSubdevice,
+                                           hClient,
+                                           hSubdevice,
                                            NV2080_CTRL_CMD_CE_GET_ALL_PHYSICAL_CAPS,
                                            pCeCapsParams,
                                            sizeof(*pCeCapsParams)));
 
     {
         KernelCE *pKCe;
-        KernelNvlink *pKernelNvlink = GPU_GET_KERNEL_NVLINK(pGpu);
 
         KCE_ITER_DEVICE_BEGIN(pGpu, pKCe, pDevice)
             if (pKCe->bStubbed)
@@ -218,12 +328,39 @@ subdeviceCtrlCmdCeGetAllCaps_IMPL
 
             pCeCapsParams->present |= BIT64(kceInst);
 
-            NvU8 *pKCeCaps = pCeCapsParams->capsTbl[kceInst];
-
-            if (pKernelNvlink != NULL)
-                kceGetNvlinkCaps(pGpu, pKCe, pKCeCaps);
+            kceAssignCeCaps_HAL(pGpu, pKCe, pCeCapsParams->capsTbl[kceInst]);
         KCE_ITER_END
     }
 
     return NV_OK;
+}
+
+void cePauseCeUtilsScheduling(OBJGPU *pGpu)
+{
+    MemoryManager *pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
+
+    if (pMemoryManager->pCeUtils != NULL)
+    {
+        // Mark CeUtils as paused to prevent RM from trying to use it until remap is complete
+        ceutilsPauseSubmission(pMemoryManager->pCeUtils, NV_TRUE);
+    }
+}
+
+void ceResumeCeUtilsScheduling(OBJGPU *pGpu)
+{
+    MemoryManager *pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
+
+    if (pMemoryManager->pCeUtils != NULL)
+    {
+        if (!ceutilsUsesPreferredCe(pMemoryManager->pCeUtils))
+        {
+            // LCE is missing or not preferred; CeUtils will pick new one on creation
+            memmgrDestroyCeUtils(pMemoryManager);
+            NV_ASSERT_OK(memmgrInitCeUtils(GPU_GET_MEMORY_MANAGER(pGpu), NV_FALSE, NV_TRUE));
+        }
+        else
+        {
+            ceutilsResumeSubmission(pMemoryManager->pCeUtils);
+        }
+    }
 }

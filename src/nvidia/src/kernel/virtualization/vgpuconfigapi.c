@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2012-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2012-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -28,14 +28,15 @@
 #include "gpu/mem_mgr/mem_mgr.h"
 #include "gpu/mem_sys/kern_mem_sys.h"
 #include "gpu/mem_mgr/heap.h"
-#include "kernel/gpu/fifo/kernel_sched_mgr.h"
+#include "gpu/bif/kernel_bif.h"
 #include "virtualization/kernel_vgpu_mgr.h"
 #include "virtualization/hypervisor/hypervisor.h"
 #include "rmapi/control.h"
 #include "nv-hypervisor.h"
 #include "ctrl/ctrla081.h"
-#include "nvRmReg.h"
+#include "nvrm_registry.h"
 #include "kernel/gpu/fifo/kernel_fifo.h"
+#include "gpu/subdevice/subdevice.h"
 
 NV_STATUS
 vgpuconfigapiConstruct_IMPL
@@ -294,15 +295,23 @@ vgpuconfigapiCtrlCmdVgpuConfigEnumerateVgpuPerPgpu_IMPL
         pVgpuGuest = &pParams->vgpuGuest[i];
 
         portMemSet(pVgpuGuest->guestVmInfo.vmName, 0, NVA081_VM_NAME_SIZE);
-        portMemSet(pVgpuGuest->vgpuDevice.mdevUuid, 0, VGPU_UUID_SIZE);
+        portMemSet(pVgpuGuest->vgpuDevice.vgpuDevName, 0, VGPU_UUID_SIZE);
 
-        if (osIsVgpuVfioPresent() == NV_OK)
+        /*
+         * Currently, RM is made aware of VM Name associated to
+         * vGPU only for KVM and Device VM. Hence, check for it.
+         */
+        if ((osIsVgpuVfioPresent() == NV_OK) ||
+            (osIsVgpuDeviceVmPresent() == NV_OK))
         {
             portMemCopy(pVgpuGuest->guestVmInfo.vmName,
                         NVA081_VM_NAME_SIZE,
                         pVgpuGuestTmp->guestVmInfo.vmName,
                         NVA081_VM_NAME_SIZE);
+        }
 
+        if (osIsVgpuVfioPresent() == NV_OK)
+        {
             if (pKernelHostVgpuDevice->pRequestVgpuInfoNode == NULL)
             {
                 rmStatus = NV_ERR_INVALID_POINTER;
@@ -316,7 +325,7 @@ vgpuconfigapiCtrlCmdVgpuConfigEnumerateVgpuPerPgpu_IMPL
             if (!osIsVfioPciCorePresent() || !gpuIsSriovEnabled(pGpu))
             {
                 for (j = 0; j < VGPU_UUID_SIZE; j++)
-                    pVgpuGuest->vgpuDevice.mdevUuid[j] = pKernelHostVgpuDevice->pRequestVgpuInfoNode->mdevUuid[index[j]];
+                    pVgpuGuest->vgpuDevice.vgpuDevName[j] = pKernelHostVgpuDevice->pRequestVgpuInfoNode->vgpuDevName[index[j]];
             }
         }
 
@@ -406,6 +415,55 @@ failed:
 }
 
 NV_STATUS
+vgpuconfigapiCtrlCmdVgpuConfigEnumerateVgpuPerGpuInstance_IMPL
+(
+    VgpuConfigApi *pVgpuConfigApi,
+    NVA081_CTRL_VGPU_CONFIG_ENUMERATE_VGPU_PER_GPU_INSTANCE_PARAMS *pParams
+)
+{
+    OBJGPU          *pGpu           = GPU_RES_GET_GPU(pVgpuConfigApi);
+    OBJSYS          *pSys           = SYS_GET_INSTANCE();
+    KernelVgpuMgr   *pKernelVgpuMgr = SYS_GET_KERNEL_VGPUMGR(pSys);
+    NV_STATUS        rmStatus       = NV_OK;
+    KERNEL_PHYS_GPU_INFO *pPhysGpuInfo;
+    NvU32 pgpuIndex, i = 0;
+    KERNEL_HOST_VGPU_DEVICE *pKernelHostVgpuDevice = NULL;
+
+    NV_PRINTF(LEVEL_INFO, "%s\n", __FUNCTION__);
+
+    NV_ASSERT_OR_RETURN((pGpu != NULL), NV_ERR_INVALID_ARGUMENT);
+
+    NV_CHECK_OK_OR_RETURN(LEVEL_ERROR, kvgpumgrGetPgpuIndex(pKernelVgpuMgr, pGpu->gpuId, &pgpuIndex));
+
+    pPhysGpuInfo = &(pKernelVgpuMgr->pgpuInfo[pgpuIndex]);
+    NV_ASSERT_OR_RETURN((pPhysGpuInfo != NULL), NV_ERR_INVALID_ARGUMENT);
+
+    NV_ASSERT_OR_RETURN((pParams->gpuInstanceId != KMIGMGR_SWIZZID_INVALID ||
+                        pParams->gpuInstanceId < KMIGMGR_MAX_GPU_SWIZZID), NV_ERR_INVALID_ARGUMENT);
+
+    if (IS_MIG_ENABLED(pGpu))
+    {
+        for (pKernelHostVgpuDevice = listHead(&(pPhysGpuInfo->listHostVgpuDeviceHead));
+             pKernelHostVgpuDevice != NULL;
+             pKernelHostVgpuDevice = listNext(&(pPhysGpuInfo->listHostVgpuDeviceHead), pKernelHostVgpuDevice))
+        {
+            if (pKernelHostVgpuDevice->swizzId == pParams->gpuInstanceId)
+            {
+                pParams->vgpuInstanceIds[i] = pKernelHostVgpuDevice->vgpuDeviceInstanceId;
+                i++;
+            }
+        }
+        pParams->numVgpu = i;
+    }
+    else
+    {
+        rmStatus = NV_ERR_NOT_SUPPORTED;
+    }
+
+    return rmStatus;
+}
+
+NV_STATUS
 vgpuconfigapiCtrlCmdVgpuConfigGetVgpuTypeInfo_IMPL
 (
     VgpuConfigApi *pVgpuConfigApi,
@@ -424,6 +482,11 @@ vgpuconfigapiCtrlCmdVgpuConfigGetVgpuTypeInfo_IMPL
     NvU32                 i;
     NvU32                 pgpuIndex;
     KERNEL_PHYS_GPU_INFO *pPgpuInfo;
+    RM_API                  *pRmApi        = GPU_GET_PHYSICAL_RMAPI(pGpu);
+    NV2080_CTRL_VGPU_MGR_GET_FRAME_RATE_LIMITER_STATUS_PARAMS frlStatus;
+    VGPU_TYPE_SUPPORTED_PLACEMENT_INFO  *pVgpuTypeSupportedPlacementInfo;
+    NvHandle hClient = RES_GET_CLIENT_HANDLE(pVgpuConfigApi);
+    NvHandle hSubdevice  = RES_GET_HANDLE(GPU_RES_GET_SUBDEVICE(pVgpuConfigApi));
 
     NV_PRINTF(LEVEL_INFO, "%s\n", __FUNCTION__);
 
@@ -458,12 +521,13 @@ vgpuconfigapiCtrlCmdVgpuConfigGetVgpuTypeInfo_IMPL
     pParams->vgpuTypeInfo.bar1Length         = vgpuTypeInfo->bar1Length;
     pParams->vgpuTypeInfo.gpuDirectSupported = vgpuTypeInfo->gpuDirectSupported;
     pParams->vgpuTypeInfo.nvlinkP2PSupported = vgpuTypeInfo->nvlinkP2PSupported;
+    pParams->vgpuTypeInfo.maxInstancePerGI   = vgpuTypeInfo->maxInstancePerGI;
     pParams->vgpuTypeInfo.multiVgpuExclusive = vgpuTypeInfo->multiVgpuExclusive;
     pParams->vgpuTypeInfo.frlEnable          = vgpuTypeInfo->frlEnable;
     pParams->vgpuTypeInfo.multiVgpuSupported = vgpuTypeInfo->multiVgpuSupported;
 
     /* Represents vGPU type level support for heterogeneous timeslice profiles */
-    pParams->vgpuTypeInfo.exclusiveType      = !kvgpumgrIsHeterogeneousVgpuSupported();
+    pParams->vgpuTypeInfo.exclusiveType      = !kvgpumgrIsHeterogeneousVgpuTypeSupported();
 
     /*
      * Represents vGPU type level support for heterogenenous timeslice size.
@@ -472,15 +536,14 @@ vgpuconfigapiCtrlCmdVgpuConfigGetVgpuTypeInfo_IMPL
      */
     pParams->vgpuTypeInfo.exclusiveSize      = !pPgpuInfo->heterogeneousTimesliceSizesSupported;
 
-    // Disable FRL if we are using sched_sw (PVMRL) in timesliced mode
-    if (IsPASCALorBetter(pGpu))
+    NV_ASSERT_OK_OR_RETURN(
+            pRmApi->Control(pRmApi, hClient, hSubdevice,
+                            NV2080_CTRL_CMD_VGPU_MGR_INTERNAL_GET_FRAME_RATE_LIMITER_STATUS,
+                            &frlStatus, sizeof(frlStatus)));
+
+    if (frlStatus.bFlrDisabled)
     {
-        KernelSchedMgr *pKernelSchedMgr = GPU_GET_KERNEL_SCHEDMGR(pGpu);
-        if (pKernelSchedMgr &&
-            kschedmgrIsPvmrlEnabled(pKernelSchedMgr))
-        {
-            pParams->vgpuTypeInfo.frlEnable = 0;
-        }
+        pParams->vgpuTypeInfo.frlEnable = 0;
     }
 
     portStringCopy((char *) pParams->vgpuTypeInfo.vgpuName, sizeof(pParams->vgpuTypeInfo.vgpuName), (char *) vgpuTypeInfo->vgpuName, VGPU_STRING_BUFFER_SIZE);
@@ -522,20 +585,49 @@ vgpuconfigapiCtrlCmdVgpuConfigGetVgpuTypeInfo_IMPL
         pParams->vgpuTypeInfo.gpuInstanceProfileId = PARTITIONID_INVALID;
     }
 
+    pVgpuTypeSupportedPlacementInfo = &vgpuTypeInfo->vgpuTypeSupportedPlacementInfo;
+
+    /* Placement size is same for a vGPU in both Heterogeneous and Homogeneous mode */
+    if ((pPgpuInfo->heterogeneousTimesliceSizesSupported == NV_TRUE) ||
+        (pPgpuInfo->homogeneousPlacementSupported == NV_TRUE))
+    {
+        pParams->vgpuTypeInfo.placementSize = pVgpuTypeSupportedPlacementInfo->placementSize;
+    }
+    else
+    {
+        pParams->vgpuTypeInfo.placementSize = 0;
+    }
+
+    /* Return Heterogeneous supported placement IDs (if supported) */
     if (pPgpuInfo->heterogeneousTimesliceSizesSupported == NV_TRUE)
     {
-        pParams->vgpuTypeInfo.placementSize     = vgpuTypeInfo->placementSize;
-        pParams->vgpuTypeInfo.placementCount    = vgpuTypeInfo->placementCount;
+        pParams->vgpuTypeInfo.heterogeneousPlacementCount = pVgpuTypeSupportedPlacementInfo->heterogeneousPlacementCount;
 
-        for (i = 0; i < vgpuTypeInfo->placementCount; i++)
+        for (i = 0; i < pVgpuTypeSupportedPlacementInfo->heterogeneousPlacementCount; i++)
         {
-            pParams->vgpuTypeInfo.placementIds[i] = vgpuTypeInfo->supportedPlacementIds[i];
+            pParams->vgpuTypeInfo.heterogeneousPlacementIds[i] =
+                pVgpuTypeSupportedPlacementInfo->vgpuInstanceSupportedPlacementInfo[i].heterogeneousSupportedPlacementId;
         }
     }
     else
     {
-        pParams->vgpuTypeInfo.placementSize     = 0;
-        pParams->vgpuTypeInfo.placementCount    = 0;
+        pParams->vgpuTypeInfo.heterogeneousPlacementCount    = 0;
+    }
+
+    /* Return Homogeneous supported placement IDs (if supported) */
+    if (pPgpuInfo->homogeneousPlacementSupported == NV_TRUE)
+    {
+        pParams->vgpuTypeInfo.homogeneousPlacementCount = pVgpuTypeSupportedPlacementInfo->homogeneousPlacementCount;
+
+        for (i = 0; i < pVgpuTypeSupportedPlacementInfo->homogeneousPlacementCount; i++)
+        {
+            pParams->vgpuTypeInfo.homogeneousPlacementIds[i] =
+                pVgpuTypeSupportedPlacementInfo->vgpuInstanceSupportedPlacementInfo[i].homogeneousSupportedPlacementId;
+        }
+    }
+    else
+    {
+        pParams->vgpuTypeInfo.homogeneousPlacementCount    = 0;
     }
 
     return rmStatus;
@@ -553,6 +645,7 @@ vgpuconfigapiCtrlCmdVgpuConfigGetSupportedVgpuTypes_IMPL
     OBJSYS *pSys = SYS_GET_INSTANCE();
     KernelVgpuMgr *pKernelVgpuMgr = SYS_GET_KERNEL_VGPUMGR(pSys);
     KERNEL_PHYS_GPU_INFO *pPgpuInfo;
+    VGPU_TYPE *pVgpuTypeInfo;
     NV_STATUS rmStatus = NV_OK;
 
     NV_PRINTF(LEVEL_INFO, "%s\n", __FUNCTION__);
@@ -570,11 +663,22 @@ vgpuconfigapiCtrlCmdVgpuConfigGetSupportedVgpuTypes_IMPL
 
     pParams->vgpuConfigState = pPgpuInfo->vgpuConfigState;
 
+    NvU32 numVgpuTypes = 0;
     for (i = 0; i < pPgpuInfo->numVgpuTypes; i++)
     {
-        pParams->vgpuTypes[i] = pPgpuInfo->vgpuTypes[i]->vgpuTypeId;
+        pVgpuTypeInfo = pPgpuInfo->vgpuTypes[i];
+        if (!kvgpumgrIsMigTimeslicingModeEnabled(pGpu))
+        {
+            // If MIG-timeslicing mode is disabled on a timeslicing supported GPU, ignore timesliced vGPU types.
+            if (pVgpuTypeInfo->maxInstancePerGI > 1)
+            {
+                continue;
+            }
+        }
+        pParams->vgpuTypes[numVgpuTypes] = pVgpuTypeInfo->vgpuTypeId;
+        numVgpuTypes++;
     }
-    pParams->numVgpuTypes = pPgpuInfo->numVgpuTypes;
+    pParams->numVgpuTypes = numVgpuTypes;
 
     return rmStatus;
 }
@@ -594,17 +698,18 @@ vgpuconfigapiCtrlCmdVgpuConfigGetCreatableVgpuTypes_IMPL
 
     NV_PRINTF(LEVEL_INFO, "%s\n", __FUNCTION__);
 
-    if (pGpu == NULL ||
-        !pGpu->getProperty(pGpu, PDB_PROP_GPU_IS_VIRTUALIZATION_MODE_HOST_VGPU))
+    if (pGpu == NULL || !pGpu->getProperty(pGpu, PDB_PROP_GPU_IS_VIRTUALIZATION_MODE_HOST_VGPU))
     {
         return NV_ERR_NOT_SUPPORTED;
     }
 
     if ((rmStatus = kvgpumgrGetPgpuIndex(pKernelVgpuMgr, pGpu->gpuId, &pgpuIndex)) != NV_OK)
+    {
         return rmStatus;
+    }
 
-    rmStatus = kvgpumgrGetCreatableVgpuTypes(pGpu, pKernelVgpuMgr, pgpuIndex,
-                                            &pParams->numVgpuTypes, pParams->vgpuTypes);
+    rmStatus = kvgpumgrGetCreatableVgpuTypes(pGpu, pKernelVgpuMgr, pgpuIndex, pParams->gpuInstanceId,
+                                             &pParams->numVgpuTypes, pParams->vgpuTypes);
 
     return rmStatus;
 }
@@ -688,54 +793,6 @@ vgpuconfigapiCtrlCmdVgpuConfigEventSetNotification_IMPL
 }
 
 NV_STATUS
-vgpuconfigapiCtrlCmdVgpuConfigNotifyStart_IMPL
-(
-    VgpuConfigApi *pVgpuConfigApi,
-    NVA081_CTRL_VGPU_CONFIG_NOTIFY_START_PARAMS *pNotifyParams
-)
-{
-    OBJSYS *pSys = SYS_GET_INSTANCE();
-    KernelVgpuMgr *pKernelVgpuMgr = SYS_GET_KERNEL_VGPUMGR(pSys);
-    REQUEST_VGPU_INFO_NODE *pRequestVgpu = NULL;
-    KERNEL_HOST_VGPU_DEVICE *pKernelHostVgpuDevice;
-
-    NV_PRINTF(LEVEL_INFO, "%s\n", __FUNCTION__);
-
-    for (pRequestVgpu = listHead(&pKernelVgpuMgr->listRequestVgpuHead);
-         pRequestVgpu != NULL;
-         pRequestVgpu = listNext(&pKernelVgpuMgr->listRequestVgpuHead, pRequestVgpu))
-    {
-        if (portMemCmp(pNotifyParams->mdevUuid, pRequestVgpu->mdevUuid, VGPU_UUID_SIZE) == 0)
-        {
-             if (pRequestVgpu->returnStatus && pRequestVgpu->waitQueue)
-             {
-                 *pRequestVgpu->returnStatus = pNotifyParams->returnStatus;
-                 portStringCopy((char *)pRequestVgpu->vmName, NVA081_VM_NAME_SIZE,
-                                (const char *)pNotifyParams->vmName, NVA081_VM_NAME_SIZE);
-                 if (pNotifyParams->returnStatus == NV_OK)
-                 {
-                     pKernelHostVgpuDevice = pRequestVgpu->pKernelHostVgpuDevice;
-
-                     if (pKernelHostVgpuDevice == NULL)
-                     {
-                         *pRequestVgpu->returnStatus = NV_ERR_INVALID_STATE;
-                         return NV_ERR_INVALID_STATE;
-                     }
-                     portStringCopy((char *)pKernelHostVgpuDevice->vgpuGuest->guestVmInfo.vmName,
-                                    sizeof(pKernelHostVgpuDevice->vgpuGuest->guestVmInfo.vmName),
-                                    (const char *)pNotifyParams->vmName,
-                                    sizeof(pNotifyParams->vmName));
-                 }
-                 osVgpuVfioWake(pRequestVgpu->waitQueue);
-                 return NV_OK;
-             }
-             return NV_ERR_INVALID_STATE;
-        }
-    }
-    return NV_ERR_OBJECT_NOT_FOUND;
-}
-
-NV_STATUS
 vgpuconfigapiCtrlCmdVgpuConfigGetCreatablePlacements_IMPL
 (
     VgpuConfigApi *pVgpuConfigApi,
@@ -749,11 +806,23 @@ vgpuconfigapiCtrlCmdVgpuConfigGetCreatablePlacements_IMPL
     KERNEL_PHYS_GPU_INFO *pPhysGpuInfo;
     VGPU_TYPE *pVgpuTypeInfo;
     NvU32 pgpuIndex;
-    NvU32 i, j, count = 0;
+    NvU32 i, j, count = 0, placementCount = 0;
+    VGPU_TYPE_SUPPORTED_PLACEMENT_INFO *pVgpuTypeSupportedPlacementInfo;
+    KERNEL_VGPU_TYPE_PLACEMENT_INFO *pKernelVgpuTypePlacementInfo;
+    VGPU_TYPE_PLACEMENT_INFO *pVgpuTypePlacementInfo;
+    VGPU_INSTANCE_PLACEMENT_INFO *pVgpuInstancePlacementInfo;
+    NvBool bHeterogeneousModeEnabled;
 
     NV_PRINTF(LEVEL_INFO, "%s\n", __FUNCTION__);
 
-    if (pGpu == NULL || (!pGpu->getProperty(pGpu, PDB_PROP_GPU_IS_VGPU_HETEROGENEOUS_MODE)))
+    NV_CHECK_OR_RETURN(LEVEL_ERROR, pGpu != NULL, NV_ERR_NOT_SUPPORTED);
+
+    NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
+        kvgpuMgrGetHeterogeneousMode(pGpu,
+                                     pParams->gpuInstanceId,
+                                     &bHeterogeneousModeEnabled));
+    if (!bHeterogeneousModeEnabled &&
+        (kvgpumgrCheckHomogeneousPlacementSupported(pGpu, pParams->gpuInstanceId) != NV_OK))
     {
         return NV_ERR_NOT_SUPPORTED;
     }
@@ -762,20 +831,37 @@ vgpuconfigapiCtrlCmdVgpuConfigGetCreatablePlacements_IMPL
 
     pPhysGpuInfo = &(pKernelVgpuMgr->pgpuInfo[pgpuIndex]);
 
+    pKernelVgpuTypePlacementInfo = kvgpuMgrGetVgpuPlacementInfo(pGpu, pPhysGpuInfo, pParams->gpuInstanceId);
+    NV_CHECK_OR_RETURN(LEVEL_ERROR, pKernelVgpuTypePlacementInfo != NULL, NV_ERR_OBJECT_NOT_FOUND);
+
     for (i = 0; i < pPhysGpuInfo->numVgpuTypes; i++)
     {
         pVgpuTypeInfo = pPhysGpuInfo->vgpuTypes[i];
         if (pParams->vgpuTypeId == pVgpuTypeInfo->vgpuTypeId)
         {
-            for (j = 0; j < pVgpuTypeInfo->placementCount; j++)
+            pVgpuTypeSupportedPlacementInfo = &pVgpuTypeInfo->vgpuTypeSupportedPlacementInfo;
+            pVgpuTypePlacementInfo = &pKernelVgpuTypePlacementInfo->vgpuTypePlacementInfo[i];
+
+            if (bHeterogeneousModeEnabled)
             {
-                if (pPhysGpuInfo->creatablePlacementIds[i][j] != NVA081_PLACEMENT_ID_INVALID)
+                placementCount = pVgpuTypeSupportedPlacementInfo->heterogeneousPlacementCount;
+            }
+            else
+            {
+                placementCount = pVgpuTypeSupportedPlacementInfo->homogeneousPlacementCount;
+            }
+
+            for (j = 0; j < placementCount; j++)
+            {
+                pVgpuInstancePlacementInfo = &pVgpuTypePlacementInfo->vgpuInstancePlacementInfo[j];
+
+                if (pVgpuInstancePlacementInfo->creatablePlacementId != NVA081_PLACEMENT_ID_INVALID)
                 {
-                    pParams->placementIds[count] = pPhysGpuInfo->creatablePlacementIds[i][j];
+                    pParams->placementIds[count] = pVgpuInstancePlacementInfo->creatablePlacementId;
                     count++;
                 }
             }
-            pParams->placementSize = pVgpuTypeInfo->placementSize;
+            pParams->placementSize = pVgpuTypeSupportedPlacementInfo->placementSize;
             pParams->count = count;
             break;
         }
@@ -817,6 +903,18 @@ vgpuconfigapiCtrlCmdVgpuConfigSetCapability_IMPL
         case NVA081_CTRL_VGPU_CAPABILITY_COMPUTE_MEDIA_ENGINE_GPU:
         {
             pPhysGpuInfo->computeMediaEngineEnabled = pSetCapabilityParams->state;
+            break;
+        }
+        case NVA081_CTRL_VGPU_CAPABILITY_MIG_TIMESLICING_MODE_ENABLED:
+        {
+            if (pGpu->getProperty(pGpu, PDB_PROP_GPU_MIG_TIMESLICING_SUPPORTED))
+            {
+                pPhysGpuInfo->migTimeslicingModeEnabled = pSetCapabilityParams->state;
+            }
+            else
+            {
+                rmStatus = NV_ERR_NOT_SUPPORTED;
+            }
             break;
         }
         default:
@@ -864,8 +962,66 @@ vgpuconfigapiCtrlCmdVgpuConfigGetCapability_IMPL
             pGetCapabilityParams->state = pPhysGpuInfo->computeMediaEngineEnabled;
             break;
         }
+        case NVA081_CTRL_VGPU_CAPABILITY_WARM_UPDATE:
+        {
+            /*
+             * As per our current requirement, the capability is supported on all GPUs
+             * and hence we are turning true always without checking for input device.
+             * If we decided not to support any GPU, this needs to be modified.
+             */
+            pGetCapabilityParams->state = IS_MIG_ENABLED(pGpu) ? NV_FALSE : NV_TRUE;
+            break;
+        }
+        case NVA081_CTRL_VGPU_CAPABILITY_DEVICE_STREAMING:
+        {
+            pGetCapabilityParams->state = gpuIsSriovEnabled(pGpu);
+            break;
+        }
+        case NVA081_CTRL_VGPU_CAPABILITY_READ_DEVICE_BUFFER_BW:
+        case NVA081_CTRL_VGPU_CAPABILITY_WRITE_DEVICE_BUFFER_BW:
+        {
+            KernelBif *pKernelBif  = GPU_GET_KERNEL_BIF(pGpu);
+
+            NV_ASSERT_OK_OR_RETURN(
+                kbifGetMigrationBandwidth_HAL(pGpu, pKernelBif, &pGetCapabilityParams->state));
+            break;
+        }
+        case NVA081_CTRL_VGPU_CAPABILITY_HETEROGENEOUS_TIMESLICE_SIZES:
+        {
+            pGetCapabilityParams->state = pPhysGpuInfo->heterogeneousTimesliceSizesSupported;
+            break;
+        }
+        case NVA081_CTRL_VGPU_CAPABILITY_HETEROGENEOUS_TIMESLICE_PROFILES:
+        {
+            /* We are not currently limiting the feature based on the pgpu.
+             * Return the system level value here.
+             */
+            pGetCapabilityParams->state = kvgpumgrIsHeterogeneousVgpuTypeSupported();
+            break;
+        }
+        case NVA081_CTRL_VGPU_CAPABILITY_FRACTIONAL_MULTI_VGPU:
+        {
+            pGetCapabilityParams->state = pPhysGpuInfo->fractionalMultiVgpu;
+            break;
+        }
+        case NVA081_CTRL_VGPU_CAPABILITY_HOMOGENEOUS_PLACEMENT_ID:
+        {
+            pGetCapabilityParams->state = pPhysGpuInfo->homogeneousPlacementSupported;
+            break;
+        }
+        case NVA081_CTRL_VGPU_CAPABILITY_MIG_TIMESLICING_SUPPORTED:
+        {
+            pGetCapabilityParams->state = pGpu->getProperty(pGpu, PDB_PROP_GPU_MIG_TIMESLICING_SUPPORTED);
+            break;
+        }
+        case NVA081_CTRL_VGPU_CAPABILITY_MIG_TIMESLICING_MODE_ENABLED:
+        {
+            pGetCapabilityParams->state = kvgpumgrIsMigTimeslicingModeEnabled(pGpu);
+            break;
+        }
         default:
         {
+            NV_PRINTF(LEVEL_ERROR, "Failed to find vGPU device capability\n");
             rmStatus = NV_ERR_INVALID_ARGUMENT;
             break;
         }
@@ -888,10 +1044,6 @@ vgpuconfigapiCtrlCmdVgpuConfigUpdatePgpuInfo_IMPL
         rmStatus = kvgpumgrSetSupportedPlacementIds(pGpu);
         if (rmStatus != NV_OK)
             return rmStatus;
-
-        rmStatus = osVgpuRegisterMdev(pGpu->pOsGpuInfo);
-        if (rmStatus == NV_ERR_NOT_SUPPORTED)
-           return NV_OK;
     }
     else
         rmStatus = NV_ERR_INVALID_STATE;
@@ -1132,8 +1284,8 @@ vgpuconfigapiCtrlCmdVgpuConfigGetFreeSwizzId_IMPL
              pRequestVgpu != NULL;
              pRequestVgpu = listNext(&pKernelVgpuMgr->listRequestVgpuHead, pRequestVgpu))
         {
-            if (pRequestVgpu->deviceState == NV_VGPU_DEV_OPENED &&
-                pRequestVgpu->gpuPciId == pParams->gpuPciId)
+            /* Check for VF's bdf */
+            if (pRequestVgpu->gpuPciBdf == pParams->gpuPciId)
                 break;
         }
         if (pRequestVgpu == NULL)
@@ -1146,12 +1298,16 @@ vgpuconfigapiCtrlCmdVgpuConfigGetFreeSwizzId_IMPL
     else
     {
         NvU32 partitionFlag = PARTITIONID_INVALID;
+        VGPU_TYPE *vgpuTypeInfo = NULL;
 
         NV_ASSERT_OK_OR_RETURN(
             kvgpumgrGetPartitionFlag(pParams->vgpuTypeId, &partitionFlag));
 
         NV_ASSERT_OK_OR_RETURN(
-            kvgpumgrGetSwizzId(pGpu, pPhysGpuInfo, partitionFlag, &pParams->swizzId));
+            kvgpumgrGetVgpuTypeInfo(pParams->vgpuTypeId, &vgpuTypeInfo));
+
+        NV_ASSERT_OK_OR_RETURN(
+            kvgpumgrGetSwizzId(pGpu, pPhysGpuInfo, partitionFlag, vgpuTypeInfo, &pParams->swizzId));
     }
 
     return NV_OK;
@@ -1180,7 +1336,7 @@ vgpuconfigapiCtrlCmdPgpuGetMultiVgpuSupportInfo_IMPL
 
     // We are not currently limiting the feature based on the pgpu.
     // Return the system level value here.
-    pParams->heterogeneousTimesliceProfilesSupported = kvgpumgrIsHeterogeneousVgpuSupported();
+    pParams->heterogeneousTimesliceProfilesSupported = kvgpumgrIsHeterogeneousVgpuTypeSupported();
 
     pParams->heterogeneousTimesliceSizesSupported = pPhysGpuInfo->heterogeneousTimesliceSizesSupported;
 
@@ -1212,7 +1368,9 @@ vgpuconfigapiCtrlCmdGetVgpuDriversCaps_IMPL
     NVA081_CTRL_GET_VGPU_DRIVER_CAPS_PARAMS *pParams
 )
 {
-    pParams->heterogeneousMultiVgpuSupported = kvgpumgrIsHeterogeneousVgpuSupported();
+    pParams->heterogeneousMultiVgpuSupported        = kvgpumgrIsHeterogeneousVgpuTypeSupported();
+    pParams->warmUpdateSupported                    = kvgpumgrIsVgpuWarmUpdateSupported();
+
     return NV_OK;
 }
 
@@ -1260,34 +1418,143 @@ vgpuconfigapiCtrlCmdVgpuConfigValidateSwizzId_IMPL
 }
 
 NV_STATUS
-vgpuconfigapiCtrlCmdVgpuConfigUpdateHeterogeneousInfo_IMPL
+vgpuconfigapiCtrlCmdVgpuConfigUpdatePlacementInfo_IMPL
 (
     VgpuConfigApi *pVgpuConfigApi,
-    NVA081_CTRL_VGPU_CONFIG_UPDATE_HETEROGENEOUS_INFO_PARAMS *pParams
+    NVA081_CTRL_VGPU_CONFIG_UPDATE_PLACEMENT_INFO_PARAMS *pParams
 )
 {
     OBJGPU *pGpu = GPU_RES_GET_GPU(pVgpuConfigApi);
     NV_STATUS rmStatus = NV_OK;
+    Device *pDevice = GPU_RES_GET_DEVICE(pVgpuConfigApi);
+    NvBool bHeterogeneousModeEnabled;
+    NvU32 swizzId = KMIGMGR_SWIZZID_INVALID;
 
     if (pGpu == NULL)
         return NV_ERR_INVALID_STATE;
 
-    if (!pGpu->getProperty(pGpu, PDB_PROP_GPU_IS_VGPU_HETEROGENEOUS_MODE))
+    if (IS_MIG_IN_USE(pGpu) && kvgpumgrIsMigTimeslicingModeEnabled(pGpu))
+    {
+        swizzId = kvgpuMgrGetSwizzIdFromDevice(pGpu, pDevice);
+        NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
+            kvgpuMgrGetHeterogeneousModePerGI(pGpu, swizzId, &bHeterogeneousModeEnabled));
+    }
+    else
+    {
+        bHeterogeneousModeEnabled = pGpu->getProperty(pGpu, PDB_PROP_GPU_IS_VGPU_HETEROGENEOUS_MODE);
+    }
+
+    if (!bHeterogeneousModeEnabled &&
+        (kvgpumgrCheckHomogeneousPlacementSupported(pGpu, swizzId) != NV_OK))
     {
         pParams->isHeterogeneousEnabled = NV_FALSE;
         pParams->placementId = NVA081_PLACEMENT_ID_INVALID;
         return NV_OK;
     }
 
-    pParams->isHeterogeneousEnabled = NV_TRUE;
+    pParams->isHeterogeneousEnabled = bHeterogeneousModeEnabled;
 
-    rmStatus = kvgpumgrUpdateHeterogeneousInfo(pGpu, pParams->vgpuTypeId,
-                                               &pParams->placementId,
-                                               &pParams->guestFbLength,
-                                               &pParams->guestFbOffset,
-                                               &pParams->gspHeapOffset);
-    if (rmStatus != NV_OK)
+    if (osIsVgpuVfioPresent() == NV_OK)
+    {
+        rmStatus = kvgpuMgrGetPlacementResource(pGpu, pDevice,
+                                                 pParams->vgpuDevName,
+                                                 &pParams->placementId,
+                                                 &pParams->guestFbLength,
+                                                 &pParams->guestFbOffset,
+                                                 &pParams->gspHeapOffset,
+                                                 &pParams->guestBar1PFOffset);
+
         return rmStatus;
 
-   return NV_OK;
+    }
+
+    /* Heterogeneous and Homogeneous vGPU placement modes are mutually exclusive. */
+    if (bHeterogeneousModeEnabled)
+    {
+        rmStatus = kvgpumgrUpdateHeterogeneousInfo(pGpu, pDevice,
+                                                   pParams->vgpuTypeId,
+                                                   &pParams->placementId,
+                                                   &pParams->guestFbLength,
+                                                   &pParams->guestFbOffset,
+                                                   &pParams->gspHeapOffset,
+                                                   &pParams->guestBar1PFOffset);
+    }
+    else
+    {
+        rmStatus = kvgpumgrUpdateHomogeneousInfo(pGpu, pDevice,
+                                                 pParams->vgpuTypeId,
+                                                 &pParams->placementId,
+                                                 &pParams->guestFbLength,
+                                                 &pParams->guestFbOffset);
+
+        /* Return default values for not applicable attributes */
+        pParams->gspHeapOffset = 0;
+        pParams->guestBar1PFOffset = 0;
+    }
+
+    return rmStatus;
+}
+
+NV_STATUS
+vgpuconfigapiCtrlCmdVgpuSetVmName_IMPL
+(
+    VgpuConfigApi *pVgpuConfigApi,
+    NVA081_CTRL_VGPU_SET_VM_NAME_PARAMS *pParams
+)
+{
+    OBJGPU *pGpu = GPU_RES_GET_GPU(pVgpuConfigApi);
+    KERNEL_HOST_VGPU_DEVICE *pKernelHostVgpuDevice = NULL;
+    NV_STATUS status;
+
+    if (pParams->vmIdType == VM_ID_DOMAIN_ID)
+    {
+        /* Device VM uses VM type ID == VM_ID_DOMAIN_ID  */
+        status = kvgpumgrGetHostVgpuDeviceFromVmId(pGpu->gpuId,
+                                                   pParams->guestVmId.vmId,
+                                                   &pKernelHostVgpuDevice);
+    }
+    else if (pParams->vmIdType == VM_ID_UUID)
+    {
+        /* KVM uses VM type ID == VM_ID_UUID */
+        status = kvgpumgrGetHostVgpuDeviceFromVgpuDevName(pGpu->gpuId,
+                                                       pParams->guestVmId.vmUuid,
+                                                       &pKernelHostVgpuDevice);
+    }
+    else
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    if (status != NV_OK)
+        return status;
+
+    portStringCopy((char *)pKernelHostVgpuDevice->vgpuGuest->guestVmInfo.vmName,
+                   NVA081_VM_NAME_SIZE, (const char *)pParams->vmName, NVA081_VM_NAME_SIZE);
+
+    return NV_OK;
+}
+
+NV_STATUS
+vgpuconfigapiCtrlCmdVgpuConfigGetMigrationBandwidth_IMPL
+(
+    VgpuConfigApi *pVgpuConfigApi,
+    NVA081_CTRL_VGPU_CONFIG_GET_MIGRATION_BANDWIDTH_PARAMS *pParams
+)
+{
+    OBJGPU *pGpu = GPU_RES_GET_GPU(pVgpuConfigApi);
+    KernelBif *pKernelBif  = GPU_GET_KERNEL_BIF(pGpu);
+    NV_STATUS rmStatus = NV_OK;
+
+    if (IS_VIRTUAL(pGpu))
+    {
+        return NV_ERR_NOT_SUPPORTED;
+    }
+
+    rmStatus = kbifGetMigrationBandwidth_HAL(pGpu, pKernelBif, &pParams->migrationBandwidth);
+    if (rmStatus != NV_OK)
+    {
+        NV_PRINTF(LEVEL_ERROR, "Failed to get Migration Bandwidth rmStatus 0x%x\n",rmStatus);
+    }
+
+    return rmStatus;
 }

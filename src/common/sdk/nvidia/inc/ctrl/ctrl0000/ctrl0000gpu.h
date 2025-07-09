@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2005-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2005-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -857,10 +857,6 @@ typedef struct NV0000_CTRL_GPU_LEGACY_CONFIG_PARAMS {
 
     union {
         struct {
-            NvU32 newValue;
-            NvU32 oldValue;
-        } configSet;
-        struct {
             NvU8  paramData[NV0000_CTRL_GPU_LEGACY_CONFIG_MAX_PARAM_DATA];
             NvU32 paramSize;
         } configEx;
@@ -872,7 +868,6 @@ typedef struct NV0000_CTRL_GPU_LEGACY_CONFIG_PARAMS {
     } data;
 } NV0000_CTRL_GPU_LEGACY_CONFIG_PARAMS;
 
-#define NV0000_CTRL_GPU_LEGACY_CONFIG_OP_TYPE_SET      (0x00000001U)
 #define NV0000_CTRL_GPU_LEGACY_CONFIG_OP_TYPE_GET_EX   (0x00000002U)
 #define NV0000_CTRL_GPU_LEGACY_CONFIG_OP_TYPE_SET_EX   (0x00000003U)
 #define NV0000_CTRL_GPU_LEGACY_CONFIG_OP_TYPE_RESERVED (0x00000004U)
@@ -898,11 +893,11 @@ typedef struct NV0000_CTRL_GPU_IDLE_CHANNELS_PARAMS {
     NvV32    timeout;
 } NV0000_CTRL_GPU_IDLE_CHANNELS_PARAMS;
 
-#define NV0000_CTRL_GPU_IMAGE_TYPE_GSP     (0x00000001U)
-#define NV0000_CTRL_GPU_IMAGE_TYPE_GSP_LOG (0x00000002U)
-
+#define NV0000_CTRL_GPU_IMAGE_TYPE_GSP           (0x00000001U)
+#define NV0000_CTRL_GPU_IMAGE_TYPE_GSP_LOG       (0x00000002U)
+#define NV0000_CTRL_GPU_IMAGE_TYPE_BINDATA_IMAGE (0x00000003U)
 /*
- * NV0000_CTRL_CMD_PUSH_GSP_UCODE
+ * NV0000_CTRL_CMD_PUSH_UCODE_IMAGE
  *
  * This command is used to push the GSP ucode into RM.
  * This function is used only on VMware
@@ -915,15 +910,15 @@ typedef struct NV0000_CTRL_GPU_IDLE_CHANNELS_PARAMS {
  *                              setup other than VMware host
  *
  */
-#define NV0000_CTRL_CMD_PUSH_GSP_UCODE     (0x285) /* finn: Evaluated from "(FINN_NV01_ROOT_GPU_INTERFACE_ID << 8) | NV0000_CTRL_GPU_PUSH_GSP_UCODE_PARAMS_MESSAGE_ID" */
+#define NV0000_CTRL_CMD_PUSH_UCODE_IMAGE         (0x285) /* finn: Evaluated from "(FINN_NV01_ROOT_GPU_INTERFACE_ID << 8) | NV0000_CTRL_GPU_PUSH_UCODE_IMAGE_PARAMS_MESSAGE_ID" */
 
-#define NV0000_CTRL_GPU_PUSH_GSP_UCODE_PARAMS_MESSAGE_ID (0x85U)
+#define NV0000_CTRL_GPU_PUSH_UCODE_IMAGE_PARAMS_MESSAGE_ID (0x85U)
 
-typedef struct NV0000_CTRL_GPU_PUSH_GSP_UCODE_PARAMS {
+typedef struct NV0000_CTRL_GPU_PUSH_UCODE_IMAGE_PARAMS {
     NvU8 image;
     NV_DECLARE_ALIGNED(NvU64 totalSize, 8);
     NV_DECLARE_ALIGNED(NvP64 pData, 8);
-} NV0000_CTRL_GPU_PUSH_GSP_UCODE_PARAMS;
+} NV0000_CTRL_GPU_PUSH_UCODE_IMAGE_PARAMS;
 
 /*
  * NV0000_CTRL_CMD_GPU_SET_NVLINK_BW_MODE
@@ -932,6 +927,16 @@ typedef struct NV0000_CTRL_GPU_PUSH_GSP_UCODE_PARAMS {
  *
  * The setting must be applied before the GPU is attached.
  * NVLINK_BW_MODE is an NOP for non-NVLink GPUs.
+ *
+ *   [in] mode
+ *      BW mode requested defined as a DRF
+ *      Possible Legacy values that can be set in bits 2:0:
+ *        NV0000_CTRL_CMD_GPU_NVLINK_BW_MODE_FULL
+ *        NV0000_CTRL_CMD_GPU_NVLINK_BW_MODE_OFF
+ *        NV0000_CTRL_CMD_GPU_NVLINK_BW_MODE_MIN
+ *        NV0000_CTRL_CMD_GPU_NVLINK_BW_MODE_HALF
+ *        NV0000_CTRL_CMD_GPU_NVLINK_BW_MODE_3QUARTER
+ *      Link count can be requested on Blackwell+ in bits 7:3
  *
  * Possible status values returned are:
  *   NV_OK
@@ -942,11 +947,20 @@ typedef struct NV0000_CTRL_GPU_PUSH_GSP_UCODE_PARAMS {
  *   NV_ERR_IN_USE
  */
 
-#define NV0000_CTRL_CMD_GPU_NVLINK_BW_MODE_FULL     (0x00U)
-#define NV0000_CTRL_CMD_GPU_NVLINK_BW_MODE_OFF      (0x01U)
-#define NV0000_CTRL_CMD_GPU_NVLINK_BW_MODE_MIN      (0x02U)
-#define NV0000_CTRL_CMD_GPU_NVLINK_BW_MODE_HALF     (0x03U)
-#define NV0000_CTRL_CMD_GPU_NVLINK_BW_MODE_3QUARTER (0x04U)
+#define NV0000_CTRL_CMD_GPU_NVLINK_BW_MODE_SETTING_LEGACY     2:0
+#define NV0000_CTRL_CMD_GPU_NVLINK_BW_MODE_SETTING_LINK_COUNT 7:3
+
+#define NV0000_CTRL_CMD_GPU_NVLINK_BW_MODE_FULL       (0x00U)
+#define NV0000_CTRL_CMD_GPU_NVLINK_BW_MODE_OFF        (0x01U)
+#define NV0000_CTRL_CMD_GPU_NVLINK_BW_MODE_MIN        (0x02U)
+#define NV0000_CTRL_CMD_GPU_NVLINK_BW_MODE_HALF       (0x03U)
+#define NV0000_CTRL_CMD_GPU_NVLINK_BW_MODE_3QUARTER   (0x04U)
+#define NV0000_CTRL_CMD_GPU_NVLINK_BW_MODE_LINK_COUNT (0x05U)
+
+#define NV0000_CTRL_CMD_GPU_NVLINK_BW_MODE_SCOPE_UNSET    (0x00U)
+#define NV0000_CTRL_CMD_GPU_NVLINK_BW_MODE_SCOPE_PER_NODE (0x01U)
+#define NV0000_CTRL_CMD_GPU_NVLINK_BW_MODE_SCOPE_PER_GPU  (0x02U)
+
 
 #define NV0000_CTRL_CMD_GPU_SET_NVLINK_BW_MODE (0x286U) /* finn: Evaluated from "(FINN_NV01_ROOT_GPU_INTERFACE_ID << 8) | NV0000_CTRL_GPU_SET_NVLINK_BW_MODE_PARAMS_MESSAGE_ID" */
 #define NV0000_CTRL_GPU_SET_NVLINK_BW_MODE_PARAMS_MESSAGE_ID (0x86U)
@@ -960,8 +974,22 @@ typedef struct NV0000_CTRL_GPU_SET_NVLINK_BW_MODE_PARAMS {
  *
  * This command is used to get NVLINK bandwidth for power saving
  *
- * The setting must be applied before the GPU is attached.
  * NVLINK_BW_MODE is an NOP for non-NVLink GPUs.
+ *
+ *   [out] mode
+ *      BW mode currently set for the GPUs on the system.
+ *      Possible values are:
+ *        NV0000_CTRL_CMD_GPU_NVLINK_BW_MODE_FULL
+ *        NV0000_CTRL_CMD_GPU_NVLINK_BW_MODE_OFF
+ *        NV0000_CTRL_CMD_GPU_NVLINK_BW_MODE_MIN
+ *        NV0000_CTRL_CMD_GPU_NVLINK_BW_MODE_HALF
+ *        NV0000_CTRL_CMD_GPU_NVLINK_BW_MODE_3QUARTER
+ *   [out] bwModeScope
+ *      Scope of the bw mode setting on the system.
+ *      Possible values are:
+ *        NV0000_CTRL_CMD_GPU_NVLINK_BW_MODE_SCOPE_UNSET
+ *        NV0000_CTRL_CMD_GPU_NVLINK_BW_MODE_SCOPE_PER_NODE
+ *        NV0000_CTRL_CMD_GPU_NVLINK_BW_MODE_SCOPE_PER_GPU
  *
  * Possible status values returned are:
  *   NV_OK
@@ -977,6 +1005,7 @@ typedef struct NV0000_CTRL_GPU_SET_NVLINK_BW_MODE_PARAMS {
 
 typedef struct NV0000_CTRL_GPU_GET_NVLINK_BW_MODE_PARAMS {
     NvU8 mode;
+    NvU8 bwModeScope;
 } NV0000_CTRL_GPU_GET_NVLINK_BW_MODE_PARAMS;
 
 /*

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -64,7 +64,7 @@ dispapiConstruct_IMPL
     NvBool           bBcResource;
     NvU32            i;
 
-    LOCK_ASSERT_AND_RETURN(rmapiLockIsOwner());
+    NV_ASSERT_OR_RETURN(rmapiLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
 
     // Use gpuGetByRef instead of GpuResource because it will work even if resource
     // isn't a GpuResource.
@@ -93,8 +93,6 @@ dispapiConstruct_IMPL
     pDisplayApi->pGpuInRmctrl = NULL;
     pDisplayApi->pGpuGrp = gpumgrGetGpuGrpFromGpu(pGpu);
     pDisplayApi->bBcResource = bBcResource;
-    pDisplayApi->hNotifierMemory = NV01_NULL_OBJECT;
-    pDisplayApi->pNotifierMemory = NULL;
 
     gpuSetThreadBcState(pGpu, bBcResource);
 
@@ -204,7 +202,7 @@ dispobjConstructHal_IMPL
     {
         rmStatus = _dispapiNotifierInit(pDisplayApi,
                                         NV5070_NOTIFIERS_MAXCOUNT,
-                                        NV5070_CTRL_EVENT_SET_NOTIFICATION_ACTION_DISABLE);
+                                        NV0073_CTRL_EVENT_SET_NOTIFICATION_ACTION_DISABLE);
     }
 
     return rmStatus;
@@ -497,7 +495,7 @@ dispcmnConstruct_IMPL
 
     return _dispapiNotifierInit(pDisplayApi,
                                 NV0073_NOTIFIERS_MAXCOUNT,
-                                NV5070_CTRL_EVENT_SET_NOTIFICATION_ACTION_DISABLE);
+                                NV0073_CTRL_EVENT_SET_NOTIFICATION_ACTION_DISABLE);
 }
 
 NV_STATUS
@@ -578,6 +576,228 @@ nvdispapiConstruct_IMPL
     return NV_OK;
 }
 
+NV_STATUS
+nvdispapiCtrlCmdSetAccl_IMPL
+(
+    NvDispApi *pNvDispApi,
+    NVC370_CTRL_SET_ACCL_PARAMS *pParams
+)
+{
+    POBJGPU pGpu = DISPAPI_GET_GPU(pNvDispApi);
+    KernelDisplay *pKernelDisplay = GPU_GET_KERNEL_DISPLAY(pGpu);
+    NvHandle hClient = RES_GET_CLIENT_HANDLE(pNvDispApi);
+    DISPCHNCLASS internalChnClass = dispChnClass_Supported;
+    NvU32 accelerators = DISP_ACCL_NONE;
+    NvU32 accelMask = DISP_ACCL_NONE;
+    NV_STATUS status = NV_OK;
+
+    status = kdispGetIntChnClsForHwCls(GPU_GET_KERNEL_DISPLAY(pGpu), pParams->channelClass, &internalChnClass);
+    if (status != NV_OK)
+        return status;
+
+    if (pParams->accelerators & NVC370_CTRL_ACCL_IGNORE_PI)
+        accelerators |= DISP_ACCL_IGNORE_PI;
+    if (pParams->accelerators & NVC370_CTRL_ACCL_SKIP_NOTIF)
+        accelerators |= DISP_ACCL_SKIP_NOTIF;
+    if (pParams->accelerators & NVC370_CTRL_ACCL_SKIP_SEMA)
+        accelerators |= DISP_ACCL_SKIP_SEMA;
+    if (pParams->accelerators & NVC370_CTRL_ACCL_IGNORE_INTERLOCK)
+        accelerators |= DISP_ACCL_IGNORE_INTERLOCK;
+    if (pParams->accelerators & NVC370_CTRL_ACCL_IGNORE_FLIPLOCK)
+        accelerators |= DISP_ACCL_IGNORE_FLIPLOCK;
+    if (pParams->accelerators & NVC370_CTRL_ACCL_TRASH_ONLY)
+        accelerators |= DISP_ACCL_TRASH_ONLY;
+    if (pParams->accelerators & NVC370_CTRL_ACCL_TRASH_AND_ABORT)
+        accelerators |= DISP_ACCL_TRASH_AND_ABORT;
+    if (pParams->accelerators & NVC370_CTRL_ACCL_SKIP_SYNCPOINT)
+        accelerators |= DISP_ACCL_SKIP_SYNCPOINT;
+    if (pParams->accelerators & NVC370_CTRL_ACCL_IGNORE_TIMESTAMP)
+        accelerators |= DISP_ACCL_IGNORE_TIMESTAMP;
+    if (pParams->accelerators & NVC370_CTRL_ACCL_IGNORE_MGI)
+        accelerators |= DISP_ACCL_IGNORE_MGI;
+
+    if (pParams->accelMask & NVC370_CTRL_ACCL_IGNORE_PI)
+        accelMask |= DISP_ACCL_IGNORE_PI;
+    if (pParams->accelMask & NVC370_CTRL_ACCL_SKIP_NOTIF)
+        accelMask |= DISP_ACCL_SKIP_NOTIF;
+    if (pParams->accelMask & NVC370_CTRL_ACCL_SKIP_SEMA)
+        accelMask |= DISP_ACCL_SKIP_SEMA;
+    if (pParams->accelMask & NVC370_CTRL_ACCL_IGNORE_INTERLOCK)
+        accelMask |= DISP_ACCL_IGNORE_INTERLOCK;
+    if (pParams->accelMask & NVC370_CTRL_ACCL_IGNORE_FLIPLOCK)
+        accelMask |= DISP_ACCL_IGNORE_FLIPLOCK;
+    if (pParams->accelMask & NVC370_CTRL_ACCL_TRASH_ONLY)
+        accelMask |= DISP_ACCL_TRASH_ONLY;
+    if (pParams->accelMask & NVC370_CTRL_ACCL_TRASH_AND_ABORT)
+        accelMask |= DISP_ACCL_TRASH_AND_ABORT;
+    if (pParams->accelMask & NVC370_CTRL_ACCL_SKIP_SYNCPOINT)
+        accelMask |= DISP_ACCL_SKIP_SYNCPOINT;
+    if (pParams->accelMask & NVC370_CTRL_ACCL_IGNORE_TIMESTAMP)
+        accelMask |= DISP_ACCL_IGNORE_TIMESTAMP;
+    if (pParams->accelMask & NVC370_CTRL_ACCL_IGNORE_MGI)
+        accelMask |= DISP_ACCL_IGNORE_MGI;
+
+    return kdispSetAccel_HAL(pGpu, pKernelDisplay,
+                            hClient,
+                            internalChnClass,
+                            pParams->channelInstance,
+                            accelerators,
+                            accelMask);
+}
+
+NV_STATUS
+nvdispapiCtrlCmdGetAccl_IMPL
+(
+    NvDispApi *pNvDispApi,
+    NVC370_CTRL_GET_ACCL_PARAMS *pParams
+)
+{
+    POBJGPU pGpu = DISPAPI_GET_GPU(pNvDispApi);
+    NvHandle hClient = RES_GET_CLIENT_HANDLE(pNvDispApi);
+    DISPCHNCLASS internalChnClass = dispChnClass_Supported;
+    NvU32 accelerators = DISP_ACCL_NONE;
+    NV_STATUS status = NV_OK;
+
+    status = kdispGetIntChnClsForHwCls(GPU_GET_KERNEL_DISPLAY(pGpu), pParams->channelClass, &internalChnClass);
+    if (status != NV_OK)
+        return status;
+
+    status = kdispGetAccel_HAL(pGpu, GPU_GET_KERNEL_DISPLAY(pGpu),
+                              hClient,
+                              internalChnClass,
+                              pParams->channelInstance,
+                              &accelerators);
+
+    pParams->accelerators = NVC370_CTRL_ACCL_NONE;
+
+    if (accelerators & DISP_ACCL_IGNORE_PI)
+        pParams->accelerators |= NVC370_CTRL_ACCL_IGNORE_PI;
+    if (accelerators & DISP_ACCL_SKIP_NOTIF)
+        pParams->accelerators |= NVC370_CTRL_ACCL_SKIP_NOTIF;
+    if (accelerators & DISP_ACCL_SKIP_SEMA)
+        pParams->accelerators |= NVC370_CTRL_ACCL_SKIP_SEMA;
+    if (accelerators & DISP_ACCL_IGNORE_INTERLOCK)
+        pParams->accelerators |= NVC370_CTRL_ACCL_IGNORE_INTERLOCK;
+    if (accelerators & DISP_ACCL_IGNORE_FLIPLOCK)
+        pParams->accelerators |= NVC370_CTRL_ACCL_IGNORE_FLIPLOCK;
+    if (accelerators & DISP_ACCL_TRASH_ONLY)
+        pParams->accelerators |= NVC370_CTRL_ACCL_TRASH_ONLY;
+    if (accelerators & DISP_ACCL_TRASH_AND_ABORT)
+        pParams->accelerators |= NVC370_CTRL_ACCL_TRASH_AND_ABORT;
+    if (accelerators & DISP_ACCL_SKIP_SYNCPOINT)
+        pParams->accelerators |= NVC370_CTRL_ACCL_SKIP_SYNCPOINT;
+    if (accelerators & DISP_ACCL_IGNORE_TIMESTAMP)
+        pParams->accelerators |= NVC370_CTRL_ACCL_IGNORE_TIMESTAMP;
+    if (accelerators & DISP_ACCL_IGNORE_MGI)
+        pParams->accelerators |= NVC370_CTRL_ACCL_IGNORE_MGI;
+
+    return status;
+}
+
+NV_STATUS
+nvdispapiCtrlCmdGetChannelInfo_IMPL
+(
+    NvDispApi *pNvDispApi,
+    NVC370_CTRL_CMD_GET_CHANNEL_INFO_PARAMS *pParams
+)
+{
+    POBJGPU pGpu = DISPAPI_GET_GPU(pNvDispApi);
+    DISPCHNSTATE channelState = dispChnState_Supported;
+    DISPCHNCLASS internalChnClass = dispChnClass_Supported;
+    NV_STATUS status = NV_OK;
+    KernelDisplay *pKernelDisplay = GPU_GET_KERNEL_DISPLAY(pGpu);
+
+    status = kdispGetIntChnClsForHwCls(pKernelDisplay, pParams->channelClass, &internalChnClass);
+    if (status != NV_OK)
+    {
+        return status;
+    }
+
+    status = kdispReadChannelState_HAL(pGpu, pKernelDisplay,
+                                      internalChnClass,
+                                      pParams->channelInstance,
+                                      &channelState);
+    if (status != NV_OK)
+    {
+        return status;
+    }
+
+    switch (channelState)
+    {
+        case dispChnState_Idle:
+            pParams->channelState = NVC370_CTRL_GET_CHANNEL_INFO_STATE_IDLE;
+            break;
+
+        case dispChnState_Busy:
+            pParams->channelState = NVC370_CTRL_GET_CHANNEL_INFO_STATE_BUSY;
+            break;
+
+        case dispChnState_Dealloc:
+            pParams->channelState = NVC370_CTRL_GET_CHANNEL_INFO_STATE_DEALLOC;
+            break;
+
+        case dispChnState_DeallocLimbo:
+            pParams->channelState = NVC370_CTRL_GET_CHANNEL_INFO_STATE_DEALLOC_LIMBO;
+            break;
+
+        case dispChnState_Fcodeinit1:
+            pParams->channelState = NVC370_CTRL_GET_CHANNEL_INFO_STATE_EFI_INIT1;
+            break;
+
+        case dispChnState_Fcodeinit2:
+            pParams->channelState = NVC370_CTRL_GET_CHANNEL_INFO_STATE_EFI_INIT2;
+            break;
+
+        case dispChnState_Fcode:
+            pParams->channelState = NVC370_CTRL_GET_CHANNEL_INFO_STATE_EFI_OPERATION;
+            break;
+
+        case dispChnState_Vbiosinit1:
+            pParams->channelState = NVC370_CTRL_GET_CHANNEL_INFO_STATE_VBIOS_INIT1;
+            break;
+
+        case dispChnState_Vbiosinit2:
+            pParams->channelState = NVC370_CTRL_GET_CHANNEL_INFO_STATE_VBIOS_INIT2;
+            break;
+
+        case dispChnState_Vbiosoper:
+            pParams->channelState = NVC370_CTRL_GET_CHANNEL_INFO_STATE_VBIOS_OPERATION;
+            break;
+
+        case dispChnState_Unconnected:
+            pParams->channelState = NVC370_CTRL_GET_CHANNEL_INFO_STATE_UNCONNECTED;
+            break;
+
+        case dispChnState_Initialize1:
+            pParams->channelState = NVC370_CTRL_GET_CHANNEL_INFO_STATE_INIT1;
+            break;
+
+        case dispChnState_Initialize2:
+            pParams->channelState = NVC370_CTRL_GET_CHANNEL_INFO_STATE_INIT2;
+            break;
+
+        case dispChnState_Shutdown1:
+            pParams->channelState = NVC370_CTRL_GET_CHANNEL_INFO_STATE_SHUTDOWN1;
+            break;
+
+        case dispChnState_Shutdown2:
+            pParams->channelState = NVC370_CTRL_GET_CHANNEL_INFO_STATE_SHUTDOWN2;
+            break;
+
+        default:
+            DBG_BREAKPOINT(); // We should never hit this when status is OK
+            status = NV_ERR_INVALID_ARGUMENT;
+            break;
+    }
+
+    status = kdispReadDebugStatus_HAL(pGpu, pKernelDisplay,
+                                     internalChnClass,
+                                     pParams->channelInstance,
+                                     &pParams->IsChannelInDebugMode);
+
+    return status;
+}
+
 // ****************************************************************************
 //                            Deprecated Functions
 // ****************************************************************************
@@ -613,80 +833,6 @@ CliFindDispChannelInfo
     return NV_OK;
 }
 
-/**
- * @warning This function is deprecated! Please use dispcmnGetByHandle.
- */
-NvBool
-CliGetDispCommonInfo
-(
-    NvHandle     hClient,
-    NvHandle     hDispCommon,
-    DisplayApi **ppDisplayApi
-)
-{
-    RsClient   *pClient;
-    NV_STATUS   status;
-    DispCommon *pDispCommon;
-
-    *ppDisplayApi = NULL;
-
-    status = serverGetClientUnderLock(&g_resServ, hClient, &pClient);
-    if (status != NV_OK)
-        return NV_FALSE;
-
-    status = dispcmnGetByHandle(pClient, hDispCommon, &pDispCommon);
-    if (status != NV_OK)
-        return NV_FALSE;
-
-    *ppDisplayApi = staticCast(pDispCommon, DisplayApi);
-
-    return NV_TRUE;
-}
-
-/**
- * @warning This function is deprecated! Please use dispobjGetByHandle.
- */
-NvBool
-CliGetDispInfo
-(
-    NvHandle     hClient,
-    NvHandle     hObject,
-    DisplayApi **pDisplayApi
-)
-{
-    if (!pDisplayApi)
-        return NV_FALSE;
-
-    *pDisplayApi = CliGetDispFromDispHandle(hClient, hObject);
-
-    return *pDisplayApi ? NV_TRUE : NV_FALSE;
-}
-
-/**
- * @warning This function is deprecated! Please use dispobjGetByHandle.
- */
-DisplayApi *
-CliGetDispFromDispHandle
-(
-    NvHandle hClient,
-    NvHandle hDisp
-)
-{
-    RsClient   *pClient;
-    NV_STATUS   status;
-    DispObject *pDispObject;
-
-    status = serverGetClientUnderLock(&g_resServ, hClient, &pClient);
-    if (status != NV_OK)
-        return NULL;
-
-    status = dispobjGetByHandle(pClient, hDisp, &pDispObject);
-    if (status != NV_OK)
-        return NULL;
-
-    return staticCast(pDispObject, DisplayApi);
-}
-
 //
 // DISP Event RM Controls
 //
@@ -694,7 +840,7 @@ NV_STATUS
 dispapiCtrlCmdEventSetNotification_IMPL
 (
     DisplayApi *pDisplayApi,
-    NV5070_CTRL_EVENT_SET_NOTIFICATION_PARAMS *pSetEventParams
+    NV0073_CTRL_EVENT_SET_NOTIFICATION_PARAMS *pSetEventParams
 )
 {
     OBJGPU *pGpu = DISPAPI_GET_GPU(pDisplayApi);
@@ -705,7 +851,7 @@ dispapiCtrlCmdEventSetNotification_IMPL
     // NV01_EVENT must have been plugged into this subdevice
     if (pEventNotifications == NULL)
     {
-        NV_PRINTF(LEVEL_INFO, "cmd 0x%x: no event list\n", NV5070_CTRL_CMD_EVENT_SET_NOTIFICATION);
+        NV_PRINTF(LEVEL_INFO, "cmd 0x%x: no event list\n", NV0073_CTRL_CMD_EVENT_SET_NOTIFICATION);
         return NV_ERR_INVALID_STATE;
     }
 
@@ -728,11 +874,11 @@ dispapiCtrlCmdEventSetNotification_IMPL
 
     switch (pSetEventParams->action)
     {
-        case NV5070_CTRL_EVENT_SET_NOTIFICATION_ACTION_SINGLE:
-        case NV5070_CTRL_EVENT_SET_NOTIFICATION_ACTION_REPEAT:
+        case NV0073_CTRL_EVENT_SET_NOTIFICATION_ACTION_SINGLE:
+        case NV0073_CTRL_EVENT_SET_NOTIFICATION_ACTION_REPEAT:
         {
             // must be in disabled state to transition to an active state
-            if (pNotifyActions[pSetEventParams->event] != NV5070_CTRL_EVENT_SET_NOTIFICATION_ACTION_DISABLE)
+            if (pNotifyActions[pSetEventParams->event] != NV0073_CTRL_EVENT_SET_NOTIFICATION_ACTION_DISABLE)
             {
                 status = NV_ERR_INVALID_STATE;
                 break;
@@ -749,7 +895,7 @@ dispapiCtrlCmdEventSetNotification_IMPL
             break;
         }
 
-        case NV5070_CTRL_EVENT_SET_NOTIFICATION_ACTION_DISABLE:
+        case NV0073_CTRL_EVENT_SET_NOTIFICATION_ACTION_DISABLE:
         {
             pNotifyActions[pSetEventParams->event] = pSetEventParams->action;
             break;

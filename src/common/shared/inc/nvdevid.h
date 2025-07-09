@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 200-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2004-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -149,6 +149,7 @@
 #define PCI_VENDOR_ID_ALIBABA       0x1DED
 #define PCI_VENDOR_ID_SIFIVE        0xF15E
 #define PCI_VENDOR_ID_PLDA          0x1556
+#define PCI_VENDOR_ID_PHYTIUM       0x1DB7
 
 #define NV_PCI_DEVID_DEVICE                    31:16  /* RW--F */
 #define NV_PCI_SUBID_DEVICE                    31:16  /* RW--F */
@@ -194,6 +195,10 @@
 
 //Tylersburg Congurations
 #define TYLERSBURG_DEVID                    0x3406
+
+// Intel Barlow Ridge TB5 device IDs
+#define DEVICE_ID_INTEL_BARLOW_RIDGE_5786_EGPU     0x5786
+#define DEVICE_ID_INTEL_BARLOW_RIDGE_57A4_EGPU     0x57A4
 
 // Intel Grantsdale definitions
 #define DEVICE_ID_INTEL_2580_HOST_BRIDGE    0x2580
@@ -448,9 +453,13 @@
 // Cavium, Inc. CN99xx [ThunderX2]  [177d:af00]
 #define CAVIUM_X2_DEVID                     0xAF00
 
-// Lenovo Tomcat Workstation
+// Lenovo Tomcat/Falcon/Hornet Workstations
 #define LENOVO_TOMCAT_DEVID                 0x1B81
 #define LENOVO_TOMCAT_SSDEVID               0x104e
+#define LENOVO_FALCON_DEVID                 0x7A8A
+#define LENOVO_FALCON_SSDEVID               0x1055
+#define LENOVO_HORNET_DEVID                 0x7A8A
+#define LENOVO_HORNET_SSDEVID               0x1056
 
 // NVIDIA C51
 #define NVIDIA_C51_DEVICE_ID_MIN                        0x2F0
@@ -608,6 +617,7 @@ enum {
 ,     CS_NVIDIA_T234
 ,     CS_NVIDIA_T23x
 ,     CS_NVIDIA_TH500
+,     CS_NVIDIA_T264
 ,     CS_MARVELL_THUNDERX2
 ,     CS_REDHAT_QEMU
 ,     CS_AMPERE_EMAG
@@ -628,9 +638,15 @@ enum {
 ,     CS_INTEL_1B81
 ,     CS_INTEL_18DC
 ,     CS_INTEL_7A04
+,     CS_INTEL_5795
+,     CS_RESERVED_1
 ,     CS_SIFIVE_FU740_C000
 ,     CS_PLDA_XPRESSRICH_AXI_REF
-,     CS_AMPERE_AMPEREONE
+,     CS_AMPERE_AMPEREONE160
+,     CS_PHYTIUM_S5000
+,     CS_RESERVED_2
+,     CS_RESERVED_3
+,     CS_AMPERE_AMPEREONE192
 ,     CS_MAX_PCIE
 };
 

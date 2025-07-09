@@ -29,6 +29,7 @@
 #include "nvkms-3dvision.h"
 #include "nvkms-evo.h"
 #include "nvkms-ioctl.h"
+#include "nvkms-modetimings.h"
 
 #include "nv_mode_timings_utils.h"
 #include "nv_vasprintf.h"
@@ -36,6 +37,8 @@
 #include "nvkms-prealloc.h"
 
 #include "nvkms-api.h"
+
+#include "dp/nvdp-connector-event-sink.h"
 
 typedef struct {
     enum NvKmsModeSource source;
@@ -177,17 +180,21 @@ nvValidateModeEvo(NVDpyEvoPtr pDpyEvo,
  *
  * Currently only frame packed 3D modes are supported, as we rely on
  * Kepler's HW support for this mode.
+ *
+ * If hdmi 3D is supported, then only one of hdmi3D or hdmi3DAvailable
+ * will be returned true, based on if it was requested.
  */
-static NvBool GetHdmi3DValue(const NVDpyEvoRec *pDpyEvo,
-                             const struct NvKmsModeValidationParams *pParams,
-                             const NVT_TIMING *pTiming)
+static void GetHdmi3DValue(const NVDpyEvoRec *pDpyEvo,
+                           const struct NvKmsModeValidationParams *pParams,
+                           const NVT_TIMING *pTiming, 
+                           NvBool *hdmi3D,
+                           NvBool *hdmi3DAvailable)
 {
     /* This should only be used in paths where we have a valid parsed EDID. */
 
     nvAssert(pDpyEvo->parsedEdid.valid);
 
-    if ((pParams->stereoMode == NVKMS_STEREO_HDMI_3D) &&
-        (NVT_GET_TIMING_STATUS_TYPE(pTiming->etc.status) ==
+    if ((NVT_GET_TIMING_STATUS_TYPE(pTiming->etc.status) ==
          NVT_TYPE_EDID_861ST) &&
         nvDpyEvoSupportsHdmi3D(pDpyEvo)) {
 
@@ -200,32 +207,15 @@ static NvBool GetHdmi3DValue(const NVDpyEvoRec *pDpyEvo,
             if ((vic == hdmi3DMap.Vic) &&
                 (hdmi3DMap.StereoStructureMask &
                  NVT_HDMI_3D_SUPPORTED_FRAMEPACK_MASK)) {
-                return TRUE;
+                *hdmi3D = pParams->stereoMode == NVKMS_STEREO_HDMI_3D;
+                *hdmi3DAvailable = pParams->stereoMode != NVKMS_STEREO_HDMI_3D;
+                return;
             }
         }
     }
 
-    return FALSE;
-}
-
-/*
- * For Kepler HW HDMI 1.4 frame packed stereo, HW combines two flips
- * into a single top-down double-height frame, and it needs a
- * doubled refresh rate to accommodate this.
- */
-static void UpdateNvModeTimingsForHdmi3D(NvModeTimings *pModeTimings,
-                                         NvBool enableHdmi3D)
-{
-    if (enableHdmi3D) {
-        pModeTimings->pixelClockHz *= 2;
-        pModeTimings->RRx1k *= 2;
-    } else {
-        nvAssert((pModeTimings->pixelClockHz % 2) == 0);
-        pModeTimings->pixelClockHz /= 2;
-
-        nvAssert((pModeTimings->RRx1k % 2) == 0);
-        pModeTimings->RRx1k /= 2;
-    }
+    *hdmi3D = FALSE;
+    *hdmi3DAvailable = FALSE;
 }
 
 /*
@@ -245,6 +235,11 @@ static NvBool DpYuv420Required(const NVDpyEvoRec *pDpyEvo,
 
     if (!pDevEvo->caps.supportsDP13) {
         // The GPU doesn't support YUV420.
+        return FALSE;
+    }
+
+    if (!nvDPLibDpyIsYuv420ModeSupported(pDpyEvo)) {
+        // The dpy doesn't support YUV420.
         return FALSE;
     }
 
@@ -359,6 +354,7 @@ ValidateModeIndexEdid(NVDpyEvoPtr pDpyEvo,
         NVT_TIMING timing = pDpyEvo->parsedEdid.info.timing[i];
         EvoValidateModeFlags flags;
         struct NvKmsMode kmsMode = { };
+        NvBool hdmi3D = FALSE;
 
         /* Skip this mode if it was marked invalid by nvtiming. */
 
@@ -405,11 +401,9 @@ ValidateModeIndexEdid(NVDpyEvoPtr pDpyEvo,
          * Currently only frame packed 3D modes are supported, as we rely on
          * Kepler's HW support for this mode.
          */
-        kmsMode.timings.hdmi3D = GetHdmi3DValue(pDpyEvo, pParams, &timing);
-
-        if (kmsMode.timings.hdmi3D) {
-            UpdateNvModeTimingsForHdmi3D(&kmsMode.timings, TRUE);
-        }
+        GetHdmi3DValue(pDpyEvo, pParams, &timing, &hdmi3D,
+                       &pReply->hdmi3DAvailable);
+        nvKmsUpdateNvModeTimingsForHdmi3D(&kmsMode.timings, hdmi3D);
 
         kmsMode.timings.yuv420Mode = GetYUV420Value(pDpyEvo, pParams, &timing);
 
@@ -422,6 +416,49 @@ ValidateModeIndexEdid(NVDpyEvoPtr pDpyEvo,
                                      pInfoString,
                                      &pReply->validSyncs,
                                      &pReply->modeUsage);
+
+        /*
+         * The client did not request hdmi3D, but this mode supports hdmi3D.
+         * Re-validate the mode with hdmi3D enabled.  If that passes, report
+         * to the client that the mode could be used with hdmi3D if they choose
+         * later.
+         */
+        if (pReply->valid && pReply->hdmi3DAvailable) {
+            /*
+             * Use dummy validSyncs and modeUsage so the original result isn't
+             * affected.
+             *
+             * Create a temporary KMS mode so that we can enable hdmi3D in it
+             * without perturbing the currently validated mode.
+             *
+             * Put all of this in a temporary heap allocation, to conserve
+             * stack.
+             */
+            struct workArea {
+                struct NvKmsModeValidationValidSyncs stereoValidSyncs;
+                struct NvKmsUsageBounds stereoModeUsage;
+                struct NvKmsMode stereoKmsMode;
+            } *pWorkArea = nvCalloc(1, sizeof(*pWorkArea));
+
+            if (pWorkArea == NULL) {
+                pReply->hdmi3DAvailable = FALSE;
+            } else {
+                pWorkArea->stereoKmsMode = kmsMode;
+                nvKmsUpdateNvModeTimingsForHdmi3D(
+                    &pWorkArea->stereoKmsMode.timings, TRUE);
+
+                pReply->hdmi3DAvailable =
+                    ValidateMode(pDpyEvo,
+                                 &pWorkArea->stereoKmsMode,
+                                 &flags,
+                                 pParams,
+                                 pInfoString,
+                                 &pWorkArea->stereoValidSyncs,
+                                 &pWorkArea->stereoModeUsage);
+                nvFree(pWorkArea);
+            }
+        }
+
         /*
          * if this is a detailed timing, then flag it as such; this
          * will be used later when searching for the AutoSelect mode
@@ -458,16 +495,13 @@ ValidateModeIndexEdid(NVDpyEvoPtr pDpyEvo,
          */
         if (flags.patchedStereoTimings) {
             enum NvYuv420Mode yuv420Mode = kmsMode.timings.yuv420Mode;
-            NvBool hdmi3D = kmsMode.timings.hdmi3D;
+            hdmi3D = kmsMode.timings.hdmi3D;
 
             NVT_TIMINGtoNvModeTimings(&pDpyEvo->parsedEdid.info.timing[i],
                                       &kmsMode.timings);
             kmsMode.timings.yuv420Mode = yuv420Mode;
-            kmsMode.timings.hdmi3D = hdmi3D;
 
-            if (hdmi3D) {
-                UpdateNvModeTimingsForHdmi3D(&kmsMode.timings, TRUE);
-            }
+            nvKmsUpdateNvModeTimingsForHdmi3D(&kmsMode.timings, hdmi3D);
         }
 
         pReply->mode.timings = kmsMode.timings;
@@ -494,321 +528,267 @@ ValidateModeIndexEdid(NVDpyEvoPtr pDpyEvo,
 // 1400x1050, 1440x900, 1680x1050, 1920x1200
 
 static const NvModeTimings VesaModesTable[] = {
-    /*
-     * { RRx1k, PClkHz;
-     *   hVisible, hSyncStart, hSyncEnd, hTotal,
-     *   hSkew,
-     *   vVisible, vSyncStart, vSyncEnd, vTotal,
-     *   { widthMM, heightMM },
-     *   interlaced, doubleScan,
-     *   hSyncPos, hSyncNeg, vSyncPos, vSyncNeg, hdmi3D, yuv420 },
-     */
+#define VESA_MODES_TABLE_ENTRY(_RRx1k,                   \
+                               _pixelClockHz,            \
+                               _hVisible, _hSyncStart,   \
+                               _hSyncEnd, _hTotal,       \
+                               _vVisible, _vSyncStart,   \
+                               _vSyncEnd, _vTotal,       \
+                               _hSyncPos, _hSyncNeg,     \
+                               _vSyncPos, _vSyncNeg)     \
+     { .pixelClockHz = _pixelClockHz,                    \
+       .RRx1k = _RRx1k,                                  \
+       .hVisible = _hVisible, .hSyncStart = _hSyncStart, \
+       .hSyncEnd = _hSyncEnd, .hTotal = _hTotal,         \
+       .hSkew = 0,                                       \
+       .vVisible = _vVisible, .vSyncStart = _vSyncStart, \
+       .vSyncEnd = _vSyncEnd, .vTotal = _vTotal,         \
+       .sizeMM = {                                       \
+           .w = 0, .h = 0 },                             \
+       .interlaced = FALSE, .doubleScan = FALSE,         \
+       .hSyncPos = _hSyncPos, .hSyncNeg = _hSyncNeg,     \
+       .vSyncPos = _vSyncPos, .vSyncNeg = _vSyncNeg,     \
+       .hdmi3D = FALSE,                                  \
+       .yuv420Mode = NV_YUV420_MODE_NONE, }
 
     // VESA Standard 640x350 @ 85Hz
-    { 85080, 31500000,
+    VESA_MODES_TABLE_ENTRY(
+      85080, 31500000,
       640, 672, 736, 832,
-      0,
       350, 382, 385, 445,
-      { 0, 0 },
-      FALSE, FALSE,
-      TRUE, FALSE, FALSE, TRUE, FALSE, FALSE },
+      TRUE, FALSE, FALSE, TRUE ),
 
     // VESA Standard 640x400 @ 85Hz
-    { 85080, 31500000,
+    VESA_MODES_TABLE_ENTRY(
+      85080, 31500000,
       640, 672, 736, 832,
-      0,
       400, 401, 404, 445,
-      { 0, 0 },
-      FALSE, FALSE,
-      FALSE, TRUE, TRUE, FALSE, FALSE, FALSE },
+      FALSE, TRUE, TRUE, FALSE ),
 
     // VESA Standard 720x400 @ 85Hz
-    { 85039, 35500000,
+    VESA_MODES_TABLE_ENTRY(
+      85039, 35500000,
       720, 756, 828, 936,
-      0,
       400, 401, 404, 446,
-      { 0, 0 },
-      FALSE, FALSE,
-      FALSE, TRUE, TRUE, FALSE, FALSE, FALSE },
+      FALSE, TRUE, TRUE, FALSE ),
 
     // Industry Standard 640x480 @ 60Hz
-    { 59940, 25175000,
+    VESA_MODES_TABLE_ENTRY(
+      59940, 25175000,
       640, 656, 752, 800,
-      0,
       480, 490, 492, 525,
-      { 0, 0 },
-      FALSE, FALSE,
-      FALSE, TRUE, FALSE, TRUE, FALSE, FALSE },
+      FALSE, TRUE, FALSE, TRUE ),
 
     // VESA Standard 640x480 @ 72Hz
-    { 72809, 31500000,
+    VESA_MODES_TABLE_ENTRY(
+      72809, 31500000,
       640, 664, 704, 832,
-      0,
       480, 489, 492, 520,
-      { 0, 0 },
-      FALSE, FALSE,
-      FALSE, TRUE, FALSE, TRUE, FALSE, FALSE },
+      FALSE, TRUE, FALSE, TRUE ),
 
     // VESA Standard 640x480 @ 75Hz
-    { 75000, 31500000,
+    VESA_MODES_TABLE_ENTRY(
+      75000, 31500000,
       640, 656, 720, 840,
-      0,
       480, 481, 484, 500,
-      { 0, 0 },
-      FALSE, FALSE,
-      FALSE, TRUE, FALSE, TRUE, FALSE, FALSE },
+      FALSE, TRUE, FALSE, TRUE ),
 
     // VESA Standard 640x480 @ 85Hz
-    { 85008, 36000000,
+    VESA_MODES_TABLE_ENTRY(
+      85008, 36000000,
       640, 696, 752, 832,
-      0,
       480, 481, 484, 509,
-      { 0, 0 },
-      FALSE, FALSE,
-      FALSE, TRUE, FALSE, TRUE, FALSE, FALSE },
+      FALSE, TRUE, FALSE, TRUE ),
 
     // VESA Standard 800x600 @ 56Hz
-    { 56250, 36000000,
+    VESA_MODES_TABLE_ENTRY(
+      56250, 36000000,
       800, 824, 896, 1024,
-      0,
       600, 601, 603, 625,
-      { 0, 0 },
-      FALSE, FALSE,
-      TRUE, FALSE, TRUE, FALSE, FALSE, FALSE },
+      TRUE, FALSE, TRUE, FALSE ),
 
     // VESA Standard 800x600 @ 60Hz
-    { 60317, 40000000,
+    VESA_MODES_TABLE_ENTRY(
+      60317, 40000000,
       800, 840, 968, 1056,
-      0,
       600, 601, 605, 628,
-      { 0, 0 },
-      FALSE, FALSE,
-      TRUE, FALSE, TRUE, FALSE, FALSE, FALSE },
+      TRUE, FALSE, TRUE, FALSE ),
 
     // VESA Standard 800x600 @ 72Hz
-    { 72188, 50000000,
+    VESA_MODES_TABLE_ENTRY(
+      72188, 50000000,
       800, 856, 976, 1040,
-      0,
       600, 637, 643, 666,
-      { 0, 0 },
-      FALSE, FALSE,
-      TRUE, FALSE, TRUE, FALSE, FALSE, FALSE },
+      TRUE, FALSE, TRUE, FALSE ),
 
     // VESA Standard 800x600 @ 75Hz
-    { 75000, 49500000,
+    VESA_MODES_TABLE_ENTRY(
+      75000, 49500000,
       800, 816, 896, 1056,
-      0,
       600, 601, 604, 625,
-      { 0, 0 },
-      FALSE, FALSE,
-      TRUE, FALSE, TRUE, FALSE, FALSE, FALSE },
+      TRUE, FALSE, TRUE, FALSE ),
 
     // VESA Standard 800x600 @ 85Hz
-    { 85137, 56300000,
+    VESA_MODES_TABLE_ENTRY(
+      85137, 56300000,
       800, 832, 896, 1048,
-      0,
       600, 601, 604, 631,
-      { 0, 0 },
-      FALSE, FALSE,
-      TRUE, FALSE, TRUE, FALSE, FALSE, FALSE },
+      TRUE, FALSE, TRUE, FALSE ),
 
     // VESA Standard 1024x768i @ 87Hz
-    { 86958, 44900000,
+    VESA_MODES_TABLE_ENTRY(
+      86958, 44900000,
       1024, 1032, 1208, 1264,
-      0,
       768, 768, 776, 817,
-      { 0, 0 },
-      TRUE, FALSE,
-      TRUE, FALSE, TRUE, FALSE, FALSE, FALSE },
+      TRUE, FALSE, TRUE, FALSE ),
 
     // VESA Standard 1024x768 @ 60Hz
-    { 60004, 65000000,
+    VESA_MODES_TABLE_ENTRY(
+      60004, 65000000,
       1024, 1048, 1184, 1344,
-      0,
       768, 771, 777, 806,
-      { 0, 0 },
-      FALSE, FALSE,
-      FALSE, TRUE, FALSE, TRUE, FALSE, FALSE },
+      FALSE, TRUE, FALSE, TRUE ),
 
     // VESA Standard 1024x768 @ 70Hz
-    { 70069, 75000000,
+    VESA_MODES_TABLE_ENTRY(
+      70069, 75000000,
       1024, 1048, 1184, 1328,
-      0,
       768, 771, 777, 806,
-      { 0, 0 },
-      FALSE, FALSE,
-      FALSE, TRUE, FALSE, TRUE, FALSE, FALSE },
+      FALSE, TRUE, FALSE, TRUE ),
 
     // VESA Standard 1024x768 @ 75Hz
-    { 75029, 78750000,
+    VESA_MODES_TABLE_ENTRY(
+      75029, 78750000,
       1024, 1040, 1136, 1312,
-      0,
       768, 769, 772, 800,
-      { 0, 0 },
-      FALSE, FALSE,
-      TRUE, FALSE, TRUE, FALSE, FALSE, FALSE },
+      TRUE, FALSE, TRUE, FALSE ),
 
     // VESA Standard 1024x768 @ 85Hz
-    { 84997, 94500000,
+    VESA_MODES_TABLE_ENTRY(
+      84997, 94500000,
       1024, 1072, 1168, 1376,
-      0,
       768, 769, 772, 808,
-      { 0, 0 },
-      FALSE, FALSE,
-      TRUE, FALSE, TRUE, FALSE, FALSE, FALSE },
+      TRUE, FALSE, TRUE, FALSE ),
 
     // VESA Standard 1152x864 @ 75Hz
-    { 75000, 108000000,
+    VESA_MODES_TABLE_ENTRY(
+      75000, 108000000,
       1152, 1216, 1344, 1600,
-      0,
       864, 865, 868, 900,
-      { 0, 0 },
-      FALSE, FALSE,
-      TRUE, FALSE, TRUE, FALSE, FALSE, FALSE },
+      TRUE, FALSE, TRUE, FALSE ),
 
     // VESA Standard 1280x960 @ 60Hz
-    { 60000, 108000000,
+    VESA_MODES_TABLE_ENTRY(
+      60000, 108000000,
       1280, 1376, 1488, 1800,
-      0,
       960, 961, 964, 1000,
-      { 0, 0 },
-      FALSE, FALSE,
-      TRUE, FALSE, TRUE, FALSE, FALSE, FALSE },
+      TRUE, FALSE, TRUE, FALSE ),
 
     // VESA Standard 1280x960 @ 85Hz
-    { 85002, 148500000,
+    VESA_MODES_TABLE_ENTRY(
+      85002, 148500000,
       1280, 1344, 1504, 1728,
-      0,
       960, 961, 964, 1011,
-      { 0, 0 },
-      FALSE, FALSE,
-      TRUE, FALSE, TRUE, FALSE, FALSE, FALSE },
+      TRUE, FALSE, TRUE, FALSE ),
 
     // VESA Standard 1280x1024 @ 60Hz
-    { 60020, 108000000,
+    VESA_MODES_TABLE_ENTRY(
+      60020, 108000000,
       1280, 1328, 1440, 1688,
-      0,
       1024, 1025, 1028, 1066,
-      { 0, 0 },
-      FALSE, FALSE,
-      TRUE, FALSE, TRUE, FALSE, FALSE, FALSE },
+      TRUE, FALSE, TRUE, FALSE ),
 
     // VESA Standard 1280x1024 @ 75Hz
-    { 75025, 135000000,
+    VESA_MODES_TABLE_ENTRY(
+      75025, 135000000,
       1280, 1296, 1440, 1688,
-      0,
       1024, 1025, 1028, 1066,
-      { 0, 0 },
-      FALSE, FALSE,
-      TRUE, FALSE, TRUE, FALSE, FALSE, FALSE },
+      TRUE, FALSE, TRUE, FALSE ),
 
     // VESA Standard 1280x1024 @ 85Hz
-    { 85024, 157500000,
+    VESA_MODES_TABLE_ENTRY(
+      85024, 157500000,
       1280, 1344, 1504, 1728,
-      0,
       1024, 1025, 1028, 1072,
-      { 0, 0 },
-      FALSE, FALSE,
-      TRUE, FALSE, TRUE, FALSE, FALSE, FALSE },
+      TRUE, FALSE, TRUE, FALSE ),
 
     // VESA Standard 1600x1200 @ 60Hz
-    { 60000, 162000000,
+    VESA_MODES_TABLE_ENTRY(
+      60000, 162000000,
       1600, 1664, 1856, 2160,
-      0,
       1200, 1201, 1204, 1250,
-      { 0, 0 },
-      FALSE, FALSE,
-      TRUE, FALSE, TRUE, FALSE, FALSE, FALSE },
+      TRUE, FALSE, TRUE, FALSE ),
 
     // VESA Standard 1600x1200 @ 65Hz
-    { 65000, 175500000,
+    VESA_MODES_TABLE_ENTRY(
+      65000, 175500000,
       1600, 1664, 1856, 2160,
-      0,
       1200, 1201, 1204, 1250,
-      { 0, 0 },
-      FALSE, FALSE,
-      TRUE, FALSE, TRUE, FALSE, FALSE, FALSE },
+      TRUE, FALSE, TRUE, FALSE ),
 
     // VESA Standard 1600x1200 @ 70Hz
-    { 70000, 189000000,
+    VESA_MODES_TABLE_ENTRY(
+      70000, 189000000,
       1600, 1664, 1856, 2160,
-      0,
       1200, 1201, 1204, 1250,
-      { 0, 0 },
-      FALSE, FALSE,
-      TRUE, FALSE, TRUE, FALSE, FALSE, FALSE },
+      TRUE, FALSE, TRUE, FALSE ),
 
     // VESA Standard 1600x1200 @ 75Hz
-    { 75000, 202500000,
+    VESA_MODES_TABLE_ENTRY(
+      75000, 202500000,
       1600, 1664, 1856, 2160,
-      0,
       1200, 1201, 1204, 1250,
-      { 0, 0 },
-      FALSE, FALSE,
-      TRUE, FALSE, TRUE, FALSE, FALSE, FALSE },
+      TRUE, FALSE, TRUE, FALSE ),
 
     // VESA Standard 1600x1200 @ 85Hz
-    { 85000, 229500000,
+    VESA_MODES_TABLE_ENTRY(
+      85000, 229500000,
       1600, 1664, 1856, 2160,
-      0,
       1200, 1201, 1204, 1250,
-      { 0, 0 },
-      FALSE, FALSE,
-      TRUE, FALSE, TRUE, FALSE, FALSE, FALSE },
+      TRUE, FALSE, TRUE, FALSE ),
 
     // VESA Standard 1792x1344 @ 60Hz
-    { 60014, 204800000,
+    VESA_MODES_TABLE_ENTRY(
+      60014, 204800000,
       1792, 1920, 2120, 2448,
-      0,
       1344, 1345, 1348, 1394,
-      { 0, 0 },
-      FALSE, FALSE,
-      FALSE, TRUE, TRUE, FALSE, FALSE, FALSE },
+      FALSE, TRUE, TRUE, FALSE ),
 
     // VESA Standard 1792x1344 @ 75Hz
-    { 74997, 261000000,
+    VESA_MODES_TABLE_ENTRY(
+      74997, 261000000,
       1792, 1888, 2104, 2456,
-      0,
       1344, 1345, 1348, 1417,
-      { 0, 0 },
-      FALSE, FALSE,
-      FALSE, TRUE, TRUE, FALSE, FALSE, FALSE },
+      FALSE, TRUE, TRUE, FALSE ),
 
     // VESA Standard 1856x1392 @ 60Hz
-    { 60009, 218300000,
+    VESA_MODES_TABLE_ENTRY(
+      60009, 218300000,
       1856, 1952, 2176, 2528,
-      0,
       1392, 1393, 1396, 1439,
-      { 0, 0 },
-      FALSE, FALSE,
-      FALSE, TRUE, TRUE, FALSE, FALSE, FALSE },
+      FALSE, TRUE, TRUE, FALSE ),
 
     // VESA Standard 1856x1392 @ 75Hz
-    { 75000, 288000000,
+    VESA_MODES_TABLE_ENTRY(
+      75000, 288000000,
       1856, 1984, 2208, 2560,
-      0,
       1392, 1393, 1396, 1500,
-      { 0, 0 },
-      FALSE, FALSE,
-      FALSE, TRUE, TRUE, FALSE, FALSE, FALSE },
+      FALSE, TRUE, TRUE, FALSE ),
 
     // VESA Standard 1920x1440 @ 60Hz
-    { 60000, 234000000,
+    VESA_MODES_TABLE_ENTRY(
+      60000, 234000000,
       1920, 2048, 2256, 2600,
-      0,
       1440, 1441, 1444, 1500,
-      { 0, 0 },
-      FALSE, FALSE,
-      FALSE, TRUE, TRUE, FALSE, FALSE, FALSE },
+      FALSE, TRUE, TRUE, FALSE ),
 
     // VESA Standard 1920x1440 @ 75Hz
-    { 75000, 297000000,
+    VESA_MODES_TABLE_ENTRY(
+      75000, 297000000,
       1920, 2064, 2288, 2640,
-      0,
       1440, 1441, 1444, 1500,
-      { 0, 0 },
-      FALSE, FALSE,
-      FALSE, TRUE, TRUE, FALSE, FALSE, FALSE },
+      FALSE, TRUE, TRUE, FALSE ),
+#undef VESA_MODES_TABLE_ENTRY
 };
 
 
@@ -1643,12 +1623,11 @@ static NvBool ValidateMode(NVDpyEvoPtr pDpyEvo,
                         NVKMS_MAX_HEADS_PER_DISP);
     NvU32 impOutNumHeads = 0x0;
     NvU32 head;
-    NvU8 hdmiFrlBpc;
     NvBool ret = FALSE;
 
-    const NVColorFormatInfoRec supportedColorFormats = nvGetColorFormatInfo(pDpyEvo);
-    enum NvKmsDpyAttributeCurrentColorSpaceValue colorSpace;
-    enum NvKmsDpyAttributeColorBpcValue colorBpc;
+    const NvKmsDpyOutputColorFormatInfo supportedColorFormats =
+        nvDpyGetOutputColorFormatInfo(pDpyEvo);
+    NVDpyAttributeColor dpyColor;
 
     if (modeName[0] == '\0') {
         nvBuildModeName(pModeTimings->hVisible, pModeTimings->vVisible,
@@ -1669,6 +1648,17 @@ static NvBool ValidateMode(NVDpyEvoPtr pDpyEvo,
 
     if (!ValidateModeTimings(pDpyEvo, pKmsMode, flags, pParams,
                              pInfoString, pValidSyncs)) {
+        goto done;
+    }
+
+    if (pTimingsEvo->yuv420Mode != NV_YUV420_MODE_NONE) {
+        dpyColor.format = NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_SPACE_YCbCr420;
+        dpyColor.bpc = NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_8;
+        dpyColor.range = NV_KMS_DPY_ATTRIBUTE_COLOR_RANGE_LIMITED;
+        dpyColor.colorimetry = NVKMS_OUTPUT_COLORIMETRY_DEFAULT;
+    } else if (!nvGetDefaultDpyColor(&supportedColorFormats, &dpyColor)) {
+        LogModeValidationEnd(pDispEvo, pInfoString,
+                             "Failed to get default color space and Bpc");
         goto done;
     }
 
@@ -1695,6 +1685,7 @@ static NvBool ValidateMode(NVDpyEvoPtr pDpyEvo,
                                      pKmsMode,
                                      NULL, /* pViewPortSizeIn */
                                      NULL, /* pViewPortOut */
+                                     &dpyColor,
                                      pTimingsEvo,
                                      pParams,
                                      pInfoString)) {
@@ -1706,32 +1697,22 @@ static NvBool ValidateMode(NVDpyEvoPtr pDpyEvo,
 
     b2Heads1Or = nvEvoUse2Heads1OR(pDpyEvo, pTimingsEvo, pParams);
 
-    if (pTimingsEvo->yuv420Mode != NV_YUV420_MODE_NONE) {
-        colorSpace = NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_SPACE_YCbCr420;
-        colorBpc = NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_8;
-    } else if (!nvGetDefaultColorSpace(&supportedColorFormats, &colorSpace,
-                                       &colorBpc)) {
-        LogModeValidationEnd(pDispEvo, pInfoString,
-                             "Failed to get default color space and Bpc");
-        goto done;
-    }
-
     if (nvDpyIsHdmiEvo(pDpyEvo)) {
         if (!nvHdmiFrlQueryConfig(pDpyEvo,
                                   &pKmsMode->timings,
                                   pTimingsEvo,
+                                  &dpyColor,
                                   b2Heads1Or,
                                   pParams,
                                   pHdmiFrlConfig,
-                                  &hdmiFrlBpc,
                                   pDscInfo)) {
             LogModeValidationEnd(pDispEvo, pInfoString,
                 "Unable to determine HDMI 2.1 Fixed Rate Link configuration.");
             goto done;
         }
     } else {
-        if (!nvDPValidateModeEvo(pDpyEvo, pTimingsEvo, &colorSpace, &colorBpc,
-                                 b2Heads1Or, pDscInfo, pParams)) {
+        if (!nvDPValidateModeEvo(pDpyEvo, pTimingsEvo, &dpyColor, b2Heads1Or,
+                                 pDscInfo, pParams)) {
             LogModeValidationEnd(pDispEvo,
                                  pInfoString, "DP Bandwidth check failed");
             goto done;
@@ -1752,11 +1733,9 @@ static NvBool ValidateMode(NVDpyEvoPtr pDpyEvo,
     /* Run the raster timings through IMP checking. */
     if (!nvConstructHwModeTimingsImpCheckEvo(pDpyEvo->pConnectorEvo,
                                              pTimingsEvo,
-                                             (pDscInfo->type !=
-                                                NV_DSC_INFO_EVO_TYPE_DISABLED),
+                                             pDscInfo,
                                              b2Heads1Or,
-                                             colorSpace,
-                                             colorBpc,
+                                             &dpyColor,
                                              pParams,
                                              impOutTimings,
                                              &impOutNumHeads,
@@ -1857,16 +1836,13 @@ const NVT_TIMING *nvFindEdidNVT_TIMING
      * in ValidateModeIndexEdid(), so that the modeTimings can be
      * compared with the NVT_TIMINGs in the parsed EDID.
      */
-    if (tmpModeTimings.hdmi3D) {
-        UpdateNvModeTimingsForHdmi3D(&tmpModeTimings, FALSE);
-    }
+    nvKmsUpdateNvModeTimingsForHdmi3D(&tmpModeTimings, FALSE);
 
     /*
      * The NVT_TIMINGs we compare against below won't have hdmi3D or
      * yuv420 set; clear those flags in tmpModeTimings so that we can
      * do a more meaningful comparison.
      */
-    tmpModeTimings.hdmi3D = FALSE;
     tmpModeTimings.yuv420Mode = NV_YUV420_MODE_NONE;
 
     for (i = 0; i < pDpyEvo->parsedEdid.info.total_timings; i++) {
@@ -1943,12 +1919,9 @@ static NvBool ConstructModeTimingsMetaData(
 
             /* Restore the yuv420 and hdmi3D flags from the client's mode. */
             modeTimings.yuv420Mode = pKmsMode->timings.yuv420Mode;
-            modeTimings.hdmi3D = pKmsMode->timings.hdmi3D;
 
             /* Re-apply adjustments for hdmi3D. */
-            if (modeTimings.hdmi3D) {
-                UpdateNvModeTimingsForHdmi3D(&modeTimings, TRUE);
-            }
+            nvKmsUpdateNvModeTimingsForHdmi3D(&modeTimings, pKmsMode->timings.hdmi3D);
 
         }
 
@@ -1959,7 +1932,10 @@ static NvBool ConstructModeTimingsMetaData(
         }
 
         /* Validate hdmi3D. */
-        if (modeTimings.hdmi3D != GetHdmi3DValue(pDpyEvo, pParams, &timing)) {
+        NvBool hdmi3D = FALSE;
+        NvBool hdmi3DAvailable = FALSE;
+        GetHdmi3DValue(pDpyEvo, pParams, &timing, &hdmi3D, &hdmi3DAvailable);
+        if ((modeTimings.hdmi3D != hdmi3D) && !hdmi3DAvailable) {
             return FALSE;
         }
 
@@ -2027,6 +2003,7 @@ NvBool nvValidateModeForModeset(NVDpyEvoRec *pDpyEvo,
                                 const struct NvKmsMode *pKmsMode,
                                 const struct NvKmsSize *pViewPortSizeIn,
                                 const struct NvKmsRect *pViewPortOut,
+                                NVDpyAttributeColor *pDpyColor,
                                 NVHwModeTimingsEvo *pTimingsEvo,
                                 NVT_VIDEO_INFOFRAME_CTRL *pInfoFrameCtrl)
 {
@@ -2058,6 +2035,7 @@ NvBool nvValidateModeForModeset(NVDpyEvoRec *pDpyEvo,
                                      &kmsMode,
                                      pViewPortSizeIn,
                                      pViewPortOut,
+                                     pDpyColor,
                                      pTimingsEvo,
                                      pParams,
                                      &dummyInfoString)) {

@@ -25,10 +25,14 @@
 
 #define __NVKMS_KAPI_INTERNAL_H__
 
+
+
 #include "unix_rm_handle.h"
 
 #include "nvkms-utils.h"
 #include "nvkms-kapi-private.h"
+
+#include "nv_smg.h"
 
 //XXX Decouple functions like nvEvoLog used for logging from NVKMS
 
@@ -38,6 +42,41 @@
 #define nvKmsKapiLogDeviceDebug(__device, __format, ...)          \
     nvEvoLogDebug(EVO_LOG_INFO, "[kapi][GPU Id 0x%08x] "__format, \
                   device->gpuId, ##__VA_ARGS__)
+
+/*
+ * Semaphore values used when using semaphore-based synchronization between
+ * userspace rendering and flips.
+ */
+enum NvKmsKapiSemaphoreValues {
+    /*
+     * Initial state on driver init, and the value written by the hardware when
+     * it has completed processing of a frame using this semaphore.
+     */
+    NVKMS_KAPI_SEMAPHORE_VALUE_DONE = 0xd00dd00d,
+
+    /*
+     * Value of the semaphore when a flip is pending in the display pushbuffer,
+     * but userspace rendering is not yet complete.
+     */
+    NVKMS_KAPI_SEMAPHORE_VALUE_NOT_READY = 0x13371337,
+
+    /*
+     * Value of the semaphore when userspace rendering is complete and the
+     * pending flip may proceed.
+     */
+    NVKMS_KAPI_SEMAPHORE_VALUE_READY = 0xf473f473,
+};
+
+struct NvKmsKapiNisoSurface {
+    NvU32 hRmHandle;
+    NvKmsSurfaceHandle hKmsHandle;
+
+    NvBool mapped;
+    void *pLinearAddress;
+
+    enum NvKmsNIsoFormat format;
+
+};
 
 struct NvKmsKapiDevice {
 
@@ -68,6 +107,14 @@ struct NvKmsKapiDevice {
     NvKmsDispIOCoherencyModes nisoIOCoherencyModes;
     NvBool supportsSyncpts;
 
+    /* SMG state */
+
+    MIGDeviceId migDevice;
+    NvU32 smgGpuInstSubscriptionHdl;
+    NvU32 smgComputeInstSubscriptionHdl;
+
+    nvRMContext rmSmgContext;
+
     /* Device capabilities */
 
     struct {
@@ -82,23 +129,23 @@ struct NvKmsKapiDevice {
 
         NvU8  genericPageKind;
         NvBool requiresVrrSemaphores;
+
+        NvBool supportsInputColorSpace;
+        NvBool supportsInputColorRange;
     } caps;
 
     NvU64 supportedSurfaceMemoryFormats[NVKMS_KAPI_LAYER_MAX];
-    NvBool supportsHDR[NVKMS_KAPI_LAYER_MAX];
+    NvBool supportsICtCp[NVKMS_KAPI_LAYER_MAX];
+
+    struct NvKmsKapiLutCaps lutCaps;
 
     NvU32 numHeads;
     NvU32 numLayers[NVKMS_KAPI_MAX_HEADS];
 
-    struct {
-        NvU32 hRmHandle;
-        NvKmsSurfaceHandle hKmsHandle;
+    struct NvKmsKapiNisoSurface notifier;
+    struct NvKmsKapiNisoSurface semaphore;
 
-        NvBool mapped;
-        void *pLinearAddress;
-
-        enum NvKmsNIsoFormat format;
-    } notifier;
+    NvU32 numDisplaySemaphores;
 
     struct {
         NvU32 currFlipNotifierIndex;
@@ -107,6 +154,9 @@ struct NvKmsKapiDevice {
     void *privateData;
 
     void (*eventCallback)(const struct NvKmsKapiEvent *event);
+
+    NvU64 vtFbBaseAddress;
+    NvU64 vtFbSize;
 };
 
 struct NvKmsKapiMemory {
@@ -114,6 +164,8 @@ struct NvKmsKapiMemory {
     NvU64 size;
 
     struct NvKmsKapiPrivSurfaceParams surfaceParams;
+
+    NvBool isVidmem;
 };
 
 struct NvKmsKapiSurface {

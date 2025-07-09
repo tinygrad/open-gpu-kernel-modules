@@ -667,7 +667,6 @@ static void ReadAndApplyEdidEvo(
     nvFree(pParsedEdid);
 }
 
-
 /*!
  * Get the maximum allowed pixel clock for pDpyEvo.
  *
@@ -768,7 +767,7 @@ void nvDpyProbeMaxPixelClock(NVDpyEvoPtr pDpyEvo)
                  * those driving heads, we don't need to exclude RM from
                  * selecting any SOR, so an sorExcludeMask of 0 is appropriate.
                  */
-                if (nvAssignSOREvo(pDispEvo,
+                if (nvAssignSOREvo(pConnectorEvo,
                                    nvDpyIdToNvU32(pConnectorEvo->displayId),
                                    FALSE /* b2Heads1Or */,
                                    0 /* sorExcludeMask */) &&
@@ -1661,6 +1660,46 @@ static void LogEdid(NVDpyEvoPtr pDpyEvo, NVEvoInfoStringPtr pInfoString)
                            pParsedEdid->info.nvdaVsdbInfo.vrrData.v1.minRefreshRate);
     }
 
+    if (pParsedEdid->info.ext_displayid.version) {
+        nvEvoLogInfoString(pInfoString,
+                           "DisplayID vfreq_min          : %d Hz",
+                           pParsedEdid->info.ext_displayid.range_limits[0].vfreq_min);
+    }
+
+    if (pParsedEdid->info.ext_displayid20.version &&
+        pParsedEdid->info.ext_displayid20.range_limits.seamless_dynamic_video_timing_change) {
+        nvEvoLogInfoString(pInfoString,
+                           "DisplayID 2.0 vfreq_min      : %d Hz",
+                           pParsedEdid->info.ext_displayid20.range_limits.vfreq_min);
+    }
+
+    if (pParsedEdid->info.ext_displayid20.version &&
+        pParsedEdid->info.ext_displayid20.total_adaptive_sync_descriptor != 0) {
+        for (k = 0;
+             k < pParsedEdid->info.ext_displayid20.total_adaptive_sync_descriptor &&
+             k < ARRAY_LEN(pParsedEdid->info.ext_displayid20.adaptive_sync_descriptor);
+             k++) {
+            nvEvoLogInfoString(pInfoString,
+                               "DisplayID 2.0 adaptive sync  : %d Hz (max), %d Hz (min)",
+                               pParsedEdid->info.ext_displayid20.adaptive_sync_descriptor[k].max_rr,
+                               pParsedEdid->info.ext_displayid20.adaptive_sync_descriptor[k].min_rr);
+        }
+    }
+
+    for (k = 0; k < ARRAY_LEN(pParsedEdid->info.ldd); k++) {
+        if (pParsedEdid->info.ldd[k].tag == NVT_EDID_DISPLAY_DESCRIPTOR_DRL) {
+            nvEvoLogInfoString(pInfoString,
+                               "min_v_rate                   : %d Hz",
+                               pParsedEdid->info.ldd[k].u.range_limit.min_v_rate);
+        }
+    }
+
+    if (pParsedEdid->info.hdmiForumInfo.vrr_min != 0) {
+        nvEvoLogInfoString(pInfoString,
+                           "HDMI Forum vrr_min           : %d Hz",
+                           pParsedEdid->info.hdmiForumInfo.vrr_min);
+    }
+
     nvLogEdidCea861InfoEvo(pDpyEvo, pInfoString);
 
     if (pParsedEdid->info.input.isDigital &&
@@ -2420,26 +2459,12 @@ void nvDpyAssignSDRInfoFramePayload(NVT_HDR_INFOFRAME_PAYLOAD *pPayload)
     pPayload->static_metadata_desc_id = NVT_CEA861_STATIC_METADATA_SM0;
 }
 
-static void UpdateDpHDRInfoFrame(const NVDispEvoRec *pDispEvo, const NvU32 head)
+static void ConstructHdrInfoFrameSdp(const NVDispEvoRec *pDispEvo,
+                                     const NvU32 head,
+                                     DPSDP_DESCRIPTOR *sdp)
 {
-    NvU32 ret;
     const NVDispHeadStateEvoRec *pHeadState =
                                 &pDispEvo->headState[head];
-    NVDevEvoPtr pDevEvo = pDispEvo->pDevEvo;
-
-    NV0073_CTRL_SPECIFIC_SET_OD_PACKET_PARAMS params = {
-        .subDeviceInstance = pDispEvo->displayOwner,
-        .displayId = pHeadState->activeRmId
-    };
-
-    // DPSDP_DESCRIPTOR has a (dataSize, hb, db) layout, while
-    // NV0073_CTRL_SPECIFIC_SET_OD_PACKET_PARAMS.aPacket needs to contain
-    // (hb, db) without dataSize, so this makes sdp->hb align with aPacket.
-    DPSDP_DESCRIPTOR *sdp =
-        (DPSDP_DESCRIPTOR *)(params.aPacket -
-        offsetof(DPSDP_DESCRIPTOR, hb));
-
-    nvAssert((void *)&sdp->hb == (void *)params.aPacket);
 
     sdp->hb.hb0 = 0;
     sdp->hb.hb1 = dp_pktType_DynamicRangeMasteringInfoFrame;
@@ -2448,9 +2473,9 @@ static void UpdateDpHDRInfoFrame(const NVDispEvoRec *pDispEvo, const NvU32 head)
                       DP_INFOFRAME_SDP_V1_3_HB3_VERSION_SHIFT;
 
     sdp->db.db0 = NVT_VIDEO_INFOFRAME_VERSION_1;
-    sdp->db.db1 = sizeof(NVT_HDR_INFOFRAME) - sizeof(NVT_INFOFRAME_HEADER);
+    sdp->db.db1 = sizeof(NVT_HDR_INFOFRAME_PAYLOAD);
 
-    nvAssert((sizeof(sdp->db) - 2) >= sizeof(NVT_HDR_INFOFRAME_PAYLOAD));
+    nvAssert(sizeof(NVT_HDR_INFOFRAME_PAYLOAD) <= (sizeof(sdp->db) - 2));
 
     if (pHeadState->hdrInfoFrame.state == NVKMS_HDR_INFOFRAME_STATE_ENABLED) {
         NVT_HDR_INFOFRAME_PAYLOAD *payload =
@@ -2466,50 +2491,159 @@ static void UpdateDpHDRInfoFrame(const NVDispEvoRec *pDispEvo, const NvU32 head)
         nvkms_memcpy(&payload->type1,
                      &pHeadState->hdrInfoFrame.staticMetadata,
                      sizeof(NVT_HDR_INFOFRAME_MASTERING_DATA));
-
-        params.transmitControl =
-            DRF_DEF(0073_CTRL_SPECIFIC, _SET_OD_PACKET_TRANSMIT_CONTROL, _SINGLE_FRAME, _DISABLE);
     } else if (pHeadState->hdrInfoFrame.state ==
                NVKMS_HDR_INFOFRAME_STATE_TRANSITIONING) {
         nvDpyAssignSDRInfoFramePayload((NVT_HDR_INFOFRAME_PAYLOAD *) &sdp->db.db2);
-
-        params.transmitControl =
-            DRF_DEF(0073_CTRL_SPECIFIC, _SET_OD_PACKET_TRANSMIT_CONTROL, _SINGLE_FRAME, _DISABLE);
     } else {
         nvAssert(pHeadState->hdrInfoFrame.state == NVKMS_HDR_INFOFRAME_STATE_DISABLED);
 
         nvDpyAssignSDRInfoFramePayload((NVT_HDR_INFOFRAME_PAYLOAD *) &sdp->db.db2);
-
-        params.transmitControl =
-            DRF_DEF(0073_CTRL_SPECIFIC, _SET_OD_PACKET_TRANSMIT_CONTROL, _SINGLE_FRAME, _ENABLE);
     }
 
-    params.transmitControl |=
-        DRF_DEF(0073_CTRL_SPECIFIC, _SET_OD_PACKET_TRANSMIT_CONTROL, _OTHER_FRAME,  _DISABLE) |
-        DRF_DEF(0073_CTRL_SPECIFIC, _SET_OD_PACKET_TRANSMIT_CONTROL, _ENABLE,       _YES)     |
-        DRF_DEF(0073_CTRL_SPECIFIC, _SET_OD_PACKET_TRANSMIT_CONTROL, _GEN_INFOFRAME_MODE, _INFOFRAME1) |
-        DRF_DEF(0073_CTRL_SPECIFIC, _SET_OD_PACKET_TRANSMIT_CONTROL, _ON_HBLANK,    _DISABLE);
+    sdp->dataSize = sizeof(NVT_HDR_INFOFRAME_PAYLOAD) + 2;
+}
 
-    params.packetSize = sizeof(sdp->hb) + sizeof(NVT_HDR_INFOFRAME);
+static void UpdateDpHDRInfoFrame(const NVDispEvoRec *pDispEvo, const NvU32 head)
+{
+    const NVDevEvoRec *pDevEvo = pDispEvo->pDevEvo;
+    const NVDispHeadStateEvoRec *pHeadState =
+                                &pDispEvo->headState[head];
+    DPSDP_DESCRIPTOR sdp = { };
+    NvEvoInfoFrameTransmitControl transmitCtrl =
+        NV_EVO_INFOFRAME_TRANSMIT_CONTROL_INIT;
 
-    ret = nvRmApiControl(nvEvoGlobal.clientHandle,
-                         pDevEvo->displayCommonHandle,
-                         NV0073_CTRL_CMD_SPECIFIC_SET_OD_PACKET,
-                         &params,
-                         sizeof(params));
+    ConstructHdrInfoFrameSdp(pDispEvo, head, &sdp);
 
-    if (ret != NVOS_STATUS_SUCCESS) {
-        nvAssert(!"NV0073_CTRL_CMD_SPECIFIC_SET_OD_PACKET failed");
+    switch (pHeadState->hdrInfoFrame.state) {
+        case NVKMS_HDR_INFOFRAME_STATE_DISABLED:
+            transmitCtrl = NV_EVO_INFOFRAME_TRANSMIT_CONTROL_SINGLE_FRAME;
+            break;
+        case NVKMS_HDR_INFOFRAME_STATE_ENABLED:
+        case NVKMS_HDR_INFOFRAME_STATE_TRANSITIONING:
+            transmitCtrl = NV_EVO_INFOFRAME_TRANSMIT_CONTROL_EVERY_FRAME;
+            break;
+    }
+
+    pDevEvo->hal->SendDpInfoFrameSdp(pDispEvo, head, transmitCtrl, &sdp);
+}
+
+void nvConstructDpVscSdp(const NVDispHeadInfoFrameStateEvoRec *pInfoFrame,
+                         const NVDpyAttributeColor *pDpyColor,
+                         DPSDP_DP_VSC_SDP_DESCRIPTOR *sdp)
+{
+    nvkms_memset(sdp, 0, sizeof(*sdp));
+
+    // Header
+    // Per DP1.3 spec
+    sdp->hb.hb0 = 0;
+    sdp->hb.hb1 = SDP_PACKET_TYPE_VSC;
+    sdp->hb.revisionNumber = SDP_VSC_REVNUM_STEREO_PSR2_COLOR;
+    sdp->hb.numValidDataBytes = SDP_VSC_VALID_DATA_BYTES_PSR2_COLOR;
+
+    sdp->db.stereoInterface = 0;
+    sdp->db.psrState = 0;
+    sdp->db.contentType = SDP_VSC_CONTENT_TYPE_GRAPHICS;
+    switch (pDpyColor->format) {
+        case NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_SPACE_RGB:
+            sdp->db.pixEncoding = SDP_VSC_PIX_ENC_RGB;
+            break;
+        case NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_SPACE_YCbCr444:
+            sdp->db.pixEncoding = SDP_VSC_PIX_ENC_YCBCR444;
+            break;
+        case NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_SPACE_YCbCr422:
+            sdp->db.pixEncoding = SDP_VSC_PIX_ENC_YCBCR422;
+            break;
+        case NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_SPACE_YCbCr420:
+            sdp->db.pixEncoding = SDP_VSC_PIX_ENC_YCBCR420;
+            break;
+        default:
+            nvAssert(!"unrecognized color format");
+            break;
+    }
+
+    switch (pDpyColor->format) {
+        case NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_SPACE_RGB:
+            switch (pDpyColor->colorimetry) {
+                case NVKMS_OUTPUT_COLORIMETRY_BT2100:
+                    sdp->db.colorimetryFormat =
+                        SDP_VSC_COLOR_FMT_RGB_COLORIMETRY_ITU_R_BT2020_RGB;
+                    break;
+                case NVKMS_OUTPUT_COLORIMETRY_DEFAULT:
+                    sdp->db.colorimetryFormat =
+                        SDP_VSC_COLOR_FMT_RGB_COLORIMETRY_SRGB;
+                    break;
+            }
+
+            switch (pDpyColor->bpc) {
+                case NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_10:
+                    sdp->db.bitDepth = SDP_VSC_BIT_DEPTH_RGB_10BPC;
+                    break;
+                case NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_8:
+                    sdp->db.bitDepth = SDP_VSC_BIT_DEPTH_RGB_8BPC;
+                    break;
+                case NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_6:
+                    sdp->db.bitDepth = SDP_VSC_BIT_DEPTH_RGB_6BPC;
+                    break;
+                default:
+                    nvAssert(!"Invalid bpc value for RBG format");
+                    break;
+            }
+            break;
+        case NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_SPACE_YCbCr444:
+        case NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_SPACE_YCbCr422:
+        case NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_SPACE_YCbCr420:
+            switch (pDpyColor->colorimetry) {
+                case NVKMS_OUTPUT_COLORIMETRY_BT2100:
+                    sdp->db.colorimetryFormat =
+                        SDP_VSC_COLOR_FMT_YCBCR_COLORIMETRY_ITU_R_BT2020_YCBCR;
+                    break;
+                case NVKMS_OUTPUT_COLORIMETRY_DEFAULT:
+                    sdp->db.colorimetryFormat =
+                        (pInfoFrame->hdTimings ?
+                            SDP_VSC_COLOR_FMT_YCBCR_COLORIMETRY_ITU_R_BT709 :
+                            SDP_VSC_COLOR_FMT_YCBCR_COLORIMETRY_ITU_R_BT601);
+                    break;
+            }
+
+            switch (pDpyColor->bpc) {
+                case NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_10:
+                    sdp->db.bitDepth = SDP_VSC_BIT_DEPTH_YCBCR_10BPC;
+                    break;
+                case NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_8:
+                    sdp->db.bitDepth = SDP_VSC_BIT_DEPTH_YCBCR_8BPC;
+                    break;
+                default:
+                    nvAssert(!"Invalid bpc value for YUV color format");
+                    break;
+            }
+            break;
+        default:
+            nvAssert(!"unrecognized color format");
+            break;
+    }
+
+    switch (pDpyColor->range) {
+        case NV_KMS_DPY_ATTRIBUTE_COLOR_RANGE_FULL:
+            sdp->db.dynamicRange = SDP_VSC_DYNAMIC_RANGE_VESA;
+            break;
+        case NV_KMS_DPY_ATTRIBUTE_COLOR_RANGE_LIMITED:
+            sdp->db.dynamicRange = SDP_VSC_DYNAMIC_RANGE_CEA;
+            break;
+        default:
+            nvAssert(!"Invalid colorRange value");
+            break;
     }
 }
 
 /*
- * Construct the DP 1.3 YUV420 infoframe, and toggle it on or off based on
- * whether or not YUV420 mode is in use.
+ * Construct the DP 1.3 VSC SDP infoframe, and toggle it on or off based on
+ * whether or not YUV420 mode or BT2100 colorimetry is in use.
  */
-static void UpdateDpYUV420InfoFrame(const NVDispEvoRec *pDispEvo,
-                                    const NvU32 head,
-                                    const NVAttributesSetEvoRec *pAttributesSet)
+static void UpdateDpVscSdpInfoFrame(
+    const NVDispEvoRec *pDispEvo,
+    const NvU32 head,
+    const NVDpyAttributeColor *pDpyColor,
+    const NVDispHeadInfoFrameStateEvoRec *pInfoFrame)
 {
     const NVDispHeadStateEvoRec *pHeadState =
                                 &pDispEvo->headState[head];
@@ -2517,11 +2651,19 @@ static void UpdateDpYUV420InfoFrame(const NVDispEvoRec *pDispEvo,
     NVDevEvoPtr pDevEvo = pDispEvo->pDevEvo;
     NvU32 ret;
 
+    /*
+     * If the hardware supports the VSC SDP programming using the core
+     * channel, the VSC SDP is already programmed during modeset.
+     */
+    if (pDevEvo->hal->SetDpVscSdp != NULL) {
+        return;
+    }
+
     params.subDeviceInstance = pDispEvo->displayOwner;
     params.displayId = pHeadState->activeRmId;
 
-    if (pAttributesSet->colorSpace ==
-        NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_SPACE_YCbCr420) {
+    if ((pDpyColor->format == NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_SPACE_YCbCr420) ||
+        (pDpyColor->colorimetry == NVKMS_OUTPUT_COLORIMETRY_BT2100)) {
 
         // DPSDP_DP_VSC_SDP_DESCRIPTOR has a (dataSize, hb, db) layout, while
         // NV0073_CTRL_SPECIFIC_SET_OD_PACKET_PARAMS.aPacket needs to contain
@@ -2532,42 +2674,7 @@ static void UpdateDpYUV420InfoFrame(const NVDispEvoRec *pDispEvo,
 
         nvAssert((void *)&sdp->hb == (void *)params.aPacket);
 
-        // Header
-        // Per DP1.3 spec
-        sdp->hb.hb0 = 0;
-        sdp->hb.hb1 = SDP_PACKET_TYPE_VSC;
-        sdp->hb.revisionNumber = SDP_VSC_REVNUM_STEREO_PSR2_COLOR;
-        sdp->hb.numValidDataBytes = SDP_VSC_VALID_DATA_BYTES_PSR2_COLOR;
-
-        sdp->db.stereoInterface = 0;
-        sdp->db.psrState = 0;
-        sdp->db.contentType = SDP_VSC_CONTENT_TYPE_GRAPHICS;
-        sdp->db.pixEncoding = SDP_VSC_PIX_ENC_YCBCR420;
-        sdp->db.colorimetryFormat = SDP_VSC_COLOR_FMT_YCBCR_COLORIMETRY_ITU_R_BT709;
-
-        switch (pAttributesSet->colorBpc) {
-            case NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_10:
-                sdp->db.bitDepth = SDP_VSC_BIT_DEPTH_YCBCR_10BPC;
-                break;
-            case NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_8:
-                sdp->db.bitDepth = SDP_VSC_BIT_DEPTH_YCBCR_8BPC;
-                break;
-            default:
-                nvAssert(!"Invalid pixelDepth value");
-                break;
-        }
-
-        switch (pAttributesSet->colorRange) {
-            case NV_KMS_DPY_ATTRIBUTE_COLOR_RANGE_FULL:
-                sdp->db.dynamicRange = SDP_VSC_DYNAMIC_RANGE_VESA;
-                break;
-            case NV_KMS_DPY_ATTRIBUTE_COLOR_RANGE_LIMITED:
-                sdp->db.dynamicRange = SDP_VSC_DYNAMIC_RANGE_CEA;
-                break;
-            default:
-                nvAssert(!"Invalid colorRange value");
-                break;
-        }
+        nvConstructDpVscSdp(pInfoFrame, pDpyColor, sdp);
 
         params.packetSize = sizeof(sdp->hb) + sdp->hb.numValidDataBytes;
 
@@ -2594,11 +2701,12 @@ static void UpdateDpYUV420InfoFrame(const NVDispEvoRec *pDispEvo,
 
 static void UpdateDpInfoFrames(const NVDispEvoRec *pDispEvo,
                                const NvU32 head,
-                               const NVAttributesSetEvoRec *pAttributesSet)
+                               const NVDpyAttributeColor *pDpyColor,
+                               const NVDispHeadInfoFrameStateEvoRec *pInfoFrame)
 {
     UpdateDpHDRInfoFrame(pDispEvo, head);
 
-    UpdateDpYUV420InfoFrame(pDispEvo, head, pAttributesSet);
+    UpdateDpVscSdpInfoFrame(pDispEvo, head, pDpyColor, pInfoFrame);
 }
 
 void nvCancelSDRTransitionTimer(NVDpyEvoRec *pDpyEvo)
@@ -2666,11 +2774,14 @@ void nvUpdateInfoFrames(NVDpyEvoRec *pDpyEvo)
     pHeadState = &pDispEvo->headState[head];
 
     if (nvConnectorUsesDPLib(pDpyEvo->pConnectorEvo)) {
-        UpdateDpInfoFrames(pDispEvo, head, &pApiHeadState->attributes);
+        UpdateDpInfoFrames(pDispEvo,
+                           head,
+                           &pApiHeadState->attributes.color,
+                           &pApiHeadState->infoFrame);
     } else {
         nvUpdateHdmiInfoFrames(pDispEvo,
                                head,
-                               &pApiHeadState->attributes,
+                               &pApiHeadState->attributes.color,
                                &pApiHeadState->infoFrame,
                                pDpyEvo);
     }
@@ -2989,6 +3100,7 @@ NvBool nvDpyGetDynamicData(
     pReply->isVirtualRealityHeadMountedDisplay = pDpyEvo->isVrHmd;
 
     pReply->vrrType = pDpyEvo->vrr.type;
+    pReply->supportsHDR = nvDpyIsHDRCapable(pDpyEvo);
 
     pReply->stereo3DVision.supported = pDpyEvo->stereo3DVision.supported;
     pReply->stereo3DVision.isDLP = pDpyEvo->stereo3DVision.isDLP;
@@ -3016,6 +3128,9 @@ NvBool nvDpyGetDynamicData(
         nvkms_memcpy(pReply->edid.buffer, pDpyEvo->edid.buffer, pDpyEvo->edid.length);
     }
 
+    pReply->supportedOutputColorFormats =
+        nvDpyGetOutputColorFormatInfo(pDpyEvo);
+
     return TRUE;
 }
 
@@ -3035,20 +3150,20 @@ void nvDpyUpdateCurrentAttributes(NVDpyEvoRec *pDpyEvo)
         newAttributes.numberOfHardwareHeadsUsed = 0;
     }
 
-    if (newAttributes.colorSpace !=
-        pDpyEvo->currentAttributes.colorSpace) {
+    if (newAttributes.color.format !=
+        pDpyEvo->currentAttributes.color.format) {
         nvSendDpyAttributeChangedEventEvo(
             pDpyEvo,
             NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_SPACE,
-            newAttributes.colorSpace);
+            newAttributes.color.format);
     }
 
-    if (newAttributes.colorRange !=
-        pDpyEvo->currentAttributes.colorRange) {
+    if (newAttributes.color.range !=
+        pDpyEvo->currentAttributes.color.range) {
         nvSendDpyAttributeChangedEventEvo(
             pDpyEvo,
             NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_RANGE,
-            newAttributes.colorRange);
+            newAttributes.color.range);
     }
 
     if (newAttributes.dithering.enabled !=
@@ -3105,10 +3220,7 @@ void nvDpyUpdateCurrentAttributes(NVDpyEvoRec *pDpyEvo)
 // Returns TRUE if this display is capable of Adaptive-Sync
 NvBool nvDpyIsAdaptiveSync(const NVDpyEvoRec *pDpyEvo)
 {
-    return ((pDpyEvo->vrr.type ==
-             NVKMS_DPY_VRR_TYPE_ADAPTIVE_SYNC_DEFAULTLISTED) ||
-            (pDpyEvo->vrr.type ==
-             NVKMS_DPY_VRR_TYPE_ADAPTIVE_SYNC_NON_DEFAULTLISTED));
+    return nvIsAdaptiveSyncDpyVrrType(pDpyEvo->vrr.type);
 }
 
 // Returns TRUE if this display is in the Adaptive-Sync defaultlist
@@ -3174,17 +3286,21 @@ static enum NvKmsDpyAttributeColorBpcValue GetYuv422MaxBpc(
     return NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_UNKNOWN;
 }
 
-NVColorFormatInfoRec nvGetColorFormatInfo(const NVDpyEvoRec *pDpyEvo)
+NvKmsDpyOutputColorFormatInfo nvDpyGetOutputColorFormatInfo(
+    const NVDpyEvoRec *pDpyEvo)
 {
     const NVConnectorEvoRec *pConnectorEvo =
             pDpyEvo->pConnectorEvo;
-    NVColorFormatInfoRec colorFormatsInfo = { };
+    NvKmsDpyOutputColorFormatInfo colorFormatsInfo = { };
 
     if (pConnectorEvo->legacyType ==
             NV0073_CTRL_SPECIFIC_DISPLAY_TYPE_CRT) {
 
         colorFormatsInfo.rgb444.maxBpc =
             NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_10;
+        colorFormatsInfo.rgb444.minBpc =
+            NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_10;
+
     } else if (pConnectorEvo->legacyType ==
                    NV0073_CTRL_SPECIFIC_DISPLAY_TYPE_DFP) {
 
@@ -3209,8 +3325,13 @@ NVColorFormatInfoRec nvGetColorFormatInfo(const NVDpyEvoRec *pDpyEvo)
                             NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_8;
                         break;
                 }
+
+                colorFormatsInfo.rgb444.minBpc =
+                    NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_6;
             } else {
                 colorFormatsInfo.rgb444.maxBpc =
+                    NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_8;
+                colorFormatsInfo.rgb444.minBpc =
                     NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_8;
             }
         } else if (nvConnectorUsesDPLib(pDpyEvo->pConnectorEvo)) {
@@ -3221,9 +3342,13 @@ NVColorFormatInfoRec nvGetColorFormatInfo(const NVDpyEvoRec *pDpyEvo)
                 if (pDpyEvo->parsedEdid.info.input.u.digital.bpc >= 10) {
                     colorFormatsInfo.rgb444.maxBpc =
                         NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_10;
+                    colorFormatsInfo.yuv444.maxBpc =
+                        NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_10;
                 } else if (pDpyEvo->parsedEdid.info.input.u.digital.bpc < 8) {
                     colorFormatsInfo.rgb444.maxBpc =
                         NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_6;
+                    colorFormatsInfo.yuv444.maxBpc =
+                        NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_UNKNOWN;
                 } else {
                     colorFormatsInfo.rgb444.maxBpc =
                         NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_8;
@@ -3231,9 +3356,30 @@ NVColorFormatInfoRec nvGetColorFormatInfo(const NVDpyEvoRec *pDpyEvo)
                         NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_8;
                 }
 
+                colorFormatsInfo.rgb444.minBpc =
+                    NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_6;
+                if (colorFormatsInfo.yuv444.maxBpc !=
+                        NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_UNKNOWN) {
+                     colorFormatsInfo.yuv444.minBpc =
+                        NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_8;
+                } else {
+                    colorFormatsInfo.yuv444.minBpc =
+                        NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_UNKNOWN;
+                }
+
                 colorFormatsInfo.yuv422.maxBpc = GetYuv422MaxBpc(pDpyEvo);
+                if (colorFormatsInfo.yuv422.maxBpc !=
+                        NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_UNKNOWN) {
+                    colorFormatsInfo.yuv422.minBpc =
+                        NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_8;
+                } else {
+                    colorFormatsInfo.yuv422.minBpc =
+                        NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_UNKNOWN;
+                }
             } else {
                 colorFormatsInfo.rgb444.maxBpc =
+                    NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_8;
+                colorFormatsInfo.rgb444.minBpc =
                     NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_8;
             }
         } else {
@@ -3241,15 +3387,57 @@ NVColorFormatInfoRec nvGetColorFormatInfo(const NVDpyEvoRec *pDpyEvo)
                 nvDpyIsHdmiDepth30Evo(pDpyEvo) ?
                     NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_10 :
                     NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_8;
+            colorFormatsInfo.rgb444.minBpc =
+                NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_8;
 
             if (nvDpyIsHdmiEvo(pDpyEvo)) {
-                // TODO: Handle depth 30 YUV
                 colorFormatsInfo.yuv444.maxBpc =
+                    nvDpyIsHdmiDepth30Evo(pDpyEvo) ?
+                        NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_10 :
+                        NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_8;
+                colorFormatsInfo.yuv444.minBpc =
                     NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_8;
-                colorFormatsInfo.yuv422.maxBpc =
-                    GetYuv422MaxBpc(pDpyEvo);
+
+                colorFormatsInfo.yuv422.maxBpc = GetYuv422MaxBpc(pDpyEvo);
+                if (colorFormatsInfo.yuv422.maxBpc !=
+                    NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_UNKNOWN) {
+                    colorFormatsInfo.yuv422.minBpc =
+                        NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_8;
+                } else {
+                    colorFormatsInfo.yuv422.minBpc =
+                        NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_UNKNOWN;
+                }
             }
         }
+    }
+
+    switch (nvkms_debug_force_color_space()) {
+    case NVKMS_DEBUG_FORCE_COLOR_SPACE_RGB:
+        colorFormatsInfo.yuv444.maxBpc =
+        colorFormatsInfo.yuv444.minBpc =
+        colorFormatsInfo.yuv422.maxBpc =
+        colorFormatsInfo.yuv422.minBpc =
+            NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_UNKNOWN;
+        break;
+    case NVKMS_DEBUG_FORCE_COLOR_SPACE_YUV444:
+        colorFormatsInfo.rgb444.maxBpc =
+        colorFormatsInfo.rgb444.minBpc =
+        colorFormatsInfo.yuv422.maxBpc =
+        colorFormatsInfo.yuv422.minBpc =
+            NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_UNKNOWN;
+        break;
+    case NVKMS_DEBUG_FORCE_COLOR_SPACE_YUV422:
+        colorFormatsInfo.rgb444.maxBpc =
+        colorFormatsInfo.rgb444.minBpc =
+        colorFormatsInfo.yuv444.maxBpc =
+        colorFormatsInfo.yuv444.minBpc =
+            NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_UNKNOWN;
+        break;
+    default:
+        nvAssert(!"Unrecognzed debug_force_color_space value");
+        // fallthrough
+    case NVKMS_DEBUG_FORCE_COLOR_SPACE_NONE:
+        break;
     }
 
     return colorFormatsInfo;
@@ -3308,7 +3496,8 @@ NvBool nvDpyIsHDRCapable(const NVDpyEvoRec *pDpyEvo)
             return FALSE;
         }
 
-        if ((major < 1) || (minor < 3)) {
+        nvAssert(major >= 1);
+        if ((major == 1) && (minor < 3)) {
             return FALSE;
         }
     } else if (!nvDpyIsHdmiEvo(pDpyEvo)) {

@@ -67,6 +67,14 @@ enum NvKmsSyncPtOp {
     NVKMS_SYNCPT_OP_READ_MINVAL,
 };
 
+enum NvKmsDebugForceColorSpace {
+    NVKMS_DEBUG_FORCE_COLOR_SPACE_NONE,
+    NVKMS_DEBUG_FORCE_COLOR_SPACE_RGB,
+    NVKMS_DEBUG_FORCE_COLOR_SPACE_YUV444,
+    NVKMS_DEBUG_FORCE_COLOR_SPACE_YUV422,
+    NVKMS_DEBUG_FORCE_COLOR_SPACE_MAX,
+};
+
 typedef struct {
 
     struct {
@@ -96,12 +104,21 @@ typedef struct {
     } read_minval;
 } NvKmsSyncPtOpParams;
 
+enum FailAllocCoreChannelMethod {
+    FAIL_ALLOC_CORE_CHANNEL_RM_SETUP_CORE_CHANNEL = 0,
+    FAIL_ALLOC_CORE_CHANNEL_RESTORE_CONSOLE = 1,
+};
+
+NvBool nvkms_test_fail_alloc_core_channel(enum FailAllocCoreChannelMethod method);
+NvBool nvkms_conceal_vrr_caps(void);
 NvBool nvkms_output_rounding_fix(void);
 NvBool nvkms_disable_hdmi_frl(void);
 NvBool nvkms_disable_vrr_memclk_switch(void);
 NvBool nvkms_hdmi_deepcolor(void);
 NvBool nvkms_vblank_sem_control(void);
 NvBool nvkms_opportunistic_display_sync(void);
+enum NvKmsDebugForceColorSpace nvkms_debug_force_color_space(void);
+NvBool nvkms_enable_overlay_layers(void);
 
 void   nvkms_call_rm    (void *ops);
 void*  nvkms_alloc      (size_t size,
@@ -305,6 +322,11 @@ NvU32 nvkms_enumerate_gpus(nv_gpu_info_t *gpu_info);
 NvBool nvkms_allow_write_combining(void);
 
 /*!
+ * Check if OS supports syncpoints.
+ */
+NvBool nvkms_kernel_supports_syncpts(void);
+
+/*!
  * Checks whether the fd is associated with an nvidia character device.
  */
 NvBool nvkms_fd_is_nvidia_chardev(int fd);
@@ -323,6 +345,16 @@ struct nvkms_per_open* nvkms_open_from_kapi
 void nvkms_close_from_kapi(struct nvkms_per_open *popen);
 
 NvBool nvkms_ioctl_from_kapi
+(
+    struct nvkms_per_open *popen,
+    NvU32 cmd, void *params_address, const size_t params_size
+);
+
+/*!
+ * Like nvkms_ioctl_from_kapi, but return NV_FALSE instead of waiting if the
+ * power management read lock cannot be acquired.
+ */
+NvBool nvkms_ioctl_from_kapi_try_pmlock
 (
     struct nvkms_per_open *popen,
     NvU32 cmd, void *params_address, const size_t params_size

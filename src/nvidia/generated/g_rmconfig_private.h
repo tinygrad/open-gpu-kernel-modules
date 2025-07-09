@@ -8,7 +8,7 @@
 // Profile:  shipping-gpus-openrm
 // Template: templates/gt_rmconfig_private.h
 //
-// Chips:    TU10X, GA100, GA102, GA103, GA104, GA106, GA107, AD102, AD103, AD104, AD106, AD107, GH10X
+// Chips:    TU10X, GA100, GA102, GA103, GA104, GA106, GA107, AD102, AD103, AD104, AD106, AD107, GH10X, GB100, GB102, GB10B, GB110, GB112, GB202, GB203, GB205, GB206, GB207, GB20B
 //
 
 #ifndef _G_RMCFG_PRIVATE_H_
@@ -54,14 +54,12 @@
 
 #define IsGF117(pGpu)                  ((0) && (pGpu))
 #define IsGF117orBetter(pGpu)          ((1) && (pGpu))
-#define IsGF117MaskRevA01(pGpu)        ((0) && (pGpu))
 
 #define IsGF118(pGpu)                  ((0) && (pGpu))
 #define IsGF118orBetter(pGpu)          ((1) && (pGpu))
 
 #define IsGF119(pGpu)                  ((0) && (pGpu))
 #define IsGF119orBetter(pGpu)          ((1) && (pGpu))
-#define IsGF119MaskRevA01(pGpu)        ((0) && (pGpu))
 
 // Any GF11X chip?
 #define IsGF11X(pGpu)                  (0 && (pGpu))
@@ -86,14 +84,12 @@
 // GK10X
 #define IsGK104(pGpu)                  ((0) && (pGpu))
 #define IsGK104orBetter(pGpu)          ((1) && (pGpu))
-#define IsGK104MaskRevA01(pGpu)        ((0) && (pGpu))
 
 #define IsGK106(pGpu)                  ((0) && (pGpu))
 #define IsGK106orBetter(pGpu)          ((1) && (pGpu))
 
 #define IsGK107(pGpu)                  ((0) && (pGpu))
 #define IsGK107orBetter(pGpu)          ((1) && (pGpu))
-#define IsGK107MaskRevA01(pGpu)        ((0) && (pGpu))
 
 #define IsGK20A(pGpu)                  ((0) && (pGpu))
 #define IsGK20AorBetter(pGpu)          ((1) && (pGpu))
@@ -133,11 +129,9 @@
 // GM10X
 #define IsGM107(pGpu)                  ((0) && (pGpu))
 #define IsGM107orBetter(pGpu)          ((1) && (pGpu))
-#define IsGM107MaskRevA01(pGpu)        ((0) && (pGpu))
 
 #define IsGM108(pGpu)                  ((0) && (pGpu))
 #define IsGM108orBetter(pGpu)          ((1) && (pGpu))
-#define IsGM108MaskRevA01(pGpu)        ((0) && (pGpu))
 
 // Any GM10X chip?
 #define IsGM10X(pGpu)                  (0 && (pGpu))
@@ -288,13 +282,49 @@
 #define IsGH10XorBetter(pGpu)          rmcfg_IsGH10XorBetter(pGpu)
 
 
-// GH20X
-#define IsGH202(pGpu)                  ((0) && (pGpu))
-#define IsGH202orBetter(pGpu)          ((0) && (pGpu))
+// GB10X
+#define IsGB100(pGpu)                  rmcfg_IsGB100(pGpu)
+#define IsGB100orBetter(pGpu)          rmcfg_IsGB100orBetter(pGpu)
 
-// Any GH20X chip?
-#define IsGH20X(pGpu)                  (0 && (pGpu))
-#define IsGH20XorBetter(pGpu)          (0 && (pGpu))
+#define IsGB102(pGpu)                  rmcfg_IsGB102(pGpu)
+#define IsGB102orBetter(pGpu)          rmcfg_IsGB102orBetter(pGpu)
+
+#define IsGB10B(pGpu)                  rmcfg_IsGB10B(pGpu)
+#define IsGB10BorBetter(pGpu)          rmcfg_IsGB10BorBetter(pGpu)
+
+#define IsGB110(pGpu)                  rmcfg_IsGB110(pGpu)
+#define IsGB110orBetter(pGpu)          rmcfg_IsGB110orBetter(pGpu)
+
+#define IsGB112(pGpu)                  rmcfg_IsGB112(pGpu)
+#define IsGB112orBetter(pGpu)          rmcfg_IsGB112orBetter(pGpu)
+
+// Any GB10X chip?
+#define IsGB10X(pGpu)                  rmcfg_IsGB10X(pGpu)
+#define IsGB10XorBetter(pGpu)          rmcfg_IsGB10XorBetter(pGpu)
+
+
+// GB20X
+#define IsGB202(pGpu)                  rmcfg_IsGB202(pGpu)
+#define IsGB202orBetter(pGpu)          rmcfg_IsGB202orBetter(pGpu)
+
+#define IsGB203(pGpu)                  rmcfg_IsGB203(pGpu)
+#define IsGB203orBetter(pGpu)          rmcfg_IsGB203orBetter(pGpu)
+
+#define IsGB205(pGpu)                  rmcfg_IsGB205(pGpu)
+#define IsGB205orBetter(pGpu)          rmcfg_IsGB205orBetter(pGpu)
+
+#define IsGB206(pGpu)                  rmcfg_IsGB206(pGpu)
+#define IsGB206orBetter(pGpu)          rmcfg_IsGB206orBetter(pGpu)
+
+#define IsGB207(pGpu)                  rmcfg_IsGB207(pGpu)
+#define IsGB207orBetter(pGpu)          rmcfg_IsGB207orBetter(pGpu)
+
+#define IsGB20B(pGpu)                  rmcfg_IsGB20B(pGpu)
+#define IsGB20BorBetter(pGpu)          rmcfg_IsGB20BorBetter(pGpu)
+
+// Any GB20X chip?
+#define IsGB20X(pGpu)                  rmcfg_IsGB20X(pGpu)
+#define IsGB20XorBetter(pGpu)          rmcfg_IsGB20XorBetter(pGpu)
 
 
 // T12X
@@ -402,7 +432,12 @@
 
 
 // Any DISPLAYLESS chip?
-#define IsDISPLAYLESS(pGpu)            rmcfg_IsDISPLAYLESS(pGpu)
+#define IsDISPLAYLESS(pGpu)            (IsDISPLAYLESS_CLASSIC_GPUS(pGpu) || IsDISPLAYLESS_TEGRA_BIG_GPUS(pGpu))
+
+
+// Any DISPLAYLESS_CLASSIC_GPUS chip?
+#define IsDISPLAYLESS_CLASSIC_GPUS(pGpu) rmcfg_IsDISPLAYLESS_CLASSIC_GPUS(pGpu)
+#define IsDISPLAYLESS_CLASSIC_GPUSorBetter(pGpu) rmcfg_IsDISPLAYLESS_CLASSIC_GPUSorBetter(pGpu)
 
 
 // Any dKEPLER chip?
@@ -438,6 +473,10 @@
 // Any dPASCAL chip?
 #define IsdPASCAL(pGpu)                (0 && (pGpu))
 #define IsdPASCALorBetter(pGpu)        (1 || (pGpu))
+
+
+// Any COMPUTE chip?
+#define IsCOMPUTE(pGpu)                rmcfg_IsCOMPUTE(pGpu)
 
 
 // Any PASCAL chip?
@@ -537,9 +576,41 @@
 #define IsHOPPER_CLASSIC_GPUSorBetter(pGpu) rmcfg_IsHOPPER_CLASSIC_GPUSorBetter(pGpu)
 
 
+// Any dBLACKWELL chip?
+#define IsdBLACKWELL(pGpu)             rmcfg_IsdBLACKWELL(pGpu)
+#define IsdBLACKWELLorBetter(pGpu)     rmcfg_IsdBLACKWELLorBetter(pGpu)
+
+
+// Any BLACKWELL chip?
+#define IsBLACKWELL(pGpu)              (IsBLACKWELL_CLASSIC_GPUS(pGpu) || IsBLACKWELL_TEGRA_BIG_GPUS(pGpu))
+#define IsBLACKWELLorBetter(pGpu)      (IsBLACKWELL_CLASSIC_GPUSorBetter(pGpu) || IsBLACKWELL_TEGRA_BIG_GPUSorBetter(pGpu))
+
+
+// Any BLACKWELL_CLASSIC_GPUS chip?
+#define IsBLACKWELL_CLASSIC_GPUS(pGpu) rmcfg_IsBLACKWELL_CLASSIC_GPUS(pGpu)
+#define IsBLACKWELL_CLASSIC_GPUSorBetter(pGpu) rmcfg_IsBLACKWELL_CLASSIC_GPUSorBetter(pGpu)
+
+
+// Any GB10Y chip?
+#define IsGB10Y(pGpu)                  rmcfg_IsGB10Y(pGpu)
+
+
+// Any TEGRA_DGPU_BLACKWELL chip?
+#define IsTEGRA_DGPU_BLACKWELL(pGpu)   rmcfg_IsTEGRA_DGPU_BLACKWELL(pGpu)
+
+
 // Any TEGRA_DISP chip?
-#define IsTEGRA_DISP(pGpu)             (IsTEGRA_DISP_CLASSIC_GPUS(pGpu) || IsTEGRA_DISP_TEGRA_BIG_GPUS(pGpu) || IsTEGRA_DISP_TEGRA_NVDISP_GPUS(pGpu))
-#define IsTEGRA_DISPorBetter(pGpu)     (IsTEGRA_DISP_CLASSIC_GPUSorBetter(pGpu) || IsTEGRA_DISP_TEGRA_BIG_GPUSorBetter(pGpu) || IsTEGRA_DISP_TEGRA_NVDISP_GPUSorBetter(pGpu))
+#define IsTEGRA_DISP(pGpu)             (IsTEGRA_DISP_CLASSIC_GPUS(pGpu) || IsTEGRA_DISP_TEGRA_NVDISP_GPUS(pGpu))
+#define IsTEGRA_DISPorBetter(pGpu)     (IsTEGRA_DISP_CLASSIC_GPUSorBetter(pGpu) || IsTEGRA_DISP_TEGRA_NVDISP_GPUSorBetter(pGpu))
+
+
+// Any TEGRA_DISP_CLASSIC_GPUS chip?
+#define IsTEGRA_DISP_CLASSIC_GPUS(pGpu) rmcfg_IsTEGRA_DISP_CLASSIC_GPUS(pGpu)
+#define IsTEGRA_DISP_CLASSIC_GPUSorBetter(pGpu) rmcfg_IsTEGRA_DISP_CLASSIC_GPUSorBetter(pGpu)
+
+
+// Any GB20Y chip?
+#define IsGB20Y(pGpu)                  rmcfg_IsGB20Y(pGpu)
 
 
 // Any TEGRA_BIG_GPUS chip?
@@ -592,6 +663,11 @@
 #define IsPASCAL_TEGRA_BIG_GPUSorBetter(pGpu) (0 && (pGpu))
 
 
+// Any DISPLAYLESS_TEGRA_BIG_GPUS chip?
+#define IsDISPLAYLESS_TEGRA_BIG_GPUS(pGpu) (0 && (pGpu))
+#define IsDISPLAYLESS_TEGRA_BIG_GPUSorBetter(pGpu) (0 && (pGpu))
+
+
 // Any tVOLTA chip?
 #define IstVOLTA(pGpu)                 (0 && (pGpu))
 #define IstVOLTAorBetter(pGpu)         (0 && (pGpu))
@@ -600,11 +676,6 @@
 // Any VOLTA_TEGRA_BIG_GPUS chip?
 #define IsVOLTA_TEGRA_BIG_GPUS(pGpu)   (0 && (pGpu))
 #define IsVOLTA_TEGRA_BIG_GPUSorBetter(pGpu) (0 && (pGpu))
-
-
-// Any TEGRA_DISP_TEGRA_BIG_GPUS chip?
-#define IsTEGRA_DISP_TEGRA_BIG_GPUS(pGpu) (0 && (pGpu))
-#define IsTEGRA_DISP_TEGRA_BIG_GPUSorBetter(pGpu) (0 && (pGpu))
 
 
 // Any TURING_TEGRA_BIG_GPUS chip?
@@ -764,25 +835,6 @@
          {                                          \
              NV_PRINTF(LEVEL_ERROR, "CLASS" RMCFG_ENTITY_NAME(#W) " not enabled, assert and bail\n"); \
              NV_ASSERT_PRECOMP(RMCFG_CLASS_##W);            \
-             return NV_ERR_NOT_SUPPORTED;           \
-         }                                          \
-     } while(0)
-
-// API's
-#define RMCFG_API_ENABLED_OR_BAIL(W)                \
-     do {                                           \
-         if ( ! RMCFG_API_##W)                      \
-         {                                          \
-             NV_PRINTF(LEVEL_ERROR, "API" RMCFG_ENTITY_NAME(#W) " not enabled, bailing\n"); \
-             return NV_ERR_NOT_SUPPORTED;           \
-         }                                          \
-     } while(0)
-#define RMCFG_API_ENABLED_OR_ASSERT_AND_BAIL(W)     \
-     do {                                           \
-         if ( ! RMCFG_API_##W)                      \
-         {                                          \
-             NV_PRINTF(LEVEL_ERROR, "API" RMCFG_ENTITY_NAME(#W) " not enabled, assert and bail\n"); \
-             NV_ASSERT_PRECOMP(RMCFG_API_##W);              \
              return NV_ERR_NOT_SUPPORTED;           \
          }                                          \
      } while(0)

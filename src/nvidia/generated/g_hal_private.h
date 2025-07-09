@@ -5,7 +5,7 @@
 // Profile:  shipping-gpus-openrm
 // Template: templates/gt_hal_private.h
 //
-// Chips:    TU10X, GA100, GA102, GA103, GA104, GA106, GA107, AD102, AD103, AD104, AD106, AD107, GH10X
+// Chips:    TU10X, GA100, GA102, GA103, GA104, GA106, GA107, AD102, AD103, AD104, AD106, AD107, GH10X, GB100, GB102, GB10B, GB110, GB112, GB202, GB203, GB205, GB206, GB207, GB20B
 //
 
 //
@@ -28,6 +28,8 @@
 #  define RMCFG_HAL_SETUP_GA10X          1
 #  define RMCFG_HAL_SETUP_AD10X          1
 #  define RMCFG_HAL_SETUP_GH10X          1
+#  define RMCFG_HAL_SETUP_GB10X          1
+#  define RMCFG_HAL_SETUP_GB20X          1
 #endif   // RMCFG_HAL_SETUP_ALL
 
 //
@@ -62,6 +64,23 @@
 #if defined(RMCFG_HAL_SETUP_GH10X)
 #  define RMCFG_HAL_SETUP_GH100          1
 #endif // GH10X
+
+#if defined(RMCFG_HAL_SETUP_GB10X)
+#  define RMCFG_HAL_SETUP_GB100          1
+#  define RMCFG_HAL_SETUP_GB102          1
+#  define RMCFG_HAL_SETUP_GB10B          1
+#  define RMCFG_HAL_SETUP_GB110          1
+#  define RMCFG_HAL_SETUP_GB112          1
+#endif // GB10X
+
+#if defined(RMCFG_HAL_SETUP_GB20X)
+#  define RMCFG_HAL_SETUP_GB202          1
+#  define RMCFG_HAL_SETUP_GB203          1
+#  define RMCFG_HAL_SETUP_GB205          1
+#  define RMCFG_HAL_SETUP_GB206          1
+#  define RMCFG_HAL_SETUP_GB207          1
+#  define RMCFG_HAL_SETUP_GB20B          1
+#endif // GB20X
 
 #endif  // RMCFG_ENGINE_SETUP
 
@@ -348,6 +367,182 @@ NV_STATUS registerHalModule_GH100(void)
 }
 
 #endif  // GH10X or GH100
+
+#if defined(RMCFG_HAL_SETUP_GB100)
+
+static const HAL_IFACE_SETUP halIface_GB100 = {
+
+    rpcHalIfacesSetup_GB100,
+    rpcstructurecopyHalIfacesSetup_GB100,
+
+};
+
+NV_STATUS registerHalModule_GB100(void)
+{
+    return registerHalModule(HAL_IMPL_GB100, &halIface_GB100);
+}
+
+#endif  // GB10X or GB100
+
+#if defined(RMCFG_HAL_SETUP_GB102)
+
+static const HAL_IFACE_SETUP halIface_GB102 = {
+
+    rpcHalIfacesSetup_GB102,
+    rpcstructurecopyHalIfacesSetup_GB102,
+
+};
+
+NV_STATUS registerHalModule_GB102(void)
+{
+    return registerHalModule(HAL_IMPL_GB102, &halIface_GB102);
+}
+
+#endif  // GB10X or GB102
+
+#if defined(RMCFG_HAL_SETUP_GB10B)
+
+static const HAL_IFACE_SETUP halIface_GB10B = {
+
+    rpcHalIfacesSetup_GB10B,
+    rpcstructurecopyHalIfacesSetup_GB10B,
+
+};
+
+NV_STATUS registerHalModule_GB10B(void)
+{
+    return registerHalModule(HAL_IMPL_GB10B, &halIface_GB10B);
+}
+
+#endif  // GB10X or GB10B
+
+#if defined(RMCFG_HAL_SETUP_GB110)
+
+static const HAL_IFACE_SETUP halIface_GB110 = {
+
+    rpcHalIfacesSetup_GB110,
+    rpcstructurecopyHalIfacesSetup_GB110,
+
+};
+
+NV_STATUS registerHalModule_GB110(void)
+{
+    return registerHalModule(HAL_IMPL_GB110, &halIface_GB110);
+}
+
+#endif  // GB10X or GB110
+
+#if defined(RMCFG_HAL_SETUP_GB112)
+
+static const HAL_IFACE_SETUP halIface_GB112 = {
+
+    rpcHalIfacesSetup_GB112,
+    rpcstructurecopyHalIfacesSetup_GB112,
+
+};
+
+NV_STATUS registerHalModule_GB112(void)
+{
+    return registerHalModule(HAL_IMPL_GB112, &halIface_GB112);
+}
+
+#endif  // GB10X or GB112
+
+#if defined(RMCFG_HAL_SETUP_GB202)
+
+static const HAL_IFACE_SETUP halIface_GB202 = {
+
+    rpcHalIfacesSetup_GB202,
+    rpcstructurecopyHalIfacesSetup_GB202,
+
+};
+
+NV_STATUS registerHalModule_GB202(void)
+{
+    return registerHalModule(HAL_IMPL_GB202, &halIface_GB202);
+}
+
+#endif  // GB20X or GB202
+
+#if defined(RMCFG_HAL_SETUP_GB203)
+
+static const HAL_IFACE_SETUP halIface_GB203 = {
+
+    rpcHalIfacesSetup_GB203,
+    rpcstructurecopyHalIfacesSetup_GB203,
+
+};
+
+NV_STATUS registerHalModule_GB203(void)
+{
+    return registerHalModule(HAL_IMPL_GB203, &halIface_GB203);
+}
+
+#endif  // GB20X or GB203
+
+#if defined(RMCFG_HAL_SETUP_GB205)
+
+static const HAL_IFACE_SETUP halIface_GB205 = {
+
+    rpcHalIfacesSetup_GB205,
+    rpcstructurecopyHalIfacesSetup_GB205,
+
+};
+
+NV_STATUS registerHalModule_GB205(void)
+{
+    return registerHalModule(HAL_IMPL_GB205, &halIface_GB205);
+}
+
+#endif  // GB20X or GB205
+
+#if defined(RMCFG_HAL_SETUP_GB206)
+
+static const HAL_IFACE_SETUP halIface_GB206 = {
+
+    rpcHalIfacesSetup_GB206,
+    rpcstructurecopyHalIfacesSetup_GB206,
+
+};
+
+NV_STATUS registerHalModule_GB206(void)
+{
+    return registerHalModule(HAL_IMPL_GB206, &halIface_GB206);
+}
+
+#endif  // GB20X or GB206
+
+#if defined(RMCFG_HAL_SETUP_GB207)
+
+static const HAL_IFACE_SETUP halIface_GB207 = {
+
+    rpcHalIfacesSetup_GB207,
+    rpcstructurecopyHalIfacesSetup_GB207,
+
+};
+
+NV_STATUS registerHalModule_GB207(void)
+{
+    return registerHalModule(HAL_IMPL_GB207, &halIface_GB207);
+}
+
+#endif  // GB20X or GB207
+
+#if defined(RMCFG_HAL_SETUP_GB20B)
+
+static const HAL_IFACE_SETUP halIface_GB20B = {
+
+    rpcHalIfacesSetup_GB20B,
+    rpcstructurecopyHalIfacesSetup_GB20B,
+
+};
+
+NV_STATUS registerHalModule_GB20B(void)
+{
+    return registerHalModule(HAL_IMPL_GB20B, &halIface_GB20B);
+}
+
+#endif  // GB20X or GB20B
 
 
 

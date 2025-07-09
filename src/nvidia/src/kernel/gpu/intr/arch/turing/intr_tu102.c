@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2017-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2017-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -26,7 +26,7 @@
 #include "gpu/gpu.h"
 #include "kernel/gpu/intr/engine_idx.h"
 #include "gpu/bif/kernel_bif.h"
-#include "objtmr.h"
+#include "gpu/timer/objtmr.h"
 #include "gpu/uvm/uvm.h"
 #include "os/os.h"
 #include "vgpu/vgpu_events.h"
@@ -80,9 +80,9 @@ ct_assert(NV_VIRTUAL_FUNCTION_PRIV_CPU_INTR_LEAF__SIZE_1 == NV_VIRTUAL_FUNCTION_
 NV_STATUS
 intrStateLoad_TU102
 (
-    OBJGPU  *pGpu,
-    Intr *pIntr,
-    NvU32    flags
+    OBJGPU *pGpu,
+    Intr   *pIntr,
+    NvU32   flags
 )
 {
     NV_STATUS status = NV_OK;
@@ -186,8 +186,6 @@ intrCacheIntrFields_TU102
     //
     pIntr->intrTopEnMask |= intrGetIntrTopLockedMask(pGpu, pIntr);
 
-    OBJDISP *pDisp = GPU_GET_DISP(pGpu);
-
     // Cache client owned, shared interrupt, and display vectors for ease of use later
     pIntr->accessCntrIntrVector      = intrGetVectorFromEngineId(pGpu, pIntr, MC_ENGINE_IDX_ACCESS_CNTR, NV_FALSE);
 
@@ -200,14 +198,7 @@ intrCacheIntrFields_TU102
         pIntr->replayableFaultIntrVector = intrGetVectorFromEngineId(pGpu, pIntr, MC_ENGINE_IDX_REPLAYABLE_FAULT_CPU, NV_FALSE);
     }
 
-    if (pDisp != NULL)
-    {
-        pIntr->displayIntrVector     = intrGetVectorFromEngineId(pGpu, pIntr, MC_ENGINE_IDX_DISP, NV_FALSE);
-    }
-    else
-    {
-        pIntr->displayIntrVector     = NV_INTR_VECTOR_INVALID;
-    }
+    intrCacheDispIntrVectors_HAL(pGpu, pIntr);
 
     //
     // Ensure that both UVM vectors are in the same leaf register (check right
@@ -276,12 +267,27 @@ intrCacheIntrFields_TU102
 
         pIntr->uvmSharedCpuLeafEn = ((NvU64)(leafEnHi) << 32) | leafEnLo;
         pIntr->uvmSharedCpuLeafEnDisableMask =
-            intrGetUvmSharedLeafEnDisableMask_HAL(pGpu, pIntr);
+            intrGetUvmSharedLeafEnDisableMask(pGpu, pIntr);
     }
 
 exit:
 
     return status;
+}
+
+void intrCacheDispIntrVectors_TU102(OBJGPU *pGpu, Intr *pIntr)
+{
+    KernelDisplay *pKernelDisplay = GPU_GET_KERNEL_DISPLAY(pGpu);
+
+    if (pKernelDisplay != NULL && !RMCFG_FEATURE_PLATFORM_GSP)
+    {
+        pIntr->displayIntrVector           = intrGetVectorFromEngineId(pGpu, pIntr, MC_ENGINE_IDX_DISP, NV_FALSE);
+    }
+    else
+    {
+        pIntr->displayIntrVector           = NV_INTR_VECTOR_INVALID;
+    }
+    pIntr->displayLowLatencyIntrVector = NV_INTR_VECTOR_INVALID;
 }
 
 /*!
@@ -707,86 +713,48 @@ _intrGetUvmLeafMask_TU102
     return val;
 }
 
-/*!
-* @brief Returns a 64 bit mask, where all the bits set to 0 are the ones we
-* intend to leave enabled in the client shared subtree even when we disable
-* interrupts (for example, when we take the GPU lock).
-*
-* The non-replayable fault interrupt is shared with the client, and in the
-* top half of the interrupt handler, as such, we only copy fault packets from
-* the HW buffer to the appropriate SW buffers.
-* The fifo non-stall interrupt is used for runlist events, which also does not
-* need to be blocked by the GPU lock (existing codepaths already ascertain that
-* this is safe, so we're maintaining that behavior in NV_CTRL).
-*/
-NvU64
-intrGetUvmSharedLeafEnDisableMask_TU102
+void
+intrGetLocklessVectorsInRmSubtree_TU102
 (
     OBJGPU *pGpu,
-    Intr *pIntr
+    Intr   *pIntr,
+    NvU32  (*pInterruptVectors)[2]
 )
 {
-    NvU32 intrVectorNonReplayableFault;
-    NvU32 intrVectorFifoNonstall = NV_INTR_VECTOR_INVALID;
-    NvU64 mask = 0;
-    NV2080_INTR_CATEGORY_SUBTREE_MAP uvmShared;
-
-    // GSP RM services both MMU non-replayable fault and FIFO interrupts
-    if (IS_GSP_CLIENT(pGpu))
+    NvU32 i;
+    for (i = 0; i < NV_ARRAY_ELEMENTS((*pInterruptVectors)); i++)
     {
-        return ~mask;
+        (*pInterruptVectors)[i] = NV_INTR_VECTOR_INVALID;
     }
+    i = 0;
 
-    intrVectorNonReplayableFault = intrGetVectorFromEngineId(pGpu, pIntr, MC_ENGINE_IDX_NON_REPLAYABLE_FAULT, NV_FALSE);
+    NV_ASSERT(i < NV_ARRAY_ELEMENTS((*pInterruptVectors)));
+    //
+    // The non-replayable fault interrupt is shared with the client, and in the
+    // top half of the interrupt handler, as such, we only copy fault packets
+    // from the HW buffer to the appropriate SW buffers.
+    //
+    (*pInterruptVectors)[i] = intrGetVectorFromEngineId(pGpu, pIntr,
+        MC_ENGINE_IDX_NON_REPLAYABLE_FAULT,
+        NV_FALSE);
+    i++;
 
     if (!IS_VIRTUAL(pGpu))
     {
-        intrVectorFifoNonstall = intrGetVectorFromEngineId(pGpu, pIntr, MC_ENGINE_IDX_FIFO, NV_TRUE);
+        NV_ASSERT(i < NV_ARRAY_ELEMENTS((*pInterruptVectors)));
+        //
+        // The fifo non-stall interrupt is used for runlist events, which also
+        // does not need to be blocked by the GPU lock (existing codepaths
+        // already ascertain that this is safe, so we're maintaining that
+        // behavior in NV_CTRL).
+        //
+        (*pInterruptVectors)[i] = intrGetVectorFromEngineId(pGpu, pIntr,
+                                                            MC_ENGINE_IDX_FIFO,
+                                                            NV_TRUE);
+        i++;
     }
-
-    if (intrVectorFifoNonstall != NV_INTR_VECTOR_INVALID)
-    {
-        // Ascertain that they're in the same subtree and same leaf
-        NV_ASSERT(NV_CTRL_INTR_GPU_VECTOR_TO_SUBTREE(intrVectorNonReplayableFault) ==
-                NV_CTRL_INTR_GPU_VECTOR_TO_SUBTREE(intrVectorFifoNonstall));
-        NV_ASSERT(NV_CTRL_INTR_GPU_VECTOR_TO_LEAF_REG(intrVectorNonReplayableFault) ==
-                NV_CTRL_INTR_GPU_VECTOR_TO_LEAF_REG(intrVectorFifoNonstall));
-    }
-
-    NV_ASSERT_OK(intrGetSubtreeRange(pIntr,
-                                     NV2080_INTR_CATEGORY_UVM_SHARED,
-                                     &uvmShared));
-    //
-    // Ascertain that we only have 1 client subtree (we assume
-    // this since we cache only 64 bits).
-    //
-    NV_ASSERT(uvmShared.subtreeStart == uvmShared.subtreeEnd);
-
-    //
-    // Ascertain that we only have 2 subtrees as this is what we currently
-    // support by only caching 64 bits
-    //
-    NV_ASSERT(
-        (NV_CTRL_INTR_SUBTREE_TO_LEAF_IDX_END(uvmShared.subtreeEnd) - 1) ==
-        NV_CTRL_INTR_SUBTREE_TO_LEAF_IDX_START(uvmShared.subtreeStart));
-
-
-    // Ascertain that they're in the first leaf
-    NV_ASSERT(
-        NV_CTRL_INTR_GPU_VECTOR_TO_LEAF_REG(intrVectorNonReplayableFault) ==
-        NV_CTRL_INTR_SUBTREE_TO_LEAF_IDX_START(uvmShared.subtreeStart));
-
-    mask |= NVBIT64(NV_CTRL_INTR_GPU_VECTOR_TO_LEAF_BIT(intrVectorNonReplayableFault));
-
-    if (intrVectorFifoNonstall != NV_INTR_VECTOR_INVALID)
-    {
-        mask |= NVBIT64(NV_CTRL_INTR_GPU_VECTOR_TO_LEAF_BIT(intrVectorFifoNonstall));
-    }
-
-    mask <<= 32;
-
-    return ~mask;
 }
+
 
 /*!
  * @brief Gets list of engines with pending stalling interrupts as per the interrupt trees
@@ -1091,10 +1059,12 @@ intrGetLeafStatus_TU102
 }
 
 /*!
- * @brief Returns a bitfield with only MC_ENGINE_IDX_DISP set if it's pending
+ * @brief Returns a bitfield with only MC_ENGINE_IDX_DISP set if it's pending in hardware
  *        On Turing+, there are multiple stall interrupt registers, and reading them
  *        all in the top half would be expensive. To saitsfy bug 3220319, only find out
- *        if display interrupt is pending. Fix this in bug 3279300
+ *        if display interrupt is pending. Fix this in bug 3279300.
+ *        The MC_ENGINE_IDX_DISP that this function reports conflates both the low latency display
+ *        interrupts and other display interrupts in architectures supported by this HAL.
  *
  * @param[in]  pGpu
  * @param[in]  pMc
@@ -1104,7 +1074,7 @@ intrGetLeafStatus_TU102
  * @return NV_OK if the list of engines that have pending stall interrupts was retrieved
  */
 NV_STATUS
-intrGetPendingDisplayIntr_TU102
+intrGetPendingLowLatencyHwDisplayIntr_TU102
 (
     OBJGPU              *pGpu,
     Intr                *pIntr,
@@ -1112,8 +1082,6 @@ intrGetPendingDisplayIntr_TU102
     THREAD_STATE_NODE   *pThreadState
 )
 {
-    KernelDisplay  *pKernelDisplay = GPU_GET_KERNEL_DISPLAY(pGpu);
-
     bitVectorClrAll(pEngines);
 
     if (IS_GPU_GC6_STATE_ENTERED(pGpu))
@@ -1126,19 +1094,12 @@ intrGetPendingDisplayIntr_TU102
         return NV_ERR_GPU_IS_LOST;
     }
 
-    if (pKernelDisplay != NULL && kdispGetDeferredVblankHeadMask(pKernelDisplay))
-    {
-        // Deferred vblank is pending which we need to handle
-        bitVectorSet(pEngines, MC_ENGINE_IDX_DISP);
-        // Nothing else to set here, return early
-        return NV_OK;
-    }
-
     if (pIntr->displayIntrVector == NV_INTR_VECTOR_INVALID)
     {
         return NV_OK;
     }
-    else if (intrIsVectorPending_TU102(pGpu, pIntr, pIntr->displayIntrVector, pThreadState))
+
+    if (intrIsVectorPending_HAL(pGpu, pIntr, pIntr->displayIntrVector, pThreadState))
     {
         bitVectorSet(pEngines, MC_ENGINE_IDX_DISP);
     }
