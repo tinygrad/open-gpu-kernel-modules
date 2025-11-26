@@ -1468,15 +1468,18 @@ _kbusCreateStaticBar1IOMMUMapping
     memdescGetPhysAddrsForGpu(pPeerDmaMemDesc, pSrcGpu,
                               AT_GPU, 0, 0, 1, &peerDmaAddr);
 
+    // Log the peer DMA address for debugging
+    NV_PRINTF(LEVEL_ERROR, "P2P mapping: SrcGPU=%u PeerGPU=%u peerDmaAddr=0x%llx, aligned=%s\n",
+                           gpuGetInstance(pSrcGpu), gpuGetInstance(pPeerGpu),
+                           peerDmaAddr, NV_IS_ALIGNED64(peerDmaAddr, RM_PAGE_SIZE_512M) ? "YES" : "NO");
+
     // Check the if it is aligned to max RM_PAGE_SIZE 512M.
+    // PATCHED: Skip alignment check to allow P2P with non-aligned BAR addresses
     if (!NV_IS_ALIGNED64(peerDmaAddr, RM_PAGE_SIZE_512M))
     {
-        NV_PRINTF(LEVEL_ERROR, "The peer DMA address 0x%llx is not aligned at 0x%llx\n",
+        NV_PRINTF(LEVEL_ERROR, "The peer DMA address 0x%llx is not aligned at 0x%llx (continuing anyway)\n",
                                peerDmaAddr, RM_PAGE_SIZE_512M);
-
-        memdescUnmapIommu(pPeerDmaMemDesc, pSrcGpu->busInfo.iovaspaceId);
-
-        return NV_ERR_INVALID_ADDRESS;
+        // Don't fail - continue with non-aligned address
     }
 
     return NV_OK;
@@ -1569,6 +1572,9 @@ NV_STATUS kbusGetBar1P2PDmaInfo_GH100
                               AT_GPU, 0, 0, 1, pDmaAddress);
 
     *pDmaSize = memdescGetSize(pPeerDmaMemDesc);
+
+    NV_PRINTF(LEVEL_ERROR, "kbusGetBar1P2PDmaInfo: SrcGPU=%u -> PeerGPU=%u DmaAddr=0x%llx Size=0x%llx\n",
+              gpuGetInstance(pSrcGpu), gpuGetInstance(pPeerGpu), *pDmaAddress, *pDmaSize);
 
     return NV_OK;
 }

@@ -781,6 +781,7 @@ NV_STATUS NV_API_CALL nv_dma_map_peer
     if (nv_dma_use_map_resource(dma_dev))
     {
         status = nv_dma_map_mmio(dma_dev, page_count, va);
+        nv_printf(NV_DBG_ERRORS, "NVRM: nv_dma_map_peer: using map_resource path, va=0x%llx\n", *va);
     }
     else
     {
@@ -789,7 +790,10 @@ NV_STATUS NV_API_CALL nv_dma_map_peer
          * convert to a bus address.
          */
         NvU64 offset = *va - res->start;
-        *va = pci_bus_address(peer_pci_dev, bar_index) + offset;
+        NvU64 bus_addr = pci_bus_address(peer_pci_dev, bar_index);
+        nv_printf(NV_DBG_ERRORS, "NVRM: nv_dma_map_peer: res->start=0x%llx, offset=0x%llx, bus_addr=0x%llx, final=0x%llx\n",
+                  (NvU64)res->start, offset, bus_addr, bus_addr + offset);
+        *va = bus_addr + offset;
         status = NV_OK;
     }
 

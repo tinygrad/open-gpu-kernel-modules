@@ -541,6 +541,8 @@ kbusEnableStaticBar1Mapping_TU102
 
     // Get the system physical address of the Bar1
     bar1BusAddr = gpumgrGetGpuPhysFbAddr(pGpu) + bar1Offset;
+    NV_PRINTF(LEVEL_ERROR, "Static bar1: bar1BusAddr=0x%llx (base=0x%llx + offset=0x%llx)\n",
+              bar1BusAddr, gpumgrGetGpuPhysFbAddr(pGpu), bar1Offset);
 
     //
     // Create a memory descriptor to describe a SYSMEM target of the GPU
@@ -565,8 +567,8 @@ kbusEnableStaticBar1Mapping_TU102
     pKernelBus->bar1[gfid].staticBar1.startOffset = bar1Offset;
     pKernelBus->bar1[gfid].staticBar1.size = bar1MapSize;
 
-    NV_PRINTF(LEVEL_INFO, "Static bar1 mapped offset 0x%llx size 0x%llx\n",
-                           bar1Offset, bar1MapSize);
+    NV_PRINTF(LEVEL_ERROR, "Static bar1 mapped GPU=%u offset 0x%llx size 0x%llx bar1BusAddr=0x%llx\n",
+                           gpuGetInstance(pGpu), bar1Offset, bar1MapSize, bar1BusAddr);
 
     return NV_OK;
 

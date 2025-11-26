@@ -604,16 +604,20 @@ _p2pCapsGetHostSystemStatusOverPcieBar1
 
     *pP2PWriteCapStatus = NV0000_P2P_CAPS_STATUS_OK;
 
+    NV_PRINTF(LEVEL_ERROR, "P2P Bar1 caps: cpuType=%u bCommonSwitch=%d\n",
+              pSys->cpuInfo.type, bCommonPciSwitchFound);
+
     if (bCommonPciSwitchFound ||
         (pSys->cpuInfo.type == NV0000_CTRL_SYSTEM_CPU_TYPE_RYZEN) ||
         (pSys->cpuInfo.type == NV0000_CTRL_SYSTEM_CPU_TYPE_XEON_SPR))
     {
         *pP2PReadCapStatus = NV0000_P2P_CAPS_STATUS_OK;
+        NV_PRINTF(LEVEL_ERROR, "P2P Bar1: Read enabled\n");
     }
     else
     {
         *pP2PReadCapStatus = NV0000_P2P_CAPS_STATUS_CHIPSET_NOT_SUPPORTED;
-        NV_PRINTF(LEVEL_INFO, "Unrecognized CPU. Read Cap is disabled\n");
+        NV_PRINTF(LEVEL_ERROR, "Unrecognized CPU type %u. Read Cap is disabled\n", pSys->cpuInfo.type);
     }
 
     return NV_OK;
