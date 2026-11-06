@@ -1,0 +1,38 @@
+name: release firmware
+
+on: push
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    env:
+      EXTRACTOR_REF: e6a2e01579fbbd1ca2ed43fef2ee2589e9bd8bd9
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate firmware
+        run: |
+          for file in extract-firmware-nouveau.py extract_firmware_common.py; do
+            curl -fLsS "https://raw.githubusercontent.com/NVIDIA/open-gpu-kernel-modules/$EXTRACTOR_REF/nouveau/$file" -o "nouveau/$file"
+          done
+          python3 nouveau/extract-firmware-nouveau.py -d -o firmware
+          mkdir release
+          for file in \
+            ga102/gsp/gsp-570.190.bin \
+            ga102/gsp/booter_load-570.190.bin \
+            ad102/gsp/booter_load-570.190.bin \
+            ga102/gsp/bootloader-570.190.bin \
+            ad102/gsp/bootloader-570.190.bin \
+            gb202/gsp/bootloader-570.190.bin \
+            gb202/gsp/fmc-570.190.bin; do
+            cp "firmware/nvidia/$file" "release/${file%%/*}-$(basename "$file")"
+          done
+      - name: Publish release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: firmware-570.190
+          target_commitish: ${{ github.sha }}
+          files: release/*
+          overwrite_files: true
+          make_latest: false
